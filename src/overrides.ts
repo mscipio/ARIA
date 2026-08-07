@@ -3,9 +3,9 @@ import { resolve } from "node:path";
 
 import { getPackageRoot, loadDefaultConfig } from "./defaults.js";
 import type {
-  CodeEnsemblePluginOptions,
-  CodeEnsembleProjectOverrides,
-  ResolvedCodeEnsembleConfig,
+  ReviewDrivenCodePluginOptions,
+  ReviewDrivenCodeProjectOverrides,
+  ResolvedReviewDrivenCodeConfig,
   RoleName,
 } from "./types.js";
 
@@ -22,7 +22,7 @@ const ROLE_SET = new Set<string>(ROLES);
 
 class ConfigValidationError extends Error {
   constructor(path: string, got: unknown, want: string) {
-    super(`code-ensemble.json: ${path}: expected ${want}, got ${typeOf(got)}`);
+    super(`review-driven-code.json: ${path}: expected ${want}, got ${typeOf(got)}`);
     this.name = "ConfigValidationError";
   }
 }
@@ -65,7 +65,7 @@ function parseMap<T>(
   return result;
 }
 
-export function parseOverrides(raw: unknown): CodeEnsembleProjectOverrides {
+export function parseOverrides(raw: unknown): ReviewDrivenCodeProjectOverrides {
   if (!isObject(raw)) fail("(root)", raw, "object");
   const allowed = new Set(["models", "variants"]);
   for (const key of Object.keys(raw)) {
@@ -84,15 +84,15 @@ export function parseOverrides(raw: unknown): CodeEnsembleProjectOverrides {
   };
 }
 
-export function resolveCodeEnsembleConfig(
+export function resolveReviewDrivenCodeConfig(
   worktree: string,
-  options: CodeEnsemblePluginOptions = {},
+  options: ReviewDrivenCodePluginOptions = {},
   metaUrl: string = import.meta.url,
-): ResolvedCodeEnsembleConfig {
+): ResolvedReviewDrivenCodeConfig {
   const defaults = loadDefaultConfig(metaUrl);
   const packageRoot = getPackageRoot(metaUrl);
   const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
-  const discoveredPath = resolve(worktree, "code-ensemble.json");
+  const discoveredPath = resolve(worktree, "review-driven-code.json");
   const overridePath = explicitPath ?? (existsSync(discoveredPath) ? discoveredPath : undefined);
   const overrides = overridePath && existsSync(overridePath)
     ? parseOverrides(JSON.parse(readFileSync(overridePath, "utf8")))
@@ -106,7 +106,7 @@ export function resolveCodeEnsembleConfig(
       variant: overrides.variants?.[role] ?? roleDefaults.variant,
       promptText: readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8"),
     }];
-  })) as ResolvedCodeEnsembleConfig["roles"];
+  })) as ResolvedReviewDrivenCodeConfig["roles"];
 
   roles.director.promptText = roles.director.promptText.replace(
     "{{routing}}",

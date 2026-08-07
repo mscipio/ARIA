@@ -1,12 +1,12 @@
 {
-  "name": "@cgize/code-ensemble",
-  "version": "1.0.7",
+  "name": "review-driven-code",
+  "version": "0.1.0",
   "private": false,
-  "description": "An OpenCode plugin that coordinates planning, implementation, and review",
+  "description": "An OpenCode orchestration plugin for review-driven coding: conversational director, architect plan review, explicit human approval before implementation, independent reviewer verification, and autonomous remediation within approved scope.",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cgize/code-ensemble.git"
+    "url": "https://github.com/mscipio/review-driven-code.git"
   },
   "engines": {
     "node": ">=20.19.0"

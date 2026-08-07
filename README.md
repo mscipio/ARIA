@@ -1,10 +1,19 @@
-# @cgize/code-ensemble
+# Review-Driven Coding
 
-`code-ensemble` turns OpenCode into a focused software team while keeping one durable tasklist for the whole project.
+**RDC** is an OpenCode orchestration plugin that turns OpenCode into a focused software team with explicit human plan approval before any implementation begins.
+
+## Features
+
+- **Conversational director** — answers questions directly; creates plans only for non-trivial implementation requests
+- **Specialized roles** — explorer, visualizer, planner, architect, implementer, reviewer each with focused responsibility
+- **Architect plan review** — QA before implementation: `READY` or `REVISED` with the smallest corrections needed
+- **Explicit human approval** — the director summarizes the plan and **stops and waits** for the user to approve before any code is written
+- **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
+- **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
+- **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the director tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
+- **Optional Engram retrieval integration** — read-enabled specialists may search Engram for prior context (retrieval-only)
 
 ## Workflow
-
-The workflow requires explicit human plan approval before implementation begins.
 
 1. At the start of every turn, the director calls `plan` action `get` to read `.code-ensemble/TASKS.md`. If an active plan exists, work continues it instead of planning again.
 2. For non-trivial new work, the director tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
@@ -15,7 +24,7 @@ The workflow requires explicit human plan approval before implementation begins.
 7. The implementer completes tasks and runs the relevant checks; the director records evidence by updating tasks.
 8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
 9. If reviewer reports blocking findings for tasks within approved scope, the director uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews.
-10. If review reveals a material scope change, the director tasks the architect, adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
+10. If review reveals a material scope change, the director tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the director adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
 11. A clean, completed plan is archived under `.code-ensemble/plans/` via `plan` action `close`.
 
 The tasklist is scoped to the worktree, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
@@ -28,7 +37,7 @@ The tasklist is scoped to the worktree, not to one OpenCode conversation. A new 
 | explorer | Maps code, tests, and dependencies | `opencode-go/deepseek-v4-flash` |
 | visualizer | Interprets screenshots and diagrams | `opencode-go/kimi-k2.7-code` |
 | planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-5.6-terra` |
-| architect | QA of the plan: READY or REVISED before implementation | `openai/gpt-5.6-sol` |
+| architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-5.6-sol` |
 | implementer | Edits code and runs relevant checks | `opencode-go/glm-5.2` |
 | reviewer | Finds regressions, risks, and missing verification | `opencode-go/deepseek-v4-pro` |
 
@@ -38,7 +47,9 @@ Every specialist runs through OpenCode's native `task` tool, so planner and arch
 
 ## Shared Plan
 
-`.code-ensemble/TASKS.md` is the project-wide source of truth. Schema v3 fields:
+`.code-ensemble/TASKS.md` is the project-wide source of truth. RDC retains the inherited `.code-ensemble/` on-disk namespace for compatibility with its plan format; a future schema migration may rename this independently.
+
+Schema v3 fields:
 
 - `version`: schema version (`3`)
 - `id`: stable Plan ID (UUID) identifying this plan across sessions
@@ -104,23 +115,24 @@ The director is the only agent allowed to approve, update plan status, add remed
 ## Plan Ownership
 
 - **Planner** owns plan creation: it turns evidence into an actionable, ordered task list with integrated acceptance/tests and persists it with `create`.
-- **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes). Replace invalidates any previous approval.
+- **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes). Replace invalidates any previous approval. After review, the architect performs scope assessment: `SCOPE_CHANGE` or `WITHIN_SCOPE`.
 - **Director** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
 - **Reviewer** independently reads the plan via `get` and evaluates each approved requirement against the actual implementation as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
 
 ## Install
 
 ```sh
-opencode plugin @cgize/code-ensemble@1.0.5
+git clone https://github.com/mscipio/review-driven-code.git
+cd review-driven-code
+npm ci --omit=dev
+opencode plugin "file:///absolute/path/to/review-driven-code"
 ```
-
-For a repository install, clone tag `v1.0.5`, run `npm ci --omit=dev`, then register the package root with `opencode plugin "file:///absolute/path/to/code-ensemble"`.
 
 Restart OpenCode and select `director` from the agent selector.
 
 ## Configuration
 
-Create `code-ensemble.json` in the project root only to override models or variants:
+Create `review-driven-code.json` in the project root only to override models or variants:
 
 ```json
 {
@@ -146,6 +158,10 @@ npm run lint
 npm run build
 npm run smoke:package
 ```
+
+## Acknowledgement
+
+Review-Driven Coding is derived from [cgize/code-ensemble](https://github.com/cgize/code-ensemble) and retains its MIT license.
 
 ## License
 

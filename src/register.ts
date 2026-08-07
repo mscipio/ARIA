@@ -1,6 +1,6 @@
 import { tool, type Plugin } from "@opencode-ai/plugin";
 
-import { resolveCodeEnsembleConfig } from "./overrides.js";
+import { resolveReviewDrivenCodeConfig } from "./overrides.js";
 import {
   addPlanTasks,
   approvePlan,
@@ -17,7 +17,7 @@ import {
   formatToolError,
   planToolTitle,
 } from "./present.js";
-import type { CodeEnsemblePluginOptions, ResolvedCodeEnsembleConfig, RoleName } from "./types.js";
+import type { ReviewDrivenCodePluginOptions, ResolvedReviewDrivenCodeConfig, RoleName } from "./types.js";
 
 function stringField(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -35,7 +35,7 @@ function projectDirectory(input: unknown): string {
   );
 }
 
-function pluginOptions(options: unknown): CodeEnsemblePluginOptions {
+function pluginOptions(options: unknown): ReviewDrivenCodePluginOptions {
   const configPath = stringField(options, "configPath");
   return configPath ? { configPath } : {};
 }
@@ -48,7 +48,7 @@ const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>> = {
 };
 
 function authorizePlan(context: unknown, action: string): string | null {
-  if (!stringField(context, "sessionID")) return "A sessionID is required to use code-ensemble tools";
+  if (!stringField(context, "sessionID")) return "A sessionID is required to use Review-Driven Coding tools";
   const agent = stringField(context, "agent");
   if (!agent || !PLAN_ACTIONS_BY_ROLE[agent]?.has(action)) {
     return `Role ${agent ?? "unknown"} may not ${action} the plan`;
@@ -148,7 +148,7 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
 
 const SUBAGENT_ROLES = Object.keys(SUBAGENT_PERMISSIONS) as SubagentRole[];
 
-function agentDefinitions(config: ResolvedCodeEnsembleConfig): Record<string, unknown> {
+function agentDefinitions(config: ResolvedReviewDrivenCodeConfig): Record<string, unknown> {
   const taskPermissions: Record<string, "allow" | "deny"> = {
     "*": "deny",
     explorer: "allow",
@@ -172,7 +172,7 @@ function agentDefinitions(config: ResolvedCodeEnsembleConfig): Record<string, un
   for (const role of SUBAGENT_ROLES) {
     const roleConfig = config.roles[role];
     definitions[role] = {
-      description: `${role} specialist for code-ensemble.`,
+      description: `${role} specialist for Review-Driven Coding.`,
       mode: "subagent",
       model: roleConfig.model,
       ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
@@ -184,9 +184,9 @@ function agentDefinitions(config: ResolvedCodeEnsembleConfig): Record<string, un
   return definitions;
 }
 
-export const codeEnsemblePlugin: Plugin = async (input, options = {}) => {
+export const reviewDrivenCodePlugin: Plugin = async (input, options = {}) => {
   const directory = projectDirectory(input);
-  const config = resolveCodeEnsembleConfig(directory, pluginOptions(options));
+  const config = resolveReviewDrivenCodeConfig(directory, pluginOptions(options));
 
   return {
     config: async (runtimeConfig) => {

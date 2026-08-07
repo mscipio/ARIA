@@ -7,7 +7,7 @@ export function getPackageRoot(metaUrl = import.meta.url) {
 }
 export function loadDefaultConfig(metaUrl = import.meta.url) {
     const packageRoot = getPackageRoot(metaUrl);
-    const configPath = resolve(packageRoot, "defaults", "code-ensemble.defaults.json");
+    const configPath = resolve(packageRoot, "defaults", "review-driven-code.defaults.json");
     return JSON.parse(readFileSync(configPath, "utf8"));
 }
 //# sourceMappingURL=defaults.js.map

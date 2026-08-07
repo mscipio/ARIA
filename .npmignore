@@ -9,7 +9,7 @@ eslint.config.*
 tsconfig*.json
 vitest.config.ts
 vitest.config.*
-code-ensemble.json.example
+review-driven-code.json.example
 *.tgz
 .npmrc
 .opencode/

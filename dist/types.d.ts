@@ -5,20 +5,20 @@ export interface RoleDefaults {
     mode: "primary" | "subagent";
     promptFile: string;
 }
-export interface CodeEnsembleDefaults {
+export interface ReviewDrivenCodeDefaults {
     roles: Record<RoleName, RoleDefaults>;
 }
-export interface CodeEnsemblePluginOptions {
+export interface ReviewDrivenCodePluginOptions {
     configPath?: string;
 }
-export interface CodeEnsembleProjectOverrides {
+export interface ReviewDrivenCodeProjectOverrides {
     models?: Partial<Record<RoleName, string>>;
     variants?: Partial<Record<RoleName, string>>;
 }
 export interface ResolvedRoleConfig extends RoleDefaults {
     promptText: string;
 }
-export interface ResolvedCodeEnsembleConfig {
+export interface ResolvedReviewDrivenCodeConfig {
     roles: Record<RoleName, ResolvedRoleConfig>;
 }
 //# sourceMappingURL=types.d.ts.map

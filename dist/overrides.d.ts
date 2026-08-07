@@ -1,8 +1,8 @@
-import type { CodeEnsemblePluginOptions, CodeEnsembleProjectOverrides, ResolvedCodeEnsembleConfig } from "./types.js";
+import type { ReviewDrivenCodePluginOptions, ReviewDrivenCodeProjectOverrides, ResolvedReviewDrivenCodeConfig } from "./types.js";
 declare class ConfigValidationError extends Error {
     constructor(path: string, got: unknown, want: string);
 }
-export declare function parseOverrides(raw: unknown): CodeEnsembleProjectOverrides;
-export declare function resolveCodeEnsembleConfig(worktree: string, options?: CodeEnsemblePluginOptions, metaUrl?: string): ResolvedCodeEnsembleConfig;
+export declare function parseOverrides(raw: unknown): ReviewDrivenCodeProjectOverrides;
+export declare function resolveReviewDrivenCodeConfig(worktree: string, options?: ReviewDrivenCodePluginOptions, metaUrl?: string): ResolvedReviewDrivenCodeConfig;
 export { ConfigValidationError };
 //# sourceMappingURL=overrides.d.ts.map

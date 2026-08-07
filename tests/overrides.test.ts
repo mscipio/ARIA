@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { ConfigValidationError, parseOverrides, resolveCodeEnsembleConfig } from "../src/overrides";
+import { ConfigValidationError, parseOverrides, resolveReviewDrivenCodeConfig } from "../src/overrides";
 
 const tempDirs: string[] = [];
 
@@ -11,7 +11,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-describe("code-ensemble overrides", () => {
+describe("review-driven-code overrides", () => {
   it("accepts only models and variants", () => {
     expect(parseOverrides({
       models: { reviewer: "opencode-go/glm-5.2" },
@@ -34,12 +34,12 @@ describe("code-ensemble overrides", () => {
     expect(() => parseOverrides({ models: { planner: "gpt-5" } })).toThrow(/provider\/model/);
   });
 
-  it("auto-discovers code-ensemble.json", async () => {
-    const root = await mkdtemp(resolve(tmpdir(), "code-ensemble-overrides-"));
+  it("auto-discovers review-driven-code.json", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-overrides-"));
     tempDirs.push(root);
-    await writeFile(resolve(root, "code-ensemble.json"), JSON.stringify({
+    await writeFile(resolve(root, "review-driven-code.json"), JSON.stringify({
       models: { reviewer: "opencode-go/custom-reviewer" },
     }));
-    expect(resolveCodeEnsembleConfig(root).roles.reviewer.model).toBe("opencode-go/custom-reviewer");
+    expect(resolveReviewDrivenCodeConfig(root).roles.reviewer.model).toBe("opencode-go/custom-reviewer");
   });
 });

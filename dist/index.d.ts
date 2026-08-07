@@ -3,6 +3,6 @@ declare const plugin: {
     server: import("@opencode-ai/plugin").Plugin;
 };
 export default plugin;
-export { plugin, plugin as codeEnsemblePlugin };
+export { plugin, plugin as reviewDrivenCodePlugin };
 export type { Plugin } from "@opencode-ai/plugin";
 //# sourceMappingURL=index.d.ts.map

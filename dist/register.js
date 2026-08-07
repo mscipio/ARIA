@@ -1,5 +1,5 @@
 import { tool } from "@opencode-ai/plugin";
-import { resolveCodeEnsembleConfig } from "./overrides.js";
+import { resolveReviewDrivenCodeConfig } from "./overrides.js";
 import { addPlanTasks, approvePlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
 import { formatClosedPlanOutput, formatPlanOutput, formatToolError, planToolTitle, } from "./present.js";
 function stringField(value, key) {
@@ -27,7 +27,7 @@ const PLAN_ACTIONS_BY_ROLE = {
 };
 function authorizePlan(context, action) {
     if (!stringField(context, "sessionID"))
-        return "A sessionID is required to use code-ensemble tools";
+        return "A sessionID is required to use Review-Driven Coding tools";
     const agent = stringField(context, "agent");
     if (!agent || !PLAN_ACTIONS_BY_ROLE[agent]?.has(action)) {
         return `Role ${agent ?? "unknown"} may not ${action} the plan`;
@@ -137,7 +137,7 @@ function agentDefinitions(config) {
     for (const role of SUBAGENT_ROLES) {
         const roleConfig = config.roles[role];
         definitions[role] = {
-            description: `${role} specialist for code-ensemble.`,
+            description: `${role} specialist for Review-Driven Coding.`,
             mode: "subagent",
             model: roleConfig.model,
             ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
@@ -147,9 +147,9 @@ function agentDefinitions(config) {
     }
     return definitions;
 }
-export const codeEnsemblePlugin = async (input, options = {}) => {
+export const reviewDrivenCodePlugin = async (input, options = {}) => {
     const directory = projectDirectory(input);
-    const config = resolveCodeEnsembleConfig(directory, pluginOptions(options));
+    const config = resolveReviewDrivenCodeConfig(directory, pluginOptions(options));
     return {
         config: async (runtimeConfig) => {
             runtimeConfig.agent ??= {};

@@ -13,7 +13,7 @@ const ROLES = [
 const ROLE_SET = new Set(ROLES);
 class ConfigValidationError extends Error {
     constructor(path, got, want) {
-        super(`code-ensemble.json: ${path}: expected ${want}, got ${typeOf(got)}`);
+        super(`review-driven-code.json: ${path}: expected ${want}, got ${typeOf(got)}`);
         this.name = "ConfigValidationError";
     }
 }
@@ -66,11 +66,11 @@ export function parseOverrides(raw) {
         ...(variants ? { variants } : {}),
     };
 }
-export function resolveCodeEnsembleConfig(worktree, options = {}, metaUrl = import.meta.url) {
+export function resolveReviewDrivenCodeConfig(worktree, options = {}, metaUrl = import.meta.url) {
     const defaults = loadDefaultConfig(metaUrl);
     const packageRoot = getPackageRoot(metaUrl);
     const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
-    const discoveredPath = resolve(worktree, "code-ensemble.json");
+    const discoveredPath = resolve(worktree, "review-driven-code.json");
     const overridePath = explicitPath ?? (existsSync(discoveredPath) ? discoveredPath : undefined);
     const overrides = overridePath && existsSync(overridePath)
         ? parseOverrides(JSON.parse(readFileSync(overridePath, "utf8")))

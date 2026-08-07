@@ -4,14 +4,14 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import codeEnsemblePlugin, { codeEnsemblePlugin as pluginModule } from "../src/index";
+import reviewDrivenCodePlugin, { reviewDrivenCodePlugin as pluginModule } from "../src/index";
 
 const server = pluginModule.server;
 const tempDirs: string[] = [];
 const plugins: Array<Awaited<ReturnType<typeof server>>> = [];
 
 async function project(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "code-ensemble-plugin-"));
+  const root = await mkdtemp(join(tmpdir(), "review-driven-code-plugin-"));
   tempDirs.push(root);
   return root;
 }
@@ -68,9 +68,9 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-describe("codeEnsemblePlugin", () => {
+describe("reviewDrivenCodePlugin", () => {
   it("exports the OpenCode npm plugin shape", () => {
-    expect(codeEnsemblePlugin).toMatchObject({ id: "@cgize/code-ensemble", server });
+    expect(reviewDrivenCodePlugin).toMatchObject({ id: "review-driven-code", server });
     expect(typeof server).toBe("function");
   });
 

@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 async function project(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "code-ensemble-plans-"));
+  const root = await mkdtemp(join(tmpdir(), "review-driven-code-plans-"));
   tempDirs.push(root);
   return root;
 }

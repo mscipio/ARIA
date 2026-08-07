@@ -31,7 +31,7 @@ const requiredPaths = [
   "dist/index.js",
   "dist/index.d.ts",
   "dist/register.js",
-  "defaults/code-ensemble.defaults.json",
+  "defaults/review-driven-code.defaults.json",
   "defaults/prompts/director.md",
   "defaults/prompts/planner.md",
   "defaults/prompts/architect.md",
@@ -55,7 +55,7 @@ for (const path of packedPaths) {
 }
 
 const tarball = join(packageRoot, entry.filename);
-const installRoot = mkdtempSync(join(tmpdir(), "code-ensemble-package-"));
+const installRoot = mkdtempSync(join(tmpdir(), "review-driven-code-package-"));
 const probePath = join(installRoot, "probe.mjs");
 
 try {
@@ -67,11 +67,11 @@ try {
 
   writeFileSync(
     probePath,
-    `const pluginModule = await import("@cgize/code-ensemble");
+    `const pluginModule = await import("review-driven-code");
 const plugin = pluginModule.default;
 
-if (plugin?.id !== "@cgize/code-ensemble") {
-  console.error("smoke-package: expected plugin id @cgize/code-ensemble, got", plugin?.id);
+if (plugin?.id !== "review-driven-code") {
+  console.error("smoke-package: expected plugin id review-driven-code, got", plugin?.id);
   process.exit(1);
 }
 if (typeof plugin?.server !== "function") {
