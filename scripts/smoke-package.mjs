@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 
+import { normalizePackEntry } from "../dist/pack.js";
+
 const npmScript = process.env.npm_execpath;
 const npm = npmScript ? process.execPath : "npm";
 const npmPrefix = npmScript ? [npmScript] : [];
@@ -20,7 +22,7 @@ function fail(message) {
 
 const packageRoot = process.cwd();
 const packed = JSON.parse(runNpm(["pack", "--json"], { cwd: packageRoot, encoding: "utf8" }));
-const entry = packed?.[0];
+const entry = normalizePackEntry(packed);
 if (!entry?.filename) fail("npm pack did not return a tarball");
 
 const packedPaths = new Set((entry.files ?? []).map((file) => file.path.replaceAll("\\", "/")));

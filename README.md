@@ -4,16 +4,19 @@
 
 ## Workflow
 
-The workflow is autonomous: the director never asks for plan approval and continues as soon as the plan is ready.
+The workflow requires explicit human plan approval before implementation begins.
 
 1. At the start of every turn, the director calls `plan` action `get` to read `.code-ensemble/TASKS.md`. If an active plan exists, work continues it instead of planning again.
 2. For non-trivial new work, the director tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
 3. The planner calls `plan` `get` then `create` to persist a title and an actionable, ordered task list; each task integrates its acceptance criteria and the relevant tests. The planner does not implement.
-4. The architect always runs as QA of the plan: it calls `plan` `get`, and replies `READY` if the plan is correct, or `plan` `replace` (with `expectedPlanID`/`revision`) to correct it and replies `REVISED` with the changes.
-5. The director re-reads the plan, summarizes the title, tasks, and any architect changes to the user, and continues immediately without asking for approval or waiting for confirmation.
-6. The implementer completes tasks and runs the relevant checks; the director records evidence by updating tasks.
-7. The reviewer reports blocking findings. Remediation tasks are added with `plan` action `add`, completed through the implementer, and re-reviewed.
-8. A clean, completed plan is archived under `.code-ensemble/plans/` via `plan` action `close`.
+4. The architect always runs as QA of the plan: it calls `plan` `get`, and replies `READY` if the plan is correct, or `plan` `replace` (with `expectedPlanID`/`revision`) to correct it and replies `REVISED` with the changes. Any `replace` invalidates previous approval.
+5. The director re-reads the plan, summarizes the title, tasks, and any architect changes to the user, and **stops and waits for explicit user approval**.
+6. Only after the user approves, the director calls `plan` action `approve` to persist the approval. Tasks cannot enter implementation until the current plan revision is approved.
+7. The implementer completes tasks and runs the relevant checks; the director records evidence by updating tasks.
+8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
+9. If reviewer reports blocking findings for tasks within approved scope, the director uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews.
+10. If review reveals a material scope change, the director tasks the architect, adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
+11. A clean, completed plan is archived under `.code-ensemble/plans/` via `plan` action `close`.
 
 The tasklist is scoped to the worktree, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
 
@@ -35,25 +38,33 @@ Every specialist runs through OpenCode's native `task` tool, so planner and arch
 
 ## Shared Plan
 
-`.code-ensemble/TASKS.md` is the project-wide source of truth. Schema v2 fields:
+`.code-ensemble/TASKS.md` is the project-wide source of truth. Schema v3 fields:
 
-- `version`: schema version (`2`)
+- `version`: schema version (`3`)
 - `id`: stable Plan ID (UUID) identifying this plan across sessions
 - `revision`: integer incremented on every mutation; callers pass the current Plan ID and revision to detect conflicts
 - `status`: `active` or `closed`
+- `approval`: `pending` or `approved` — a plan must be `approved` before tasks can enter implementation
 - `title`, `createdAt`, `updatedAt`: plan metadata
 - `tasks[]`: ordered tasks with stable `id` (e.g. `T001`), `text` (action plus integrated acceptance/tests), `status` (`pending`/`in_progress`/`completed`/`blocked`), and optional `evidence`
 
-There is no `approved` flag in schema v2. A plan becomes implementable as soon as the architect returns `READY`; no separate approval step exists.
+Approval lifecycle:
+- `create` produces a plan with `approval: pending`
+- `approve` (director only) sets `approval: approved` and increments revision
+- `replace` (architect only) resets `approval: pending` (invalidates any previous approval)
+- `add` (director only) resets `approval: pending` (scope changes require re-approval)
+- `remediate` (director only) preserves `approval: approved` (autonomous remediation loop)
+- `update`, `close` require `approval: approved`
 
 ```md
 <!-- code-ensemble-plan
-{"version":2,"id":"7e3f1a92-...","revision":4,"status":"active","title":"Dashboard","createdAt":"2026-07-20T12:00:00.000Z","updatedAt":"2026-07-20T12:05:00.000Z","tasks":[{"id":"T001","text":"Define the data model; schema tests pass","status":"completed","evidence":"schema tests pass"},{"id":"T002","text":"Implement the dashboard; renders without errors","status":"in_progress"},{"id":"T003","text":"Review responsive behavior; no layout regressions at common breakpoints","status":"pending"}]}
+{"version":3,"id":"7e3f1a92-...","revision":4,"status":"active","approval":"approved","title":"Dashboard","createdAt":"2026-07-20T12:00:00.000Z","updatedAt":"2026-07-20T12:05:00.000Z","tasks":[{"id":"T001","text":"Define the data model; schema tests pass","status":"completed","evidence":"schema tests pass"},{"id":"T002","text":"Implement the dashboard; renders without errors","status":"in_progress"},{"id":"T003","text":"Review responsive behavior; no layout regressions at common breakpoints","status":"pending"}]}
 -->
 
 # Plan: Dashboard
 
 Status: **active**
+Approval: **approved**
 Revision: **4**
 
 ## Tasks
@@ -66,30 +77,36 @@ Revision: **4**
 
 ## Plan Tool ACL
 
-Only the `director` and the planning specialists can call `plan`; every other agent has `plan: deny`.
+Only the `director`, planning specialists, and reviewer can call `plan`; every other agent has `plan: deny`.
 
 | Agent | Allowed `plan` actions |
 |---|---|
-| director | `get`, `create`, `update`, `add`, `close` |
+| director | `get`, `create`, `update`, `add`, `remediate`, `approve`, `close` |
 | planner | `get`, `create` |
 | architect | `get`, `replace` |
+| reviewer | `get` |
 | explorer | none |
 | visualizer | none |
 | implementer | none |
-| reviewer | none |
 
 - `get` returns the active plan (or `No active plan.`).
-- `create` writes a new plan and returns the initial `revision` (`1`); rejected when an active plan already exists.
-- `replace` accepts the current `expectedPlanID` and `expectedRevision` plus the corrected `title` and `tasks`, and produces a new revision. Used only by the architect before implementation starts.
-- `update`, `add`, and `close` require both `expectedPlanID` and `expectedRevision` to detect conflicts; only the director calls them.
+- `create` writes a new plan with `approval: pending` and returns the initial `revision` (`1`); rejected when an active plan already exists.
+- `approve` accepts the current `expectedPlanID` and `expectedRevision`, sets `approval: approved`, and increments the revision. Only the director may approve.
+- `replace` accepts the current `expectedPlanID` and `expectedRevision` plus the corrected `title` and `tasks`, produces a new revision, and resets `approval: pending`. Used only by the architect before implementation starts.
+- `update`, `add`, `remediate`, and `close` require both `expectedPlanID` and `expectedRevision` to detect conflicts.
+- `update` requires `approval: approved`.
+- `add` resets `approval: pending` (scope changes require renewed approval).
+- `remediate` requires `approval: approved` and all existing tasks completed; preserves `approval: approved` (autonomous remediation loop).
+- `close` requires `approval: approved` and all tasks completed; archives the plan.
 
-The director is the only agent allowed to mutate plan status, tasks, and evidence. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
+The director is the only agent allowed to approve, update plan status, add remediation tasks, and archive. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
 
 ## Plan Ownership
 
 - **Planner** owns plan creation: it turns evidence into an actionable, ordered task list with integrated acceptance/tests and persists it with `create`.
-- **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes).
-- **Director** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `add`, and archives completed work with `close`.
+- **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes). Replace invalidates any previous approval.
+- **Director** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
+- **Reviewer** independently reads the plan via `get` and evaluates each approved requirement against the actual implementation as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
 
 ## Install
 

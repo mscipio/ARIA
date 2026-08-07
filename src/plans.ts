@@ -13,6 +13,8 @@ const PLAN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f
 
 export type PlanTaskStatus = "pending" | "in_progress" | "completed" | "blocked";
 
+export type PlanApproval = "pending" | "approved";
+
 export type PlanTask = {
   id: string;
   text: string;
@@ -21,10 +23,11 @@ export type PlanTask = {
 };
 
 export type SharedPlan = {
-  version: 2;
+  version: 3;
   id: string;
   revision: number;
   status: "active" | "closed";
+  approval: PlanApproval;
   title: string;
   createdAt: string;
   updatedAt: string;
@@ -55,6 +58,7 @@ export function renderPlan(plan: SharedPlan): string {
     `# Plan: ${plan.title}`,
     "",
     `Status: **${plan.status}**  `,
+    `Approval: **${plan.approval}**  `,
     `Revision: **${plan.revision}**`,
     "",
     "## Tasks",
@@ -70,18 +74,23 @@ function parsePlan(markdown: string): SharedPlan {
   if (end < 0) throw new Error("TASKS.md has incomplete plan metadata");
   const value = JSON.parse(markdown.slice(METADATA_START.length, end)) as Partial<SharedPlan>;
   if (
-    value.version !== 2 ||
+    value.version !== 3 ||
     typeof value.id !== "string" ||
     !PLAN_ID_PATTERN.test(value.id) ||
     typeof value.revision !== "number" ||
     !Number.isInteger(value.revision) ||
     value.revision < 1 ||
     (value.status !== "active" && value.status !== "closed") ||
+    (value.approval !== "pending" && value.approval !== "approved") ||
     typeof value.title !== "string" ||
     typeof value.createdAt !== "string" ||
     typeof value.updatedAt !== "string" ||
     !Array.isArray(value.tasks)
   ) throw new Error("TASKS.md contains invalid plan data");
+
+  if (value.status === "closed" && value.approval !== "approved") {
+    throw new Error("TASKS.md contains invalid plan data");
+  }
 
   const statuses = new Set<PlanTaskStatus>(["pending", "in_progress", "completed", "blocked"]);
   const tasks = value.tasks.map((task, index) => {
@@ -175,12 +184,17 @@ function requireActive(plan: SharedPlan): void {
   if (plan.status !== "active") throw new Error("TASKS.md is already closed");
 }
 
+function requireApproved(plan: SharedPlan): void {
+  if (plan.approval !== "approved") throw new Error("TASKS.md must be approved before this operation");
+}
+
 function isMatchingClosedArchive(active: SharedPlan, archived: SharedPlan): boolean {
   return (
     archived.id === active.id &&
     archived.status === "closed" &&
     archived.revision === active.revision + 1 &&
     archived.title === active.title &&
+    archived.approval === active.approval &&
     archived.createdAt === active.createdAt &&
     JSON.stringify(archived.tasks) === JSON.stringify(active.tasks)
   );
@@ -199,10 +213,11 @@ export async function createPlan(worktree: string, title: string, tasks: string[
     if (await readUnlocked(file.path)) throw new Error("An active TASKS.md already exists; close it before creating another plan");
     const now = new Date().toISOString();
     const plan: SharedPlan = {
-      version: 2,
+      version: 3,
       id: randomUUID(),
       revision: 1,
       status: "active",
+      approval: "pending",
       title: line(title, "Plan title"),
       createdAt: now,
       updatedAt: now,
@@ -212,6 +227,27 @@ export async function createPlan(worktree: string, title: string, tasks: string[
         status: "pending",
       })),
     };
+    await writePlan(file.root, file.path, plan, signal);
+    return plan;
+  }, signal);
+}
+
+export async function approvePlan(
+  worktree: string,
+  expectedPlanID: string,
+  expectedRevision: number,
+  signal?: AbortSignal,
+): Promise<SharedPlan> {
+  const file = await activePlanFile(worktree);
+  return withFileLock(file.path, async () => {
+    const plan = await readUnlocked(file.path);
+    if (!plan) throw new Error("No active TASKS.md exists");
+    requireActive(plan);
+    requirePlanCas(plan, expectedPlanID, expectedRevision);
+    if (plan.approval !== "pending") throw new Error("Plan is already approved");
+    plan.approval = "approved";
+    plan.revision += 1;
+    plan.updatedAt = new Date().toISOString();
     await writePlan(file.root, file.path, plan, signal);
     return plan;
   }, signal);
@@ -232,6 +268,7 @@ export async function updatePlanTask(
     if (!plan) throw new Error("No active TASKS.md exists");
     requireActive(plan);
     requirePlanCas(plan, expectedPlanID, expectedRevision);
+    requireApproved(plan);
     const task = plan.tasks.find((candidate) => candidate.id === taskID);
     if (!task) throw new Error(`Task ${taskID} was not found in TASKS.md`);
     task.status = status;
@@ -257,6 +294,39 @@ export async function addPlanTasks(
     if (!plan) throw new Error("No active TASKS.md exists");
     requireActive(plan);
     requirePlanCas(plan, expectedPlanID, expectedRevision);
+    if (plan.tasks.length + tasks.length > MAX_TASKS) throw new Error("TASKS.md cannot contain more than 100 tasks");
+    const start = plan.tasks.length + 1;
+    plan.tasks.push(...tasks.map((text, index) => ({
+      id: `T${String(start + index).padStart(3, "0")}`,
+      text: line(text, `Task ${start + index}`),
+      status: "pending" as const,
+    })));
+    plan.approval = "pending";
+    plan.revision += 1;
+    plan.updatedAt = new Date().toISOString();
+    await writePlan(file.root, file.path, plan, signal);
+    return plan;
+  }, signal);
+}
+
+export async function remediatePlanTasks(
+  worktree: string,
+  expectedPlanID: string,
+  expectedRevision: number,
+  tasks: string[],
+  signal?: AbortSignal,
+): Promise<SharedPlan> {
+  if (tasks.length === 0) throw new Error("At least one remediation task is required");
+  const file = await activePlanFile(worktree);
+  return withFileLock(file.path, async () => {
+    const plan = await readUnlocked(file.path);
+    if (!plan) throw new Error("No active TASKS.md exists");
+    requireActive(plan);
+    requirePlanCas(plan, expectedPlanID, expectedRevision);
+    requireApproved(plan);
+    if (plan.tasks.some((task) => task.status !== "completed")) {
+      throw new Error("All existing tasks must be completed before adding remediation tasks");
+    }
     if (plan.tasks.length + tasks.length > MAX_TASKS) throw new Error("TASKS.md cannot contain more than 100 tasks");
     const start = plan.tasks.length + 1;
     plan.tasks.push(...tasks.map((text, index) => ({
@@ -295,6 +365,7 @@ export async function replacePlan(
       text: line(text, `Task ${index + 1}`),
       status: "pending" as const,
     }));
+    plan.approval = "pending";
     plan.revision += 1;
     plan.updatedAt = new Date().toISOString();
     await writePlan(file.root, file.path, plan, signal);
@@ -314,6 +385,7 @@ export async function closePlan(
     if (!plan) throw new Error("No active TASKS.md exists");
     requireActive(plan);
     requirePlanCas(plan, expectedPlanID, expectedRevision);
+    requireApproved(plan);
     if (plan.tasks.some((task) => task.status !== "completed")) {
       throw new Error("Every task must be completed before closing TASKS.md");
     }

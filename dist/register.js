@@ -1,6 +1,6 @@
 import { tool } from "@opencode-ai/plugin";
 import { resolveCodeEnsembleConfig } from "./overrides.js";
-import { addPlanTasks, closePlan, createPlan, readActivePlan, replacePlan, updatePlanTask } from "./plans.js";
+import { addPlanTasks, approvePlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
 import { formatClosedPlanOutput, formatPlanOutput, formatToolError, planToolTitle, } from "./present.js";
 function stringField(value, key) {
     if (!value || typeof value !== "object")
@@ -20,9 +20,10 @@ function pluginOptions(options) {
     return configPath ? { configPath } : {};
 }
 const PLAN_ACTIONS_BY_ROLE = {
-    director: new Set(["get", "create", "update", "add", "close"]),
+    director: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
     planner: new Set(["get", "create"]),
     architect: new Set(["get", "replace"]),
+    reviewer: new Set(["get"]),
 };
 function authorizePlan(context, action) {
     if (!stringField(context, "sessionID"))
@@ -72,11 +73,17 @@ const CODE_READ = {
     list: "allow",
     lsp: "allow",
 };
+const ENGRAM_READ = {
+    engram_mem_context: "allow",
+    engram_mem_search: "allow",
+    engram_mem_get_observation: "allow",
+    engram_mem_timeline: "allow",
+};
 const SUBAGENT_PERMISSIONS = {
-    explorer: { ...CODE_READ },
+    explorer: { ...CODE_READ, ...ENGRAM_READ },
     visualizer: { ...BASE_PERMISSION, read: PROTECTED_READ, skill: "allow" },
-    planner: { ...CODE_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
-    architect: { ...CODE_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+    planner: { ...CODE_READ, ...ENGRAM_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+    architect: { ...CODE_READ, ...ENGRAM_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
     implementer: {
         ...CODE_READ,
         edit: PROTECTED_EDIT,
@@ -98,10 +105,12 @@ const SUBAGENT_PERMISSIONS = {
     },
     reviewer: {
         ...CODE_READ,
+        ...ENGRAM_READ,
         bash: "allow",
         webfetch: "allow",
         websearch: "allow",
         skill: "allow",
+        plan: "allow",
     },
 };
 const SUBAGENT_ROLES = Object.keys(SUBAGENT_PERMISSIONS);
@@ -151,14 +160,14 @@ export const codeEnsemblePlugin = async (input, options = {}) => {
                 description: "Read or update the shared project plan in .code-ensemble/TASKS.md.",
                 args: {
                     action: tool.schema
-                        .enum(["create", "get", "replace", "add", "update", "close"])
+                        .enum(["create", "get", "replace", "add", "remediate", "update", "approve", "close"])
                         .describe("Plan action to perform"),
                     title: tool.schema.string().optional().describe("Plan title for create or replace"),
-                    tasks: tool.schema.array(tool.schema.string()).optional().describe("Task texts for create, replace, or add"),
+                    tasks: tool.schema.array(tool.schema.string()).optional().describe("Task texts for create, replace, add, or remediate"),
                     expectedPlanID: tool.schema
                         .string()
                         .optional()
-                        .describe("Plan id from get; required by replace, update, add, and close"),
+                        .describe("Plan id from get; required by replace, update, add, remediate, approve, and close"),
                     expectedRevision: tool.schema.number().int().positive().optional().describe("Current plan revision"),
                     taskID: tool.schema.string().optional().describe("Task id for update, e.g. T001"),
                     status: tool.schema
@@ -204,6 +213,15 @@ export const codeEnsemblePlugin = async (input, options = {}) => {
                                     return formatToolError("tasks are required for add");
                                 return ok(formatPlanOutput(await addPlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
                             }
+                            case "remediate": {
+                                if (!args.expectedPlanID)
+                                    return formatToolError("expectedPlanID is required for remediate");
+                                if (args.expectedRevision === undefined)
+                                    return formatToolError("expectedRevision is required for remediate");
+                                if (!args.tasks)
+                                    return formatToolError("tasks are required for remediate");
+                                return ok(formatPlanOutput(await remediatePlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
+                            }
                             case "update": {
                                 if (!args.expectedPlanID)
                                     return formatToolError("expectedPlanID is required for update");
@@ -212,6 +230,13 @@ export const codeEnsemblePlugin = async (input, options = {}) => {
                                 if (!args.taskID || !args.status)
                                     return formatToolError("taskID and status are required for update");
                                 return ok(formatPlanOutput(await updatePlanTask(directory, args.expectedPlanID, args.expectedRevision, args.taskID, args.status, args.evidence, context.abort)));
+                            }
+                            case "approve": {
+                                if (!args.expectedPlanID)
+                                    return formatToolError("expectedPlanID is required for approve");
+                                if (args.expectedRevision === undefined)
+                                    return formatToolError("expectedRevision is required for approve");
+                                return ok(formatPlanOutput(await approvePlan(directory, args.expectedPlanID, args.expectedRevision, context.abort)));
                             }
                             case "close": {
                                 if (!args.expectedPlanID)
