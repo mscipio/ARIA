@@ -34,14 +34,13 @@ describe("review-driven-code defaults", () => {
     const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-defaults-"));
     tempDirs.push(root);
     await writeFile(resolve(root, "review-driven-code.json"), JSON.stringify({
-      models: { planner: "openai/gpt-5.4-mini" },
-      variants: { planner: "high" },
+      roles: { planner: { model: "openai/gpt-5.4-mini", variant: "high" } },
     }));
 
     const config = resolveReviewDrivenCodeConfig(root);
     expect(config.roles.planner.model).toBe("openai/gpt-5.4-mini");
     expect(config.roles.planner.variant).toBe("high");
-    expect(config.roles.director.promptText).toContain("explorer: `explorer`");
+    expect(config.roles.director.promptText).toContain("explorer: `explorer` →");
     expect(config.roles.director.promptText).toContain("native `task`");
     expect(config).not.toHaveProperty("fallbacks");
   });

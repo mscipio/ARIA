@@ -1,12 +1,12 @@
 {
-  "models": {
-    "visualizer": "opencode-go/kimi-k2.7-code",
-    "planner": "openai/gpt-5.6-terra",
-    "architect": "openai/gpt-5.6-sol",
-    "reviewer": "opencode-go/deepseek-v4-pro"
-  },
-  "variants": {
-    "planner": "xhigh",
-    "architect": "xhigh"
+  "roles": {
+    "planner": {
+      "model": "openai/gpt-5.6-terra",
+      "variant": "xhigh"
+    },
+    "architect": {
+      "model": "openai/gpt-5.6-sol",
+      "variant": "xhigh"
+    }
   }
 }

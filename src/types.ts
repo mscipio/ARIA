@@ -18,13 +18,17 @@ export interface ReviewDrivenCodeDefaults {
   roles: Record<RoleName, RoleDefaults>;
 }
 
+export interface RoleOverride {
+  model?: string;
+  variant?: string;
+}
+
 export interface ReviewDrivenCodePluginOptions {
   configPath?: string;
 }
 
 export interface ReviewDrivenCodeProjectOverrides {
-  models?: Partial<Record<RoleName, string>>;
-  variants?: Partial<Record<RoleName, string>>;
+  roles?: Partial<Record<RoleName, RoleOverride>>;
 }
 
 export interface ResolvedRoleConfig extends RoleDefaults {

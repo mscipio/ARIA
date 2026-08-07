@@ -136,18 +136,22 @@ Create `review-driven-code.json` in the project root only to override models or 
 
 ```json
 {
-  "models": {
-    "planner": "openai/gpt-5.6-terra",
-    "architect": "openai/gpt-5.6-sol"
-  },
-  "variants": {
-    "planner": "xhigh",
-    "architect": "xhigh"
+  "roles": {
+    "planner": {
+      "model": "openai/gpt-5.6-terra",
+      "variant": "xhigh"
+    },
+    "architect": {
+      "model": "openai/gpt-5.6-sol"
+    },
+    "explorer": {
+      "variant": "xhigh"
+    }
   }
 }
 ```
 
-Every model identifier must use `provider/model` format.
+Every model identifier must use `provider/model` format. Variant is optional. If a field is omitted, the built-in default for that role applies.
 
 ## Development
 

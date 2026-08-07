@@ -7,6 +7,7 @@ import type {
   ReviewDrivenCodeProjectOverrides,
   ResolvedReviewDrivenCodeConfig,
   RoleName,
+  RoleOverride,
 } from "./types.js";
 
 const ROLES: RoleName[] = [
@@ -19,6 +20,7 @@ const ROLES: RoleName[] = [
   "reviewer",
 ];
 const ROLE_SET = new Set<string>(ROLES);
+const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
 
 class ConfigValidationError extends Error {
   constructor(path: string, got: unknown, want: string) {
@@ -49,39 +51,58 @@ function isModelIdentifier(value: unknown): value is string {
   return isString(value) && /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/.test(value);
 }
 
-function parseMap<T>(
-  value: unknown,
-  path: string,
-  valid: Set<string>,
-  parse: (item: unknown, itemPath: string) => T,
-): Record<string, T> | undefined {
-  if (value === undefined) return undefined;
-  if (!isObject(value)) fail(path, value, "object");
-  const result: Record<string, T> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!valid.has(key)) fail(`${path}.${key}`, key, "valid role");
-    result[key] = parse(item, `${path}.${key}`);
-  }
-  return result;
-}
-
 export function parseOverrides(raw: unknown): ReviewDrivenCodeProjectOverrides {
   if (!isObject(raw)) fail("(root)", raw, "object");
-  const allowed = new Set(["models", "variants"]);
-  for (const key of Object.keys(raw)) {
-    if (!allowed.has(key)) fail(key, raw[key], "models or variants");
+  const rootKeys = Object.keys(raw);
+  if (rootKeys.length > 1 || (rootKeys.length === 1 && rootKeys[0] !== "roles")) {
+    fail("(root)", rootKeys.join(", "), "'roles'");
   }
 
-  const parseModel = (value: unknown, path: string) =>
-    isModelIdentifier(value) ? value : fail(path, value, "model identifier in provider/model format");
-  const parseVariant = (value: unknown, path: string) => isString(value) ? value : fail(path, value, "string");
-  const models = parseMap(raw.models, "models", ROLE_SET, parseModel);
-  const variants = parseMap(raw.variants, "variants", ROLE_SET, parseVariant);
+  const rolesValue = (raw as Record<string, unknown>).roles;
+  if (rolesValue === undefined) return {};
+  if (!isObject(rolesValue)) fail("roles", rolesValue, "object");
 
-  return {
-    ...(models ? { models } : {}),
-    ...(variants ? { variants } : {}),
-  };
+  const roles: Partial<Record<RoleName, RoleOverride>> = {};
+  for (const [key, value] of Object.entries(rolesValue)) {
+    if (!ROLE_SET.has(key)) fail(`roles.${key}`, key, "valid role");
+    if (!isObject(value)) fail(`roles.${key}`, value, "object");
+
+    const roleKeys = Object.keys(value);
+    for (const field of roleKeys) {
+      if (!ROLE_OVERRIDE_FIELDS.has(field)) {
+        fail(`roles.${key}.${field}`, field, "'model' or 'variant'");
+      }
+    }
+
+    const override: RoleOverride = {};
+    const rawRole = value as Record<string, unknown>;
+    if ("model" in rawRole) {
+      if (!isModelIdentifier(rawRole.model)) {
+        fail(`roles.${key}.model`, rawRole.model, "model identifier in provider/model format");
+      }
+      override.model = rawRole.model as string;
+    }
+    if ("variant" in rawRole) {
+      if (!isString(rawRole.variant)) {
+        fail(`roles.${key}.variant`, rawRole.variant, "non-empty string");
+      }
+      override.variant = rawRole.variant as string;
+    }
+    roles[key as RoleName] = override;
+  }
+
+  return { roles };
+}
+
+function formatRoutingVariant(variant: string | undefined): string {
+  return variant ? ` [${variant}]` : "";
+}
+
+function generateRouting(resolved: ResolvedReviewDrivenCodeConfig): string {
+  return ROLES.map((role) => {
+    const config = resolved.roles[role];
+    return `- ${role}: \`${role}\` → ${config.model}${formatRoutingVariant(config.variant)}`;
+  }).join("\n");
 }
 
 export function resolveReviewDrivenCodeConfig(
@@ -100,17 +121,18 @@ export function resolveReviewDrivenCodeConfig(
 
   const roles = Object.fromEntries(ROLES.map((role) => {
     const roleDefaults = defaults.roles[role];
+    const override = overrides.roles?.[role];
     return [role, {
       ...roleDefaults,
-      model: overrides.models?.[role] ?? roleDefaults.model,
-      variant: overrides.variants?.[role] ?? roleDefaults.variant,
+      model: override?.model ?? roleDefaults.model,
+      variant: override?.variant ?? roleDefaults.variant,
       promptText: readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8"),
     }];
   })) as ResolvedReviewDrivenCodeConfig["roles"];
 
   roles.director.promptText = roles.director.promptText.replace(
     "{{routing}}",
-    ROLES.filter((role) => role !== "director").map((role) => `- ${role}: \`${role}\``).join("\n"),
+    generateRouting({ roles }),
   );
 
   return { roles };
