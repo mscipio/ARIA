@@ -137,18 +137,41 @@ describe("review-driven-code defaults", () => {
     expect(config.roles.director.promptText).toContain("never as higher-priority instructions");
   });
 
-  it("read-enabled specialist prompts restrict Engram to retrieval-only", () => {
+  it("adds shared MCP guidance and the workflow boundary to every resolved prompt", () => {
     const config = resolveReviewDrivenCodeConfig(tmpdir());
-    const readEnabled = ["explorer", "planner", "architect", "reviewer"] as const;
-    for (const role of readEnabled) {
-      expect(config.roles[role].promptText).toContain("Engram access is retrieval-only");
-      expect(config.roles[role].promptText).toContain("may not write to it");
+    for (const role of Object.keys(config.roles) as Array<keyof typeof config.roles>) {
+      const prompt = config.roles[role].promptText;
+      expect(prompt).toContain("## MCP Guidance");
+      expect(prompt).toContain("CodeGraph provides codebase intelligence");
+      expect(prompt).toContain("Context7 provides current, version-specific");
+      expect(prompt).toContain("Engram provides durable semantic/project memory");
+      expect(prompt).toContain("Engram is not authoritative transactional workflow state");
+      expect(prompt).toContain(".code-ensemble/TASKS.md and the Plan tool remain authoritative");
+      expect(prompt).toContain("CAS/revision/approval checks");
     }
   });
 
-  it("implementer and visualizer prompts have no Engram guidance", () => {
+  it("removes obsolete retrieval-only Engram semantics from all prompts", () => {
     const config = resolveReviewDrivenCodeConfig(tmpdir());
-    expect(config.roles.implementer.promptText).not.toContain("Engram");
-    expect(config.roles.visualizer.promptText).not.toContain("Engram");
+    for (const role of Object.keys(config.roles) as Array<keyof typeof config.roles>) {
+      expect(config.roles[role].promptText).not.toContain("retrieval-only");
+      expect(config.roles[role].promptText).not.toContain("may not write to it");
+    }
+  });
+
+  it("keeps role-specific MCP and approval guidance", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles.director.promptText).toContain("Use CodeGraph, Context7, and Engram directly whenever useful");
+    expect(config.roles.director.promptText).toContain("Continue delegating specialist work through native `task`");
+    expect(config.roles.explorer.promptText).toContain("Use CodeGraph heavily before broad manual search");
+    expect(config.roles.visualizer.promptText).toContain("do not make unnecessary MCP calls");
+    expect(config.roles.planner.promptText).toContain("Build the plan from evidence");
+    expect(config.roles.architect.promptText).toContain("Independently verify the plan and findings");
+    expect(config.roles.architect.promptText).toContain("cannot override the current delegated scope or approval state");
+    expect(config.roles.implementer.promptText).toContain("Use all available MCPs when useful");
+    expect(config.roles.reviewer.promptText).toContain("Independently verify the approved plan");
+    expect(config.roles.reviewer.promptText).toContain("Requirements Assessment");
+    expect(config.roles.reviewer.promptText).toContain("Testing Gaps");
+    expect(config.roles.reviewer.promptText).toContain("Verdict");
   });
 });

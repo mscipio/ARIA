@@ -108,6 +108,9 @@ describe("reviewDrivenCodePlugin", () => {
     const permission = (role: string) => config.agent?.[role]?.permission as unknown as Record<string, unknown>;
 
     expect(permission("director")).toMatchObject({
+      "engram_*": "allow",
+      "context7_*": "allow",
+      "codegraph_*": "allow",
       edit: "deny",
       bash: "deny",
       plan: "allow",
@@ -130,6 +133,17 @@ describe("reviewDrivenCodePlugin", () => {
       plan: "deny",
     });
     expect(permission("reviewer")).toMatchObject({ edit: "deny", bash: "allow", plan: "allow" });
+    for (const role of ["director", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"]) {
+      expect(permission(role)).toMatchObject({
+        "engram_*": "allow",
+        "context7_*": "allow",
+        "codegraph_*": "allow",
+      });
+      expect(permission(role)).not.toHaveProperty("engram_mem_context");
+      expect(permission(role)).not.toHaveProperty("engram_mem_search");
+      expect(permission(role)).not.toHaveProperty("engram_mem_get_observation");
+      expect(permission(role)).not.toHaveProperty("engram_mem_timeline");
+    }
     // reviewer has plan "allow" so it can get; but not create/replace/update/add/remediate/approve/close
     for (const role of ["explorer", "visualizer", "implementer", "reviewer"]) {
       expect(permission(role)).toMatchObject({ task: "deny" });

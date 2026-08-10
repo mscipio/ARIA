@@ -11,7 +11,7 @@
 - **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
 - **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the director tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
-- **Optional Engram retrieval integration** — read-enabled specialists may search Engram for prior context (retrieval-only)
+- **First-class MCP evidence** — every role can use CodeGraph, Context7, and Engram when they materially improve the work
 
 ## Workflow
 
@@ -159,9 +159,9 @@ RDC requires three external integrations. RDC does not fork, vendor, or duplicat
 
 | Integration | Purpose | Upstream |
 |---|---|---|
-| [Engram](https://github.com/Gentleman-Programming/engram) | Persistent project and session memory | `engram setup opencode` |
-| [Context7](https://github.com/upstash/context7) | Current external library and API documentation | Remote MCP endpoint |
-| [CodeGraph](https://github.com/colbymchenry/codegraph) | Structural code intelligence | `@colbymchenry/codegraph` |
+| [Engram](https://github.com/Gentleman-Programming/engram) | Durable semantic/project memory | `engram setup opencode` |
+| [Context7](https://github.com/upstash/context7) | Current external library, framework, and API documentation | Remote MCP endpoint |
+| [CodeGraph](https://github.com/colbymchenry/codegraph) | Codebase intelligence for structure and impact | `@colbymchenry/codegraph` |
 
 ```bash
 rdc deps sync   # install/update all required integrations
@@ -170,7 +170,7 @@ rdc doctor      # report status of all required integrations
 
 `rdc deps sync` synchronizes each dependency using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. `rdc doctor` is read-only and reports which integrations are present.
 
-Note: `.code-ensemble/TASKS.md` remains RDC's authoritative active workflow and approval state and is distinct from Engram memory.
+MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.code-ensemble/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
 
 ## Development
 

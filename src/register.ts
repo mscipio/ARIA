@@ -104,20 +104,20 @@ const CODE_READ: AgentPermission = {
   lsp: "allow",
 };
 
-const ENGRAM_READ: Record<string, PermissionAction> = {
-  engram_mem_context: "allow",
-  engram_mem_search: "allow",
-  engram_mem_get_observation: "allow",
-  engram_mem_timeline: "allow",
+const REQUIRED_MCP_PERMISSION: AgentPermission = {
+  "engram_*": "allow",
+  "context7_*": "allow",
+  "codegraph_*": "allow",
 };
 
 const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
-  explorer: { ...CODE_READ, ...ENGRAM_READ },
-  visualizer: { ...BASE_PERMISSION, read: PROTECTED_READ, skill: "allow" },
-  planner: { ...CODE_READ, ...ENGRAM_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
-  architect: { ...CODE_READ, ...ENGRAM_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+  explorer: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION },
+  visualizer: { ...BASE_PERMISSION, ...REQUIRED_MCP_PERMISSION, read: PROTECTED_READ, skill: "allow" },
+  planner: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+  architect: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
   implementer: {
     ...CODE_READ,
+    ...REQUIRED_MCP_PERMISSION,
     edit: PROTECTED_EDIT,
     bash: {
       "*": "allow",
@@ -137,7 +137,7 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
   },
   reviewer: {
     ...CODE_READ,
-    ...ENGRAM_READ,
+    ...REQUIRED_MCP_PERMISSION,
     bash: "allow",
     webfetch: "allow",
     websearch: "allow",
@@ -165,7 +165,13 @@ function agentDefinitions(config: ResolvedReviewDrivenCodeConfig): Record<string
       model: config.roles.director.model,
       ...(config.roles.director.variant ? { variant: config.roles.director.variant } : {}),
       prompt: config.roles.director.promptText,
-      permission: { edit: "deny", bash: "deny", task: taskPermissions, plan: "allow" },
+      permission: {
+        ...REQUIRED_MCP_PERMISSION,
+        edit: "deny",
+        bash: "deny",
+        task: taskPermissions,
+        plan: "allow",
+      },
     },
   };
 

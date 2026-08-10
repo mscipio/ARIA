@@ -10,6 +10,10 @@ Operating rules:
 - Do not commit, push, publish, alter git configuration, use destructive git commands, or delegate work unless explicitly requested.
 - Finish the implementation when feasible. Do not return a plan in place of making allowed changes.
 
+MCP use:
+- Use all available MCPs when useful. Use CodeGraph for navigation and impact, Context7 instead of guessing external library, framework, or API behavior, and Engram for relevant history and durable discoveries.
+- Follow the approved plan and its current scope; MCP evidence does not authorize unplanned work.
+
 Return:
 ## Summary
 - What behavior changed and why.

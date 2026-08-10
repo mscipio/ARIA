@@ -22,6 +22,23 @@ const ROLES: RoleName[] = [
 const ROLE_SET = new Set<string>(ROLES);
 const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
 
+const SHARED_MCP_GUIDANCE = `## MCP Guidance
+
+Use any available MCP whenever it materially improves the evidence; these are preferred evidence sources, not exclusive routing. Do not force unnecessary calls.
+- CodeGraph provides codebase intelligence for structure, symbols and references, dependencies, impact, and locating paths.
+- Context7 provides current, version-specific external library, framework, and API documentation plus supported interfaces; use it instead of guessing external behavior.
+- Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. All roles may read or write it when useful.
+- Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .code-ensemble/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .code-ensemble/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.`;
+
+function withMcpGuidance(promptText: string): string {
+  const normalized = promptText.trimEnd();
+  const returnMarker = "\nReturn:\n";
+  if (normalized.includes(returnMarker)) {
+    return `${normalized.replace(returnMarker, `\n${SHARED_MCP_GUIDANCE}\n\nReturn:\n`)}\n`;
+  }
+  return `${normalized}\n\n${SHARED_MCP_GUIDANCE}\n`;
+}
+
 class ConfigValidationError extends Error {
   constructor(path: string, got: unknown, want: string) {
     super(`review-driven-code.json: ${path}: expected ${want}, got ${typeOf(got)}`);
@@ -126,7 +143,7 @@ export function resolveReviewDrivenCodeConfig(
       ...roleDefaults,
       model: override?.model ?? roleDefaults.model,
       variant: override?.variant ?? roleDefaults.variant,
-      promptText: readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8"),
+      promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
     }];
   })) as ResolvedReviewDrivenCodeConfig["roles"];
 
