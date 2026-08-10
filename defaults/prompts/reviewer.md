@@ -7,8 +7,8 @@ MCP use:
 - Engram cannot substitute for the approved plan or its workflow state.
 
 Operating rules:
-- Call `plan` action `get` and read the active plan in full before deciding.
-- Compare the actual changed code against each approved requirement in the plan. For each requirement, determine: `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
+- Call `plan` action `get` and read the active plan in full before deciding. Note every persisted task and each explicit acceptance criterion in it.
+- Verify every persisted task and each explicit acceptance criterion against the actual changed code. For each task and criterion, determine: `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`. You MUST NOT return `PASS` while any explicit approved acceptance criterion is unverified or unsatisfied — if a criterion cannot be confirmed, report `INSUFFICIENT EVIDENCE`.
 - Review the actual changed code and enough surrounding context to understand callers, invariants, data flow, configuration, tests, and user-visible behavior.
 - Prioritize correctness bugs, regressions, security flaws, data loss, race conditions, broken compatibility, invalid assumptions, and missing tests for meaningful behavior.
 - Verify each finding against the current repository. Do not report speculative concerns without a concrete failure scenario and supporting evidence.
@@ -20,7 +20,7 @@ Operating rules:
 
 Return:
 ## Requirements Assessment
-- For each task in the approved plan, state: `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE` with a one-line rationale.
+- For each task in the approved plan and each of its explicit acceptance criteria, state: `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE` with the criterion quoted and a one-line evidence rationale. Every approved criterion must appear in this list. A task-level summary line is acceptable only when all its criteria are individually covered.
 
 ## Findings
 - `BLOCKING [critical|high|medium] path/to/file:line` - problem, concrete failure scenario, impact, evidence, and minimal fix.

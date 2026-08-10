@@ -174,4 +174,31 @@ describe("review-driven-code defaults", () => {
     expect(config.roles.reviewer.promptText).toContain("Testing Gaps");
     expect(config.roles.reviewer.promptText).toContain("Verdict");
   });
+
+  it("director prompt requires explorer-first delegation for non-trivial work", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles.director.promptText).toContain("delegate repository investigation to the explorer BEFORE delegating to the planner");
+    expect(config.roles.director.promptText).toContain("its own investigation must not replace the independent explorer");
+    expect(config.roles.director.promptText).toContain("Explorer may be skipped only for genuinely trivial changes");
+  });
+
+  it("director and planner prompts require Engram continuity at new objectives", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    // director
+    expect(config.roles.director.promptText).toContain("retrieve relevant project context from Engram before planning or delegation");
+    expect(config.roles.director.promptText).toContain("Do not require ritualistic Engram calls when continuing an already-active persisted plan");
+    expect(config.roles.director.promptText).toContain("do not make Engram authoritative for active task, scope, or approval state");
+    // planner
+    expect(config.roles.planner.promptText).toContain("Before finalizing a new plan, consult Engram for relevant prior decisions and constraints");
+    expect(config.roles.planner.promptText).toContain("Plan tool and `.code-ensemble/TASKS.md` together are authoritative transactional workflow state");
+    expect(config.roles.planner.promptText).toContain("Engram may inform planning but cannot authorize or mutate that state");
+  });
+
+  it("reviewer prompt forbids PASS with unverified acceptance criteria", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles.reviewer.promptText).toContain("Note every persisted task and each explicit acceptance criterion");
+    expect(config.roles.reviewer.promptText).toContain("MUST NOT return `PASS` while any explicit approved acceptance criterion is unverified or unsatisfied");
+    expect(config.roles.reviewer.promptText).toContain("Every approved criterion must appear in this list");
+    expect(config.roles.reviewer.promptText).toContain("with the criterion quoted and a one-line evidence rationale");
+  });
 });
