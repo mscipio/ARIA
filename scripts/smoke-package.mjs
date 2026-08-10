@@ -33,6 +33,7 @@ const requiredPaths = [
   "dist/index.d.ts",
   "dist/register.js",
   "dist/deps.js",
+  "dist/routes.js",
   "defaults/review-driven-code.defaults.json",
   "defaults/prompts/director.md",
   "defaults/prompts/planner.md",
@@ -124,6 +125,34 @@ console.log("smoke-package: ok", {
     stdio: "inherit",
     env: process.env,
   });
+
+  // Verify rdc routes binary works from the installed package
+  const rdcBin = join(installRoot, "node_modules", ".bin", "rdc");
+  const routesOutput = execFileSync(process.execPath, [rdcBin, "routes"], {
+    cwd: installRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (!routesOutput.includes("Resolved RDC role routes:")) {
+    fail("rdc routes did not produce expected header");
+  }
+  if (!routesOutput.includes("director  opencode-go/deepseek-v4-pro")) {
+    fail("rdc routes did not include director role");
+  }
+
+  // Verify rdc routes honors project-local review-driven-code.json from CWD
+  writeFileSync(
+    join(installRoot, "review-driven-code.json"),
+    JSON.stringify({ roles: { explorer: { variant: "xhigh" } } }),
+  );
+  const overrideOutput = execFileSync(process.execPath, [rdcBin, "routes"], {
+    cwd: installRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (!overrideOutput.includes("explorer  opencode-go/deepseek-v4-flash (xhigh)")) {
+    fail("rdc routes did not reflect project-local review-driven-code.json override");
+  }
 } finally {
   rmSync(tarball, { force: true });
   rmSync(installRoot, { recursive: true, force: true });

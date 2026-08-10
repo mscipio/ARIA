@@ -166,9 +166,23 @@ RDC requires three external integrations. RDC does not fork, vendor, or duplicat
 ```bash
 rdc deps sync   # install/update all required integrations
 rdc doctor      # report status of all required integrations
+rdc routes      # print resolved model routes for each RDC role
 ```
 
 `rdc deps sync` synchronizes each dependency using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. `rdc doctor` is read-only and reports which integrations are present.
+
+`rdc routes` prints the resolved model (and optional variant) for every RDC role, using built-in defaults merged with any `review-driven-code.json` project overrides. If the configuration file is invalid the command fails with a non-zero exit code.
+
+```
+Resolved RDC role routes:
+director  opencode-go/deepseek-v4-pro
+explorer  opencode-go/deepseek-v4-flash (high)
+visualizer  opencode-go/kimi-k2.7-code
+planner  openai/gpt-5.6-terra (xhigh)
+architect  openai/gpt-5.6-sol (xhigh)
+implementer  opencode-go/glm-5.2
+reviewer  opencode-go/deepseek-v4-pro
+```
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.code-ensemble/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
 

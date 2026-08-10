@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Review-Driven Coding CLI — dependency-free, Node standard library only.
-// Supported: rdc deps sync, rdc doctor, rdc --help
+// Supported: rdc deps sync, rdc doctor, rdc routes, rdc --help
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,6 +25,7 @@ function usage() {
 Usage:
   rdc deps sync   Synchronize required dependencies (Engram, Context7, CodeGraph)
   rdc doctor      Report status of required dependencies
+  rdc routes      Print resolved model routes for each RDC role
   rdc --help      Show this help message
   rdc -h          Show this help message
   rdc --version   Show version
@@ -66,6 +67,17 @@ async function main() {
     const status = await doctor();
     console.log(formatDoctor(version, status));
     return doctorExitCode(status);
+  }
+
+  if (command === "routes") {
+    try {
+      const { formatRoutes } = await import("../dist/routes.js");
+      console.log(formatRoutes());
+      return 0;
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return 1;
+    }
   }
 
   console.error(`Unknown command: ${command}`);
