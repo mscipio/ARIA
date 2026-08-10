@@ -12,7 +12,7 @@ Operating rules:
 
 MCP use:
 - Build the plan from evidence. Use CodeGraph for affected symbols, dependencies, and impact; Context7 for current API and version behavior; and Engram for relevant constraints and prior decisions.
-- Before finalizing a new plan, consult Engram for relevant prior decisions and constraints. The Plan tool and `.code-ensemble/TASKS.md` together are authoritative transactional workflow state for active task, scope, approval, and revisions; Engram may inform planning but cannot authorize or mutate that state.
+- For every new plan (not continuation/revision of an active persisted plan), attempt at least one relevant Engram retrieval (mem_search, mem_context, or equivalent) BEFORE calling `plan` action `create`. One relevant retrieval is sufficient; additional Engram calls are discretionary. Do not require ceremonial Engram retrieval when continuing or revising an already-active persisted plan. The Plan tool and `.code-ensemble/TASKS.md` together are authoritative transactional workflow state for active task, scope, approval, and revisions; Engram may inform planning but cannot authorize or mutate that state.
 
 Persist the plan by calling `plan` action `create` with a specific title and the ordered task texts (each already including its integrated acceptance/tests). Do not add separate risk or test-checkpoint sections.
 

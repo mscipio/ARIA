@@ -112,6 +112,23 @@ describe("review-driven-code defaults", () => {
     expect(config.roles.architect.promptText).toContain("Mode 1");
   });
 
+  it("architect prompt Mode 1 requires preserving explicit user constraints", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles.architect.promptText).toContain("Preserve explicit user constraints");
+    expect(config.roles.architect.promptText).toContain("Before returning READY or calling `replace`");
+    expect(config.roles.architect.promptText).toContain("do not commit or push");
+    expect(config.roles.architect.promptText).toContain("files or areas that must not be changed");
+    expect(config.roles.architect.promptText).toContain("explicit scope boundaries");
+  });
+
+  it("architect prompt Mode 1 forbids turning unspecified behavior into requirements", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles.architect.promptText).toContain("Do not turn unspecified behavior into additional product requirements");
+    expect(config.roles.architect.promptText).toContain("Prefer the smallest plan that satisfies the request");
+    expect(config.roles.architect.promptText).toContain("necessary for correctness, compatibility, or to make the requested work implementable");
+    expect(config.roles.architect.promptText).toContain("leave it outside the approved scope");
+  });
+
   it("reviewer prompt directs to read plan and use PASS/FAIL/INSUFFICIENT EVIDENCE", () => {
     const config = resolveReviewDrivenCodeConfig(tmpdir());
     expect(config.roles.reviewer.promptText).toMatch(/action `get`/);
@@ -189,7 +206,9 @@ describe("review-driven-code defaults", () => {
     expect(config.roles.director.promptText).toContain("Do not require ritualistic Engram calls when continuing an already-active persisted plan");
     expect(config.roles.director.promptText).toContain("do not make Engram authoritative for active task, scope, or approval state");
     // planner
-    expect(config.roles.planner.promptText).toContain("Before finalizing a new plan, consult Engram for relevant prior decisions and constraints");
+    expect(config.roles.planner.promptText).toMatch(/at least one relevant Engram retrieval.*BEFORE calling `plan` action `create`/);
+    expect(config.roles.planner.promptText).toContain("One relevant retrieval is sufficient");
+    expect(config.roles.planner.promptText).toMatch(/Do not require ceremonial Engram retrieval when continuing or revising an already-active persisted plan/);
     expect(config.roles.planner.promptText).toContain("Plan tool and `.code-ensemble/TASKS.md` together are authoritative transactional workflow state");
     expect(config.roles.planner.promptText).toContain("Engram may inform planning but cannot authorize or mutate that state");
   });
