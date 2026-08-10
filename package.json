@@ -16,12 +16,16 @@
   },
   "type": "module",
   "files": [
+    "bin/*.mjs",
     "dist/*.js",
     "dist/*.d.ts",
     "defaults",
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "rdc": "./bin/rdc.mjs"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",

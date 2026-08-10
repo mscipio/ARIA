@@ -28,9 +28,11 @@ if (!entry?.filename) fail("npm pack did not return a tarball");
 const packedPaths = new Set((entry.files ?? []).map((file) => file.path.replaceAll("\\", "/")));
 const requiredPaths = [
   "package.json",
+  "bin/rdc.mjs",
   "dist/index.js",
   "dist/index.d.ts",
   "dist/register.js",
+  "dist/deps.js",
   "defaults/review-driven-code.defaults.json",
   "defaults/prompts/director.md",
   "defaults/prompts/planner.md",

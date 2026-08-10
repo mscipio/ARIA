@@ -153,6 +153,25 @@ Create `review-driven-code.json` in the project root only to override models or 
 
 Every model identifier must use `provider/model` format. Variant is optional. If a field is omitted, the built-in default for that role applies.
 
+## Required Integrations
+
+RDC requires three external integrations. RDC does not fork, vendor, or duplicate their internal implementation -- updates track their latest stable upstream releases and services.
+
+| Integration | Purpose | Upstream |
+|---|---|---|
+| [Engram](https://github.com/Gentleman-Programming/engram) | Persistent project and session memory | `engram setup opencode` |
+| [Context7](https://github.com/upstash/context7) | Current external library and API documentation | Remote MCP endpoint |
+| [CodeGraph](https://github.com/colbymchenry/codegraph) | Structural code intelligence | `@colbymchenry/codegraph` |
+
+```bash
+rdc deps sync   # install/update all required integrations
+rdc doctor      # report status of all required integrations
+```
+
+`rdc deps sync` synchronizes each dependency using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. `rdc doctor` is read-only and reports which integrations are present.
+
+Note: `.code-ensemble/TASKS.md` remains RDC's authoritative active workflow and approval state and is distinct from Engram memory.
+
 ## Development
 
 ```sh
