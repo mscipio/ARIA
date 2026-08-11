@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Config } from "@opencode-ai/plugin";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import reviewDrivenCodePlugin, { reviewDrivenCodePlugin as pluginModule } from "../src/index";
 import { getPackageRoot } from "../src/defaults";
@@ -76,7 +76,8 @@ describe("reviewDrivenCodePlugin", () => {
   });
 
   it("registers exactly eight agents and the plan tool", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const config: Config = {};
     await plugin.config?.(config);
 
@@ -105,7 +106,8 @@ describe("reviewDrivenCodePlugin", () => {
   });
 
   it("declares plan permissions with approve, remediate, and reviewer get", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const config: Config = {};
     await plugin.config?.(config);
     const permission = (role: string) => config.agent?.[role]?.permission as unknown as Record<string, unknown>;
@@ -160,7 +162,7 @@ describe("reviewDrivenCodePlugin", () => {
       plan: "deny",
       task: "deny",
     });
-    // MCP: no Engram, CodeGraph, or Context7 access — wiki-compiler
+    // MCP: no Engram, CodeGraph, or Context7 access ? wiki-compiler
     // reads engram from the local engram.db via archive-engram command
     expect(wikiPerm).not.toHaveProperty("codegraph_*");
     expect(wikiPerm).not.toHaveProperty("context7_*");
@@ -173,7 +175,6 @@ describe("reviewDrivenCodePlugin", () => {
     expect(wikiPerm).not.toHaveProperty("engram_mem_get_observation");
     expect(wikiPerm).not.toHaveProperty("engram_mem_context");
     expect(wikiPerm).not.toHaveProperty("engram_mem_timeline");
-    // Bash: only explicit run.py subcommands, no wildcard python
     // Bash: only explicit run.py subcommands, no wildcard python
     expect(permission("wiki-compiler")).toMatchObject({
       bash: {
@@ -206,24 +207,40 @@ describe("reviewDrivenCodePlugin", () => {
     // external_directory, read, edit, glob, grep, list are scoped or denied depending on WIKI_DIR
     if (process.env.WIKI_DIR) {
       const wikiDir = process.env.WIKI_DIR;
+      const pipelineRoot = join(getPackageRoot(), "wiki-pipeline");
+
+      const wikiRelative = relative(root, wikiDir).replaceAll("\\", "/");
+      const pipelineRelative = relative(root, pipelineRoot).replaceAll("\\", "/");
+
       expect(wikiPerm).toMatchObject({
         read: { "*": "deny" },
         edit: { "*": "deny" },
         external_directory: { "*": "deny" },
       });
-      expect(wikiPerm.read).toHaveProperty(`${wikiDir}/**`, "allow");
-      expect(wikiPerm.edit).toHaveProperty(`${wikiDir}/**`, "allow");
-      expect(wikiPerm.external_directory).toHaveProperty(wikiDir, "allow");
-      // glob, grep, list: scoped like read, not unscoped "allow"
-      expect(wikiPerm.glob).toBeTypeOf("object");
-      expect(wikiPerm.glob).toHaveProperty("*", "deny");
-      expect(wikiPerm.glob).toHaveProperty(`${wikiDir}/**`, "allow");
-      expect(wikiPerm.grep).toBeTypeOf("object");
-      expect(wikiPerm.grep).toHaveProperty("*", "deny");
-      expect(wikiPerm.grep).toHaveProperty(`${wikiDir}/**`, "allow");
-      expect(wikiPerm.list).toBeTypeOf("object");
-      expect(wikiPerm.list).toHaveProperty("*", "deny");
-      expect(wikiPerm.list).toHaveProperty(`${wikiDir}/**`, "allow");
+
+      // read/edit permissions are relative to the OpenCode worktree
+      expect(wikiPerm.read).toHaveProperty(wikiRelative, "allow");
+      expect(wikiPerm.read).toHaveProperty(`${wikiRelative}/**`, "allow");
+      expect(wikiPerm.read).toHaveProperty(pipelineRelative, "allow");
+      expect(wikiPerm.read).toHaveProperty(`${pipelineRelative}/**`, "allow");
+
+      expect(wikiPerm.edit).toHaveProperty(wikiRelative, "allow");
+      expect(wikiPerm.edit).toHaveProperty(`${wikiRelative}/**`, "allow");
+
+      // external_directory permissions remain absolute
+      expect(wikiPerm.external_directory).toHaveProperty(
+        `${wikiDir}/**`,
+        "allow",
+      );
+      expect(wikiPerm.external_directory).toHaveProperty(
+        `${pipelineRoot}/**`,
+        "allow",
+      );
+
+      // discovery tools stay disabled
+      expect(wikiPerm.glob).toBe("deny");
+      expect(wikiPerm.grep).toBe("deny");
+      expect(wikiPerm.list).toBe("deny");
     } else {
       expect(wikiPerm).toMatchObject({
         glob: "deny",

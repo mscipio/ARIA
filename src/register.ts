@@ -1,4 +1,5 @@
 import { tool, type Plugin } from "@opencode-ai/plugin";
+import path from "node:path";
 
 import { getPackageRoot } from "./defaults.js";
 import { resolveReviewDrivenCodeConfig } from "./overrides.js";
@@ -159,44 +160,47 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
 
 const PACKAGE_ROOT = getPackageRoot();
 
-function buildWikiCompilerPermissions(): AgentPermission {
+function buildWikiCompilerPermissions(worktree: string): AgentPermission {
   const wikiDir = process.env.WIKI_DIR;
 
   if (!wikiDir) {
     return SUBAGENT_PERMISSIONS["wiki-compiler"];
   }
 
-  const pipelineRun = `${PACKAGE_ROOT}/wiki-pipeline/run.py`;
+  const pipelineRoot = path.join(PACKAGE_ROOT, "wiki-pipeline");
+  const pipelineRun = path.join(pipelineRoot, "run.py");
 
+  const wikiRelative = path.relative(worktree, wikiDir).replaceAll("\\", "/");
+  const pipelineRelative = path.relative(worktree, pipelineRoot).replaceAll("\\", "/");
+
+  // OpenCode evaluates read/edit permissions against paths relative to the
+  // active worktree, even when the tool was called with an absolute path.
   const readScope: Record<string, PermissionAction> = {
     "*": "deny",
+    [wikiRelative]: "allow",
+    [`${wikiRelative}/**`]: "allow",
+    [pipelineRelative]: "allow",
+    [`${pipelineRelative}/**`]: "allow",
   };
-  readScope[`${wikiDir}/**`] = "allow";
-  readScope[`${PACKAGE_ROOT}/wiki-pipeline/**`] = "allow";
 
   const editScope: Record<string, PermissionAction> = {
     "*": "deny",
+    [wikiRelative]: "allow",
+    [`${wikiRelative}/**`]: "allow",
   };
-  editScope[`${wikiDir}/**`] = "allow";
 
+  // external_directory is evaluated against absolute filesystem paths.
   const externalDirScope: Record<string, PermissionAction> = {
     "*": "deny",
+    [`${wikiDir}/**`]: "allow",
+    [`${pipelineRoot}/**`]: "allow",
   };
-  externalDirScope[wikiDir] = "allow";
-  externalDirScope[PACKAGE_ROOT] = "allow";
-
-  // Discovery tools scoped to the same boundaries as read
-  const discoveryScope: Record<string, PermissionAction> = {
-    "*": "deny",
-  };
-  discoveryScope[`${wikiDir}/**`] = "allow";
-  discoveryScope[`${PACKAGE_ROOT}/wiki-pipeline/**`] = "allow";
 
   return {
     ...BASE_PERMISSION,
-    glob: discoveryScope,
-    grep: discoveryScope,
-    list: discoveryScope,
+    glob: "deny",
+    grep: "deny",
+    list: "deny",
     read: readScope,
     edit: editScope,
     bash: {
@@ -213,7 +217,10 @@ function buildWikiCompilerPermissions(): AgentPermission {
 
 const SUBAGENT_ROLES = Object.keys(SUBAGENT_PERMISSIONS) as SubagentRole[];
 
-function agentDefinitions(config: ResolvedReviewDrivenCodeConfig): Record<string, unknown> {
+function agentDefinitions(
+  config: ResolvedReviewDrivenCodeConfig,
+  worktree: string,
+): Record<string, unknown> {
   const taskPermissions: Record<string, "allow" | "deny"> = {
     "*": "deny",
     explorer: "allow",
@@ -250,7 +257,7 @@ function agentDefinitions(config: ResolvedReviewDrivenCodeConfig): Record<string
       ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
       prompt: roleConfig.promptText,
       permission: role === "wiki-compiler"
-        ? buildWikiCompilerPermissions()
+        ? buildWikiCompilerPermissions(worktree)
         : SUBAGENT_PERMISSIONS[role],
     };
   }
@@ -265,7 +272,7 @@ export const reviewDrivenCodePlugin: Plugin = async (input, options = {}) => {
   return {
     config: async (runtimeConfig) => {
       runtimeConfig.agent ??= {};
-      Object.assign(runtimeConfig.agent, agentDefinitions(config));
+      Object.assign(runtimeConfig.agent, agentDefinitions(config, directory));
     },
     tool: {
       plan: tool({

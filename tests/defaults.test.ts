@@ -241,12 +241,12 @@ describe("review-driven-code defaults", () => {
     expect(config.roles["wiki-compiler"].promptText).toContain("Compile");
   });
 
-  it("wiki-compiler prompt requires WIKI_DIR for ALL modes including lookup", () => {
+  it("wiki-compiler prompt requires WIKI_DIR for lookup, archival, and compilation", () => {
     const config = resolveReviewDrivenCodeConfig(tmpdir());
     const prompt = config.roles["wiki-compiler"].promptText;
-    expect(prompt).toContain("ALL modes");
-    expect(prompt).toContain("lookup, archival, and compile");
-    expect(prompt).toContain("Without WIKI_DIR, no wiki operation can proceed");
+    expect(prompt).toContain("WIKI_DIR is the only external configuration");
+    expect(prompt).toContain("This applies to lookup, archival, and compilation");
+    expect(prompt).toContain("`WIKI_DIR` must point to the Wiki workspace root");
   });
 
   it("wiki-compiler prompt has no REPO_DIR or myopencode references", () => {
