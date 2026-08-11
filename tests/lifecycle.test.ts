@@ -302,6 +302,46 @@ describe("setup", () => {
     expect(depsSyncCalled).toBe(true);
   });
 
+  it("detects already-registered plugin from same-indent - list entry in introspection output", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+
+    // Same-indent output: the - list marker is at the same indent as "plugins:"
+    const debugOutput = [
+      "OpenCode Debug Info",
+      "Version: 1.18.16",
+      "plugins:",
+      `- ${uri}`,
+      "Other:",
+      "  value",
+    ].join("\n");
+
+    let depsSyncCalled = false;
+    const mockDepsSync = async () => {
+      depsSyncCalled = true;
+      return {
+        ok: true,
+        engram: { action: "ok" },
+        context7: { action: "ok" },
+        codegraph: { action: "ok" },
+        health: undefined,
+      };
+    };
+
+    // Only configure introspection — any registration attempt would fail
+    const executor = mockExecutor({
+      "opencode debug info": { stdout: debugOutput },
+    });
+
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+
+    expect(result.ok).toBe(true);
+    expect(result.stage).toBe("complete");
+    expect(result.setup!.registration.action).toBe("already registered");
+    expect(result.setup!.sync.ok).toBe(true);
+    expect(depsSyncCalled).toBe(true);
+  });
+
   it("does not run depsSync when registration fails with a real error", async () => {
     const checkout = await makeFixtureCheckout();
     const uri = pathToFileURL(checkout).href;

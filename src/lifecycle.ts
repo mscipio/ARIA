@@ -112,7 +112,7 @@ function parsePluginSpecifiers(output: string): { recognized: boolean; specifier
     }
 
     // Exit plugins section when we reach a non-blank line at same or lesser indent
-    if (inPlugins && trimmed !== "" && indent <= headerIndent) {
+    if (inPlugins && trimmed !== "" && !trimmed.startsWith("- ") && indent <= headerIndent) {
       inPlugins = false;
       continue;
     }
