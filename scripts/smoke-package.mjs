@@ -42,6 +42,8 @@ const requiredPaths = [
   "defaults/prompts/reviewer.md",
   "defaults/prompts/explorer.md",
   "defaults/prompts/visualizer.md",
+  "dist/lifecycle.js",
+  "dist/lifecycle.d.ts",
 ];
 for (const path of requiredPaths) {
   if (!packedPaths.has(path)) fail(`packed tarball is missing ${path}`);
@@ -152,6 +154,19 @@ console.log("smoke-package: ok", {
   });
   if (!overrideOutput.includes("explorer  opencode-go/deepseek-v4-flash (xhigh)")) {
     fail("rdc routes did not reflect project-local review-driven-code.json override");
+  }
+
+  // Verify installed-package help lists setup and update
+  const helpOutput = execFileSync(process.execPath, [rdcBin, "--help"], {
+    cwd: installRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (!helpOutput.includes("setup")) {
+    fail("rdc --help does not mention setup");
+  }
+  if (!helpOutput.includes("update")) {
+    fail("rdc --help does not mention update");
   }
 } finally {
   rmSync(tarball, { force: true });

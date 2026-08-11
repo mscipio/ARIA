@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { getPackageRoot, loadDefaultConfig } from "./defaults.js";
 const ROLES = [
@@ -28,8 +29,8 @@ function withMcpGuidance(promptText) {
     return `${normalized}\n\n${SHARED_MCP_GUIDANCE}\n`;
 }
 class ConfigValidationError extends Error {
-    constructor(path, got, want) {
-        super(`review-driven-code.json: ${path}: expected ${want}, got ${typeOf(got)}`);
+    constructor(filePath, path, got, want) {
+        super(`${filePath}: ${path}: expected ${want}, got ${typeOf(got)}`);
         this.name = "ConfigValidationError";
     }
 }
@@ -40,8 +41,19 @@ function typeOf(value) {
         return "array";
     return typeof value;
 }
-function fail(path, got, want) {
-    throw new ConfigValidationError(path, got, want);
+function parseJSON(text, filePath) {
+    try {
+        return JSON.parse(text);
+    }
+    catch (error) {
+        if (error instanceof SyntaxError) {
+            throw new SyntaxError(`${filePath}: ${error.message}`);
+        }
+        throw error;
+    }
+}
+function fail(filePath, path, got, want) {
+    throw new ConfigValidationError(filePath, path, got, want);
 }
 function isObject(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
@@ -52,41 +64,41 @@ function isString(value) {
 function isModelIdentifier(value) {
     return isString(value) && /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/.test(value);
 }
-export function parseOverrides(raw) {
+export function parseOverrides(raw, filePath = "review-driven-code.json") {
     if (!isObject(raw))
-        fail("(root)", raw, "object");
+        fail(filePath, "(root)", raw, "object");
     const rootKeys = Object.keys(raw);
     if (rootKeys.length > 1 || (rootKeys.length === 1 && rootKeys[0] !== "roles")) {
-        fail("(root)", rootKeys.join(", "), "'roles'");
+        fail(filePath, "(root)", rootKeys.join(", "), "'roles'");
     }
     const rolesValue = raw.roles;
     if (rolesValue === undefined)
         return {};
     if (!isObject(rolesValue))
-        fail("roles", rolesValue, "object");
+        fail(filePath, "roles", rolesValue, "object");
     const roles = {};
     for (const [key, value] of Object.entries(rolesValue)) {
         if (!ROLE_SET.has(key))
-            fail(`roles.${key}`, key, "valid role");
+            fail(filePath, `roles.${key}`, key, "valid role");
         if (!isObject(value))
-            fail(`roles.${key}`, value, "object");
+            fail(filePath, `roles.${key}`, value, "object");
         const roleKeys = Object.keys(value);
         for (const field of roleKeys) {
             if (!ROLE_OVERRIDE_FIELDS.has(field)) {
-                fail(`roles.${key}.${field}`, field, "'model' or 'variant'");
+                fail(filePath, `roles.${key}.${field}`, field, "'model' or 'variant'");
             }
         }
         const override = {};
         const rawRole = value;
         if ("model" in rawRole) {
             if (!isModelIdentifier(rawRole.model)) {
-                fail(`roles.${key}.model`, rawRole.model, "model identifier in provider/model format");
+                fail(filePath, `roles.${key}.model`, rawRole.model, "model identifier in provider/model format");
             }
             override.model = rawRole.model;
         }
         if ("variant" in rawRole) {
             if (!isString(rawRole.variant)) {
-                fail(`roles.${key}.variant`, rawRole.variant, "non-empty string");
+                fail(filePath, `roles.${key}.variant`, rawRole.variant, "non-empty string");
             }
             override.variant = rawRole.variant;
         }
@@ -106,19 +118,26 @@ function generateRouting(resolved) {
 export function resolveReviewDrivenCodeConfig(worktree, options = {}, metaUrl = import.meta.url) {
     const defaults = loadDefaultConfig(metaUrl);
     const packageRoot = getPackageRoot(metaUrl);
+    // Global config (optional) — per-user overrides in ~/.config/opencode/review-driven-code.json
+    const globalPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
+    const globalOverrides = existsSync(globalPath)
+        ? parseOverrides(parseJSON(readFileSync(globalPath, "utf8"), globalPath), globalPath)
+        : {};
+    // Project config — explicit or auto-discovered review-driven-code.json
     const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
     const discoveredPath = resolve(worktree, "review-driven-code.json");
     const overridePath = explicitPath ?? (existsSync(discoveredPath) ? discoveredPath : undefined);
     const overrides = overridePath && existsSync(overridePath)
-        ? parseOverrides(JSON.parse(readFileSync(overridePath, "utf8")))
+        ? parseOverrides(parseJSON(readFileSync(overridePath, "utf8"), overridePath), overridePath)
         : {};
     const roles = Object.fromEntries(ROLES.map((role) => {
         const roleDefaults = defaults.roles[role];
-        const override = overrides.roles?.[role];
+        const globalOverride = globalOverrides.roles?.[role];
+        const projectOverride = overrides.roles?.[role];
         return [role, {
                 ...roleDefaults,
-                model: override?.model ?? roleDefaults.model,
-                variant: override?.variant ?? roleDefaults.variant,
+                model: projectOverride?.model ?? globalOverride?.model ?? roleDefaults.model,
+                variant: projectOverride?.variant ?? globalOverride?.variant ?? roleDefaults.variant,
                 promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
             }];
     }));

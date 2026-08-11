@@ -1,4 +1,7 @@
-export type Executor = (command: string, args: string[]) => Promise<{
+export type ExecutorOptions = {
+    cwd?: string;
+};
+export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{
     stdout: string;
     stderr: string;
 }>;
@@ -8,6 +11,38 @@ export interface DependencyFileOps {
     sha256(path: string): Promise<string>;
 }
 export declare function sha256File(path: string): Promise<string>;
+export type CommandResolution = {
+    command: string;
+    useComSpec: boolean;
+};
+/**
+ * Resolve a command name to its executable path and ComSpec requirement.
+ *
+ * On non-Windows, returns the command as-is with `useComSpec: false`.
+ *
+ * On Windows:
+ * - Commands with an extension (.exe, .cmd, .bat) or path separators are
+ *   returned as-is.
+ * - Otherwise, PATH directories are scanned for extensions parsed from
+ *   `pathExt` (default ".cmd;.bat;.exe") in priority order.
+ * - `.cmd`/`.bat` shims require ComSpec; native `.exe` does not.
+ * - If nothing is found, the original command is returned to let execFile
+ *   fail naturally with ENOENT.
+ *
+ * @param cmd Command name to resolve.
+ * @param pathEnv Semicolon-separated PATH (default `process.env.PATH`).
+ * @param pathExt Semicolon-separated extension list (default ".cmd;.bat;.exe").
+ * @param platform Override `process.platform` for testing.
+ * @param probe File-existence check (default `existsSync`).
+ */
+export declare function resolveCommand(cmd: string, pathEnv?: string, pathExt?: string, platform?: string, probe?: (path: string) => boolean): CommandResolution;
+/**
+ * Build the argument list for `cmd.exe /s /c` that safely passes `command`
+ * and `args` through the CMD command-line parser.
+ *
+ * @returns `["/s", "/c", escapedCommandString]`
+ */
+export declare function buildComSpecArgs(command: string, args: string[]): string[];
 declare const defaultExecutor: Executor;
 export interface DepsStatus {
     opencode: {

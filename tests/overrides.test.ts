@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -233,6 +233,114 @@ describe("review-driven-code overrides", () => {
       expect(config.roles.director.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2\n");
       expect(config.roles.director.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro\n");
       expect(config.roles.director.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code\n");
+    });
+  });
+
+  describe("global config discovery", () => {
+    let originalHome: string | undefined;
+
+    beforeEach(() => {
+      originalHome = process.env.HOME;
+    });
+
+    afterEach(() => {
+      process.env.HOME = originalHome;
+    });
+
+    it("survives missing global config (non-fatal)", async () => {
+      const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-no-global-"));
+      tempDirs.push(root);
+      process.env.HOME = root;
+      const config = resolveReviewDrivenCodeConfig(resolve(root, "worktree"));
+      expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.planner.variant).toBe("xhigh");
+    });
+
+    it("reads global override when no project config exists", async () => {
+      const home = await mkdtemp(resolve(tmpdir(), "review-driven-code-home-"));
+      tempDirs.push(home);
+      process.env.HOME = home;
+
+      const globalConfigDir = resolve(home, ".config", "opencode");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(resolve(globalConfigDir, "review-driven-code.json"), JSON.stringify({
+        roles: { planner: { model: "openai/global-model" } },
+      }));
+
+      const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-proj-"));
+      tempDirs.push(root);
+
+      const config = resolveReviewDrivenCodeConfig(root);
+      expect(config.roles.planner.model).toBe("openai/global-model");
+      expect(config.roles.planner.variant).toBe("xhigh"); // from default
+    });
+
+    it("project overrides global per-field", async () => {
+      const home = await mkdtemp(resolve(tmpdir(), "review-driven-code-home-"));
+      tempDirs.push(home);
+      process.env.HOME = home;
+
+      const globalConfigDir = resolve(home, ".config", "opencode");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(resolve(globalConfigDir, "review-driven-code.json"), JSON.stringify({
+        roles: { planner: { model: "openai/global-model", variant: "global-variant" } },
+      }));
+
+      const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-proj-"));
+      tempDirs.push(root);
+      await writeFile(resolve(root, "review-driven-code.json"), JSON.stringify({
+        roles: { planner: { variant: "project-variant" } },
+      }));
+
+      const config = resolveReviewDrivenCodeConfig(root);
+      expect(config.roles.planner.model).toBe("openai/global-model"); // from global
+      expect(config.roles.planner.variant).toBe("project-variant"); // project wins
+    });
+
+    it("project model overrides global model", async () => {
+      const home = await mkdtemp(resolve(tmpdir(), "review-driven-code-home-"));
+      tempDirs.push(home);
+      process.env.HOME = home;
+
+      const globalConfigDir = resolve(home, ".config", "opencode");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(resolve(globalConfigDir, "review-driven-code.json"), JSON.stringify({
+        roles: { planner: { model: "openai/global-model", variant: "global-variant" } },
+      }));
+
+      const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-proj-"));
+      tempDirs.push(root);
+      await writeFile(resolve(root, "review-driven-code.json"), JSON.stringify({
+        roles: { planner: { model: "openai/project-model" } },
+      }));
+
+      const config = resolveReviewDrivenCodeConfig(root);
+      expect(config.roles.planner.model).toBe("openai/project-model"); // project wins
+      expect(config.roles.planner.variant).toBe("global-variant"); // inherited from global
+    });
+  });
+
+  describe("global diagnostics", () => {
+    it("includes global path in error messages", () => {
+      const globalPath = "/home/user/.config/opencode/review-driven-code.json";
+      expect(() => parseOverrides({ models: {} }, globalPath))
+        .toThrow(globalPath);
+    });
+
+    it("malformed global JSON includes global path in syntax error", async () => {
+      const home = await mkdtemp(resolve(tmpdir(), "review-driven-code-bad-json-"));
+      tempDirs.push(home);
+      process.env.HOME = home;
+
+      const globalConfigDir = resolve(home, ".config", "opencode");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(resolve(globalConfigDir, "review-driven-code.json"), "{bad json");
+
+      const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-proj-"));
+      tempDirs.push(root);
+
+      const expectedPath = resolve(home, ".config", "opencode", "review-driven-code.json");
+      expect(() => resolveReviewDrivenCodeConfig(root)).toThrow(expectedPath);
     });
   });
 });

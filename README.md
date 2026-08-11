@@ -125,37 +125,48 @@ The director is the only agent allowed to approve, update plan status, add remed
 git clone https://github.com/mscipio/review-driven-code.git
 cd review-driven-code
 npm ci --omit=dev
-opencode plugin "file:///absolute/path/to/review-driven-code"
+node ./bin/rdc.mjs setup
+node ./bin/rdc.mjs doctor
 ```
 
-Restart OpenCode and select `director` from the agent selector.
+The `node ./bin/rdc.mjs` form works from the cloned checkout without requiring the package bin to be on `PATH`. If you have installed RDC globally or linked it, the shorter `rdc setup` / `rdc doctor` forms are equivalent.
+
+Restart OpenCode after setup to load the registered plugin.
 
 ## Configuration
 
-Create `review-driven-code.json` in the project root only to override models or variants:
+RDC resolves role model and variant overrides from two optional JSON files sharing the same schema. RDC reads both files but never writes them — create them manually.
+
+| File | Path | Scope |
+|------|------|-------|
+| Global | `~/.config/opencode/review-driven-code.json` | Per-user, applies to every project |
+| Project | `review-driven-code.json` in the worktree root (or an explicit path via the plugin `configPath` option) | Per-project |
 
 ```json
 {
   "roles": {
-    "planner": {
-      "model": "openai/gpt-5.6-terra",
-      "variant": "xhigh"
-    },
-    "architect": {
-      "model": "openai/gpt-5.6-sol"
-    },
-    "explorer": {
-      "variant": "xhigh"
-    }
+    "planner": { "model": "openai/gpt-5.6-terra", "variant": "xhigh" },
+    "architect": { "model": "openai/gpt-5.6-sol" },
+    "explorer": { "variant": "xhigh" }
   }
 }
 ```
 
-Every model identifier must use `provider/model` format. Variant is optional. If a field is omitted, the built-in default for that role applies.
+Every model identifier must use `provider/model` format. Variant is optional.
+
+### Per-field resolution
+
+For each role and field (`model`, `variant`), the first defined value wins:
+
+1. **Project** override
+2. **Global** override
+3. **Built-in default**
+
+Missing a field at one level inherits the value from the level below — there is no merging or blocking between levels. Setting only `variant` at the project level leaves the `model` to be resolved from global or defaults independently.
 
 ## Required Integrations
 
-RDC requires three external integrations. RDC does not fork, vendor, or duplicate their internal implementation -- updates track their latest stable upstream releases and services.
+RDC requires three external integrations. RDC does not fork, vendor, or duplicate their internal implementation — updates track their latest stable upstream releases and services.
 
 | Integration | Purpose | Upstream |
 |---|---|---|
@@ -163,15 +174,61 @@ RDC requires three external integrations. RDC does not fork, vendor, or duplicat
 | [Context7](https://github.com/upstash/context7) | Current external library, framework, and API documentation | Remote MCP endpoint |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) | Codebase intelligence for structure and impact | `@colbymchenry/codegraph` |
 
+### Commands
+
 ```bash
-rdc deps sync   # install/update all required integrations
-rdc doctor      # report status of all required integrations
-rdc routes      # print resolved model routes for each RDC role
+rdc setup      # Register RDC plugin with OpenCode and synchronize dependencies
+rdc update     # Pull latest changes, reinstall, and re-sync dependencies
+rdc deps sync  # Synchronize required integrations (Engram, Context7, CodeGraph)
+rdc doctor     # Report status of required integrations (read-only)
+rdc routes     # Print resolved model routes for each RDC role
 ```
 
-`rdc deps sync` synchronizes each dependency using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. `rdc doctor` is read-only and reports which integrations are present.
+### `rdc setup`
 
-`rdc routes` prints the resolved model (and optional variant) for every RDC role, using built-in defaults merged with any `review-driven-code.json` project overrides. If the configuration file is invalid the command fails with a non-zero exit code.
+Registers the RDC plugin globally with OpenCode and runs the idempotent dependency sync. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
+
+- **First run**: registers the plugin, then synchronizes all dependencies.
+- **Repeated runs**: reports `already registered`, skips duplicate global registration, and still runs the dependency sync (which is itself idempotent).
+- **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks dependency sync.
+
+Setup fails non-zero at the labeled stage (registration or sync). OpenCode must be restarted after setup to load the registered plugin.
+
+Setup never creates or overwrites project `review-driven-code.json`, commits, pushes, or introduces postinstall, daemon, or background behavior.
+
+### `rdc update`
+
+Pulls the latest changes from the upstream Git repository, reinstalls production dependencies, and hands off dependency synchronization to the updated checkout in a fresh process.
+
+```bash
+# From the cloned checkout:
+node ./bin/rdc.mjs update
+node ./bin/rdc.mjs doctor
+```
+
+The update workflow requires:
+
+- A clean Git working tree (no uncommitted changes or untracked files)
+- A configured upstream remote
+- Fast-forward-only merge (`git pull --ff-only`)
+
+After `git pull --ff-only` and `npm ci --omit=dev` succeed, update spawns `node <checkout>/bin/rdc.mjs deps sync` in a new process using the updated checkout's code. The subprocess exit status and captured diagnostic output are reported. If any stage fails, update returns non-zero at the labeled stage and skips downstream stages.
+
+OpenCode must be restarted after update to load the changed code.
+
+Neither `rdc setup` nor `rdc update` runs as a postinstall script, daemon, background task, or automatic update. Both are manual commands. Neither creates or overwrites project `review-driven-code.json`, creates commits, or pushes.
+
+### `rdc deps sync`
+
+Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `rdc setup` and the post-update handoff.
+
+### `rdc doctor`
+
+Read-only status report. Checks that OpenCode, Engram, Context7, and CodeGraph are present and their MCP connections are active. Returns non-zero if any required integration is missing or disconnected.
+
+### `rdc routes`
+
+Prints the resolved model (and optional variant) for every RDC role, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. If any configuration file is invalid the command fails with a non-zero exit code.
 
 ```
 Resolved RDC role routes:

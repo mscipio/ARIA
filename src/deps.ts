@@ -8,7 +8,8 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(nodeExecFile);
 
-export type Executor = (command: string, args: string[]) => Promise<{ stdout: string; stderr: string }>;
+export type ExecutorOptions = { cwd?: string };
+export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{ stdout: string; stderr: string }>;
 
 export interface DependencyFileOps {
   readText(path: string): Promise<string>;
@@ -30,8 +31,144 @@ const defaultFileOps: DependencyFileOps = {
   sha256: sha256File,
 };
 
-const defaultExecutor: Executor = async (command, args) => {
-  const { stdout, stderr } = await execFileAsync(command, args, { timeout: 120_000 });
+// ---------------------------------------------------------------------------
+// Cross-platform command resolver (Windows .cmd/.bat shim support)
+// ---------------------------------------------------------------------------
+
+export type CommandResolution = { command: string; useComSpec: boolean };
+
+const WINDOWS_SHIM_EXTENSIONS = [".cmd", ".bat", ".exe"] as const;
+
+function parsePathExt(pathExt?: string): string[] {
+  if (!pathExt) return [...WINDOWS_SHIM_EXTENSIONS];
+  return pathExt
+    .split(";")
+    .map((e) => e.trim())
+    .filter(Boolean)
+    .map((e) => (e.startsWith(".") ? e.toLowerCase() : `.${e.toLowerCase()}`));
+}
+
+/**
+ * Resolve a command name to its executable path and ComSpec requirement.
+ *
+ * On non-Windows, returns the command as-is with `useComSpec: false`.
+ *
+ * On Windows:
+ * - Commands with an extension (.exe, .cmd, .bat) or path separators are
+ *   returned as-is.
+ * - Otherwise, PATH directories are scanned for extensions parsed from
+ *   `pathExt` (default ".cmd;.bat;.exe") in priority order.
+ * - `.cmd`/`.bat` shims require ComSpec; native `.exe` does not.
+ * - If nothing is found, the original command is returned to let execFile
+ *   fail naturally with ENOENT.
+ *
+ * @param cmd Command name to resolve.
+ * @param pathEnv Semicolon-separated PATH (default `process.env.PATH`).
+ * @param pathExt Semicolon-separated extension list (default ".cmd;.bat;.exe").
+ * @param platform Override `process.platform` for testing.
+ * @param probe File-existence check (default `existsSync`).
+ */
+export function resolveCommand(
+  cmd: string,
+  pathEnv?: string,
+  pathExt?: string,
+  platform?: string,
+  probe?: (path: string) => boolean,
+): CommandResolution {
+  const plat = platform ?? process.platform;
+
+  // On non-Windows, execute directly — no shim resolution needed.
+  if (plat !== "win32") {
+    return { command: cmd, useComSpec: false };
+  }
+
+  // Explicit .cmd/.bat path — needs ComSpec (check before path-separator matching).
+  if (/\.cmd$/i.test(cmd) || /\.bat$/i.test(cmd)) {
+    return { command: cmd, useComSpec: true };
+  }
+  // Explicit .exe path or contains path separators — execute directly.
+  if (/\.exe$/i.test(cmd) || cmd.includes("\\") || cmd.includes("/")) {
+    return { command: cmd, useComSpec: false };
+  }
+
+  const extensions = parsePathExt(pathExt);
+  const envPath = pathEnv ?? process.env.PATH ?? "";
+  const pathDirs = envPath.split(";").filter(Boolean);
+  const fileExists = probe ?? existsSync;
+
+  // Scan PATH directories in order, then extensions in priority order within each.
+  // Directory order takes precedence (first directory in PATH wins).
+  // Within a directory, extension priority ensures .cmd/.bat shims are preferred
+  // over native .exe.
+  for (const dir of pathDirs) {
+    for (const ext of extensions) {
+      const candidate = join(dir, `${cmd}${ext}`);
+      if (fileExists(candidate)) {
+        // .cmd / .bat require ComSpec; .exe can be executed directly.
+        return { command: candidate, useComSpec: ext !== ".exe" };
+      }
+    }
+  }
+
+  // Not found — let execFile fail with ENOENT.
+  return { command: cmd, useComSpec: false };
+}
+
+// ---------------------------------------------------------------------------
+// ComSpec argument escaping (Windows cmd.exe metacharacter safety)
+// ---------------------------------------------------------------------------
+
+/** Characters that require quoting when passing arguments through cmd /s /c. */
+const CMD_METACHAR_RE = /[&|><^%!"\s]/;
+
+/**
+ * Escape a single argument for safe use inside a `cmd /s /c` command string.
+ *
+ * 1. Doubles bare `%` → `%%` and `!` → `!!` to prevent environment variable
+ *    expansion (cmd.exe expands these even inside quoted strings).
+ * 2. If the resulting string contains CMD metacharacters or whitespace, wraps
+ *    it in double quotes and escapes internal double quotes as `""`.
+ */
+function escapeCmdArg(arg: string): string {
+  // Step 1: prevent % and ! variable expansion
+  let escaped = arg.replace(/%/g, "%%").replace(/!/g, "!!");
+
+  // Step 2: quote if the argument contains any metacharacter or whitespace
+  if (CMD_METACHAR_RE.test(escaped)) {
+    escaped = `"${escaped.replace(/"/g, '""')}"`;
+  }
+
+  return escaped;
+}
+
+/**
+ * Build the argument list for `cmd.exe /s /c` that safely passes `command`
+ * and `args` through the CMD command-line parser.
+ *
+ * @returns `["/s", "/c", escapedCommandString]`
+ */
+export function buildComSpecArgs(command: string, args: string[]): string[] {
+  const escapedCommand = escapeCmdArg(command);
+  const escapedArgs = args.map(escapeCmdArg);
+  const fullCommand = [escapedCommand, ...escapedArgs].join(" ");
+  // cmd /s /c strips the outer quotes, leaving the individually-quoted parts
+  // for CMD to parse safely.
+  return ["/s", "/c", `"${fullCommand}"`];
+}
+
+const comSpec = process.env.ComSpec || "cmd.exe";
+
+const defaultExecutor: Executor = async (command, args, options) => {
+  const resolved = resolveCommand(command);
+  const opts = { timeout: 120_000, cwd: options?.cwd, shell: false };
+
+  if (resolved.useComSpec) {
+    const comSpecArgs = buildComSpecArgs(resolved.command, args);
+    const { stdout, stderr } = await execFileAsync(comSpec, comSpecArgs, opts);
+    return { stdout: stdout.toString(), stderr: stderr.toString() };
+  }
+
+  const { stdout, stderr } = await execFileAsync(resolved.command, args, opts);
   return { stdout: stdout.toString(), stderr: stderr.toString() };
 };
 
