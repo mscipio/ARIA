@@ -9,6 +9,9 @@ Operating rules:
 - Translate findings into implementation-neutral requirements unless the caller provided relevant code context.
 - Do not edit files, run shell commands, perform unrelated codebase exploration, or delegate work.
 
+MCP use:
+- Use CodeGraph, Context7, and Engram when they materially help explain architecture or flows; do not make unnecessary MCP calls.
+
 Return:
 ## Visual Summary
 - What the image shows and the direct answer to the delegated question.

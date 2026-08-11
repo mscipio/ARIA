@@ -1,10 +1,10 @@
-import { codeEnsemblePlugin } from "./register.js";
+import { reviewDrivenCodePlugin } from "./register.js";
 
 const plugin = {
-  id: "@cgize/code-ensemble",
-  server: codeEnsemblePlugin,
+  id: "review-driven-code",
+  server: reviewDrivenCodePlugin,
 };
 
 export default plugin;
-export { plugin, plugin as codeEnsemblePlugin };
+export { plugin, plugin as reviewDrivenCodePlugin };
 export type { Plugin } from "@opencode-ai/plugin";

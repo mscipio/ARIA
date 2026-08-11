@@ -1,12 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { getPackageRoot, loadDefaultConfig } from "./defaults.js";
 import type {
-  CodeEnsemblePluginOptions,
-  CodeEnsembleProjectOverrides,
-  ResolvedCodeEnsembleConfig,
+  ReviewDrivenCodePluginOptions,
+  ReviewDrivenCodeProjectOverrides,
+  ResolvedReviewDrivenCodeConfig,
   RoleName,
+  RoleOverride,
 } from "./types.js";
 
 const ROLES: RoleName[] = [
@@ -19,10 +21,28 @@ const ROLES: RoleName[] = [
   "reviewer",
 ];
 const ROLE_SET = new Set<string>(ROLES);
+const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
+
+const SHARED_MCP_GUIDANCE = `## MCP Guidance
+
+Use any available MCP whenever it materially improves the evidence; these are preferred evidence sources, not exclusive routing. Do not force unnecessary calls.
+- CodeGraph provides codebase intelligence for structure, symbols and references, dependencies, impact, and locating paths.
+- Context7 provides current, version-specific external library, framework, and API documentation plus supported interfaces; use it instead of guessing external behavior.
+- Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. All roles may read or write it when useful.
+- Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .code-ensemble/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .code-ensemble/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.`;
+
+function withMcpGuidance(promptText: string): string {
+  const normalized = promptText.trimEnd();
+  const returnMarker = "\nReturn:\n";
+  if (normalized.includes(returnMarker)) {
+    return `${normalized.replace(returnMarker, `\n${SHARED_MCP_GUIDANCE}\n\nReturn:\n`)}\n`;
+  }
+  return `${normalized}\n\n${SHARED_MCP_GUIDANCE}\n`;
+}
 
 class ConfigValidationError extends Error {
-  constructor(path: string, got: unknown, want: string) {
-    super(`code-ensemble.json: ${path}: expected ${want}, got ${typeOf(got)}`);
+  constructor(filePath: string, path: string, got: unknown, want: string) {
+    super(`${filePath}: ${path}: expected ${want}, got ${typeOf(got)}`);
     this.name = "ConfigValidationError";
   }
 }
@@ -33,8 +53,19 @@ function typeOf(value: unknown): string {
   return typeof value;
 }
 
-function fail(path: string, got: unknown, want: string): never {
-  throw new ConfigValidationError(path, got, want);
+function parseJSON(text: string, filePath: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new SyntaxError(`${filePath}: ${error.message}`);
+    }
+    throw error;
+  }
+}
+
+function fail(filePath: string, path: string, got: unknown, want: string): never {
+  throw new ConfigValidationError(filePath, path, got, want);
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -49,68 +80,97 @@ function isModelIdentifier(value: unknown): value is string {
   return isString(value) && /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/.test(value);
 }
 
-function parseMap<T>(
-  value: unknown,
-  path: string,
-  valid: Set<string>,
-  parse: (item: unknown, itemPath: string) => T,
-): Record<string, T> | undefined {
-  if (value === undefined) return undefined;
-  if (!isObject(value)) fail(path, value, "object");
-  const result: Record<string, T> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!valid.has(key)) fail(`${path}.${key}`, key, "valid role");
-    result[key] = parse(item, `${path}.${key}`);
-  }
-  return result;
-}
-
-export function parseOverrides(raw: unknown): CodeEnsembleProjectOverrides {
-  if (!isObject(raw)) fail("(root)", raw, "object");
-  const allowed = new Set(["models", "variants"]);
-  for (const key of Object.keys(raw)) {
-    if (!allowed.has(key)) fail(key, raw[key], "models or variants");
+export function parseOverrides(raw: unknown, filePath = "review-driven-code.json"): ReviewDrivenCodeProjectOverrides {
+  if (!isObject(raw)) fail(filePath, "(root)", raw, "object");
+  const rootKeys = Object.keys(raw);
+  if (rootKeys.length > 1 || (rootKeys.length === 1 && rootKeys[0] !== "roles")) {
+    fail(filePath, "(root)", rootKeys.join(", "), "'roles'");
   }
 
-  const parseModel = (value: unknown, path: string) =>
-    isModelIdentifier(value) ? value : fail(path, value, "model identifier in provider/model format");
-  const parseVariant = (value: unknown, path: string) => isString(value) ? value : fail(path, value, "string");
-  const models = parseMap(raw.models, "models", ROLE_SET, parseModel);
-  const variants = parseMap(raw.variants, "variants", ROLE_SET, parseVariant);
+  const rolesValue = (raw as Record<string, unknown>).roles;
+  if (rolesValue === undefined) return {};
+  if (!isObject(rolesValue)) fail(filePath, "roles", rolesValue, "object");
 
-  return {
-    ...(models ? { models } : {}),
-    ...(variants ? { variants } : {}),
-  };
+  const roles: Partial<Record<RoleName, RoleOverride>> = {};
+  for (const [key, value] of Object.entries(rolesValue)) {
+    if (!ROLE_SET.has(key)) fail(filePath, `roles.${key}`, key, "valid role");
+    if (!isObject(value)) fail(filePath, `roles.${key}`, value, "object");
+
+    const roleKeys = Object.keys(value);
+    for (const field of roleKeys) {
+      if (!ROLE_OVERRIDE_FIELDS.has(field)) {
+        fail(filePath, `roles.${key}.${field}`, field, "'model' or 'variant'");
+      }
+    }
+
+    const override: RoleOverride = {};
+    const rawRole = value as Record<string, unknown>;
+    if ("model" in rawRole) {
+      if (!isModelIdentifier(rawRole.model)) {
+        fail(filePath, `roles.${key}.model`, rawRole.model, "model identifier in provider/model format");
+      }
+      override.model = rawRole.model as string;
+    }
+    if ("variant" in rawRole) {
+      if (!isString(rawRole.variant)) {
+        fail(filePath, `roles.${key}.variant`, rawRole.variant, "non-empty string");
+      }
+      override.variant = rawRole.variant as string;
+    }
+    roles[key as RoleName] = override;
+  }
+
+  return { roles };
 }
 
-export function resolveCodeEnsembleConfig(
+function formatRoutingVariant(variant: string | undefined): string {
+  return variant ? ` [${variant}]` : "";
+}
+
+function generateRouting(resolved: ResolvedReviewDrivenCodeConfig): string {
+  return ROLES.map((role) => {
+    const config = resolved.roles[role];
+    return `- ${role}: \`${role}\` → ${config.model}${formatRoutingVariant(config.variant)}`;
+  }).join("\n");
+}
+
+export function resolveReviewDrivenCodeConfig(
   worktree: string,
-  options: CodeEnsemblePluginOptions = {},
+  options: ReviewDrivenCodePluginOptions = {},
   metaUrl: string = import.meta.url,
-): ResolvedCodeEnsembleConfig {
+): ResolvedReviewDrivenCodeConfig {
   const defaults = loadDefaultConfig(metaUrl);
   const packageRoot = getPackageRoot(metaUrl);
+
+  // Global config (optional) — per-user overrides in ~/.config/opencode/review-driven-code.json
+  const globalPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
+  const globalOverrides = existsSync(globalPath)
+    ? parseOverrides(parseJSON(readFileSync(globalPath, "utf8"), globalPath), globalPath)
+    : {};
+
+  // Project config — explicit or auto-discovered review-driven-code.json
   const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
-  const discoveredPath = resolve(worktree, "code-ensemble.json");
+  const discoveredPath = resolve(worktree, "review-driven-code.json");
   const overridePath = explicitPath ?? (existsSync(discoveredPath) ? discoveredPath : undefined);
   const overrides = overridePath && existsSync(overridePath)
-    ? parseOverrides(JSON.parse(readFileSync(overridePath, "utf8")))
+    ? parseOverrides(parseJSON(readFileSync(overridePath, "utf8"), overridePath), overridePath)
     : {};
 
   const roles = Object.fromEntries(ROLES.map((role) => {
     const roleDefaults = defaults.roles[role];
+    const globalOverride = globalOverrides.roles?.[role];
+    const projectOverride = overrides.roles?.[role];
     return [role, {
       ...roleDefaults,
-      model: overrides.models?.[role] ?? roleDefaults.model,
-      variant: overrides.variants?.[role] ?? roleDefaults.variant,
-      promptText: readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8"),
+      model: projectOverride?.model ?? globalOverride?.model ?? roleDefaults.model,
+      variant: projectOverride?.variant ?? globalOverride?.variant ?? roleDefaults.variant,
+      promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
     }];
-  })) as ResolvedCodeEnsembleConfig["roles"];
+  })) as ResolvedReviewDrivenCodeConfig["roles"];
 
   roles.director.promptText = roles.director.promptText.replace(
     "{{routing}}",
-    ROLES.filter((role) => role !== "director").map((role) => `- ${role}: \`${role}\``).join("\n"),
+    generateRouting({ roles }),
   );
 
   return { roles };

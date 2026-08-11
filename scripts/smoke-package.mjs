@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 
+import { normalizePackEntry } from "../dist/pack.js";
+
 const npmScript = process.env.npm_execpath;
 const npm = npmScript ? process.execPath : "npm";
 const npmPrefix = npmScript ? [npmScript] : [];
@@ -20,16 +22,19 @@ function fail(message) {
 
 const packageRoot = process.cwd();
 const packed = JSON.parse(runNpm(["pack", "--json"], { cwd: packageRoot, encoding: "utf8" }));
-const entry = packed?.[0];
+const entry = normalizePackEntry(packed);
 if (!entry?.filename) fail("npm pack did not return a tarball");
 
 const packedPaths = new Set((entry.files ?? []).map((file) => file.path.replaceAll("\\", "/")));
 const requiredPaths = [
   "package.json",
+  "bin/rdc.mjs",
   "dist/index.js",
   "dist/index.d.ts",
   "dist/register.js",
-  "defaults/code-ensemble.defaults.json",
+  "dist/deps.js",
+  "dist/routes.js",
+  "defaults/review-driven-code.defaults.json",
   "defaults/prompts/director.md",
   "defaults/prompts/planner.md",
   "defaults/prompts/architect.md",
@@ -37,6 +42,8 @@ const requiredPaths = [
   "defaults/prompts/reviewer.md",
   "defaults/prompts/explorer.md",
   "defaults/prompts/visualizer.md",
+  "dist/lifecycle.js",
+  "dist/lifecycle.d.ts",
 ];
 for (const path of requiredPaths) {
   if (!packedPaths.has(path)) fail(`packed tarball is missing ${path}`);
@@ -53,7 +60,7 @@ for (const path of packedPaths) {
 }
 
 const tarball = join(packageRoot, entry.filename);
-const installRoot = mkdtempSync(join(tmpdir(), "code-ensemble-package-"));
+const installRoot = mkdtempSync(join(tmpdir(), "review-driven-code-package-"));
 const probePath = join(installRoot, "probe.mjs");
 
 try {
@@ -65,11 +72,11 @@ try {
 
   writeFileSync(
     probePath,
-    `const pluginModule = await import("@cgize/code-ensemble");
+    `const pluginModule = await import("review-driven-code");
 const plugin = pluginModule.default;
 
-if (plugin?.id !== "@cgize/code-ensemble") {
-  console.error("smoke-package: expected plugin id @cgize/code-ensemble, got", plugin?.id);
+if (plugin?.id !== "review-driven-code") {
+  console.error("smoke-package: expected plugin id review-driven-code, got", plugin?.id);
   process.exit(1);
 }
 if (typeof plugin?.server !== "function") {
@@ -120,6 +127,47 @@ console.log("smoke-package: ok", {
     stdio: "inherit",
     env: process.env,
   });
+
+  // Verify rdc routes binary works from the installed package
+  const rdcBin = join(installRoot, "node_modules", ".bin", "rdc");
+  const routesOutput = execFileSync(process.execPath, [rdcBin, "routes"], {
+    cwd: installRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (!routesOutput.includes("Resolved RDC role routes:")) {
+    fail("rdc routes did not produce expected header");
+  }
+  if (!routesOutput.includes("director  opencode-go/deepseek-v4-pro")) {
+    fail("rdc routes did not include director role");
+  }
+
+  // Verify rdc routes honors project-local review-driven-code.json from CWD
+  writeFileSync(
+    join(installRoot, "review-driven-code.json"),
+    JSON.stringify({ roles: { explorer: { variant: "xhigh" } } }),
+  );
+  const overrideOutput = execFileSync(process.execPath, [rdcBin, "routes"], {
+    cwd: installRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (!overrideOutput.includes("explorer  opencode-go/deepseek-v4-flash (xhigh)")) {
+    fail("rdc routes did not reflect project-local review-driven-code.json override");
+  }
+
+  // Verify installed-package help lists setup and update
+  const helpOutput = execFileSync(process.execPath, [rdcBin, "--help"], {
+    cwd: installRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (!helpOutput.includes("setup")) {
+    fail("rdc --help does not mention setup");
+  }
+  if (!helpOutput.includes("update")) {
+    fail("rdc --help does not mention update");
+  }
 } finally {
   rmSync(tarball, { force: true });
   rmSync(installRoot, { recursive: true, force: true });

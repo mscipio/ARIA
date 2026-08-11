@@ -1,14 +1,23 @@
 import { tool, type Plugin } from "@opencode-ai/plugin";
 
-import { resolveCodeEnsembleConfig } from "./overrides.js";
-import { addPlanTasks, closePlan, createPlan, readActivePlan, replacePlan, updatePlanTask } from "./plans.js";
+import { resolveReviewDrivenCodeConfig } from "./overrides.js";
+import {
+  addPlanTasks,
+  approvePlan,
+  closePlan,
+  createPlan,
+  readActivePlan,
+  remediatePlanTasks,
+  replacePlan,
+  updatePlanTask,
+} from "./plans.js";
 import {
   formatClosedPlanOutput,
   formatPlanOutput,
   formatToolError,
   planToolTitle,
 } from "./present.js";
-import type { CodeEnsemblePluginOptions, ResolvedCodeEnsembleConfig, RoleName } from "./types.js";
+import type { ReviewDrivenCodePluginOptions, ResolvedReviewDrivenCodeConfig, RoleName } from "./types.js";
 
 function stringField(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -26,19 +35,20 @@ function projectDirectory(input: unknown): string {
   );
 }
 
-function pluginOptions(options: unknown): CodeEnsemblePluginOptions {
+function pluginOptions(options: unknown): ReviewDrivenCodePluginOptions {
   const configPath = stringField(options, "configPath");
   return configPath ? { configPath } : {};
 }
 
 const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>> = {
-  director: new Set(["get", "create", "update", "add", "close"]),
+  director: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
   planner: new Set(["get", "create"]),
   architect: new Set(["get", "replace"]),
+  reviewer: new Set(["get"]),
 };
 
 function authorizePlan(context: unknown, action: string): string | null {
-  if (!stringField(context, "sessionID")) return "A sessionID is required to use code-ensemble tools";
+  if (!stringField(context, "sessionID")) return "A sessionID is required to use Review-Driven Coding tools";
   const agent = stringField(context, "agent");
   if (!agent || !PLAN_ACTIONS_BY_ROLE[agent]?.has(action)) {
     return `Role ${agent ?? "unknown"} may not ${action} the plan`;
@@ -94,13 +104,20 @@ const CODE_READ: AgentPermission = {
   lsp: "allow",
 };
 
+const REQUIRED_MCP_PERMISSION: AgentPermission = {
+  "engram_*": "allow",
+  "context7_*": "allow",
+  "codegraph_*": "allow",
+};
+
 const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
-  explorer: { ...CODE_READ },
-  visualizer: { ...BASE_PERMISSION, read: PROTECTED_READ, skill: "allow" },
-  planner: { ...CODE_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
-  architect: { ...CODE_READ, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+  explorer: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION },
+  visualizer: { ...BASE_PERMISSION, ...REQUIRED_MCP_PERMISSION, read: PROTECTED_READ, skill: "allow" },
+  planner: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+  architect: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
   implementer: {
     ...CODE_READ,
+    ...REQUIRED_MCP_PERMISSION,
     edit: PROTECTED_EDIT,
     bash: {
       "*": "allow",
@@ -120,16 +137,18 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
   },
   reviewer: {
     ...CODE_READ,
+    ...REQUIRED_MCP_PERMISSION,
     bash: "allow",
     webfetch: "allow",
     websearch: "allow",
     skill: "allow",
+    plan: "allow",
   },
 };
 
 const SUBAGENT_ROLES = Object.keys(SUBAGENT_PERMISSIONS) as SubagentRole[];
 
-function agentDefinitions(config: ResolvedCodeEnsembleConfig): Record<string, unknown> {
+function agentDefinitions(config: ResolvedReviewDrivenCodeConfig): Record<string, unknown> {
   const taskPermissions: Record<string, "allow" | "deny"> = {
     "*": "deny",
     explorer: "allow",
@@ -146,14 +165,20 @@ function agentDefinitions(config: ResolvedCodeEnsembleConfig): Record<string, un
       model: config.roles.director.model,
       ...(config.roles.director.variant ? { variant: config.roles.director.variant } : {}),
       prompt: config.roles.director.promptText,
-      permission: { edit: "deny", bash: "deny", task: taskPermissions, plan: "allow" },
+      permission: {
+        ...REQUIRED_MCP_PERMISSION,
+        edit: "deny",
+        bash: "deny",
+        task: taskPermissions,
+        plan: "allow",
+      },
     },
   };
 
   for (const role of SUBAGENT_ROLES) {
     const roleConfig = config.roles[role];
     definitions[role] = {
-      description: `${role} specialist for code-ensemble.`,
+      description: `${role} specialist for Review-Driven Coding.`,
       mode: "subagent",
       model: roleConfig.model,
       ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
@@ -165,9 +190,9 @@ function agentDefinitions(config: ResolvedCodeEnsembleConfig): Record<string, un
   return definitions;
 }
 
-export const codeEnsemblePlugin: Plugin = async (input, options = {}) => {
+export const reviewDrivenCodePlugin: Plugin = async (input, options = {}) => {
   const directory = projectDirectory(input);
-  const config = resolveCodeEnsembleConfig(directory, pluginOptions(options));
+  const config = resolveReviewDrivenCodeConfig(directory, pluginOptions(options));
 
   return {
     config: async (runtimeConfig) => {
@@ -179,14 +204,14 @@ export const codeEnsemblePlugin: Plugin = async (input, options = {}) => {
         description: "Read or update the shared project plan in .code-ensemble/TASKS.md.",
         args: {
           action: tool.schema
-            .enum(["create", "get", "replace", "add", "update", "close"])
+            .enum(["create", "get", "replace", "add", "remediate", "update", "approve", "close"])
             .describe("Plan action to perform"),
           title: tool.schema.string().optional().describe("Plan title for create or replace"),
-          tasks: tool.schema.array(tool.schema.string()).optional().describe("Task texts for create, replace, or add"),
+          tasks: tool.schema.array(tool.schema.string()).optional().describe("Task texts for create, replace, add, or remediate"),
           expectedPlanID: tool.schema
             .string()
             .optional()
-            .describe("Plan id from get; required by replace, update, add, and close"),
+            .describe("Plan id from get; required by replace, update, add, remediate, approve, and close"),
           expectedRevision: tool.schema.number().int().positive().optional().describe("Current plan revision"),
           taskID: tool.schema.string().optional().describe("Task id for update, e.g. T001"),
           status: tool.schema
@@ -229,6 +254,14 @@ export const codeEnsemblePlugin: Plugin = async (input, options = {}) => {
                   await addPlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
                 ));
               }
+              case "remediate": {
+                if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for remediate");
+                if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for remediate");
+                if (!args.tasks) return formatToolError("tasks are required for remediate");
+                return ok(formatPlanOutput(
+                  await remediatePlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
+                ));
+              }
               case "update": {
                 if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for update");
                 if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for update");
@@ -243,6 +276,13 @@ export const codeEnsemblePlugin: Plugin = async (input, options = {}) => {
                     args.evidence,
                     context.abort,
                   ),
+                ));
+              }
+              case "approve": {
+                if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for approve");
+                if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for approve");
+                return ok(formatPlanOutput(
+                  await approvePlan(directory, args.expectedPlanID, args.expectedRevision, context.abort),
                 ));
               }
               case "close": {

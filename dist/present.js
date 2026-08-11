@@ -16,6 +16,10 @@ export function planToolTitle(args) {
             return "Archive plan";
         case "add":
             return "Add plan tasks";
+        case "remediate":
+            return "Add remediation tasks";
+        case "approve":
+            return "Approve plan";
         case "update":
             if (args.taskID && args.status)
                 return `Mark ${args.taskID} ${args.status.replaceAll("_", " ")}`;
@@ -38,7 +42,7 @@ export function formatPlanOutput(plan) {
     return [
         `Plan: ${plan.title}`,
         `Plan ID: ${plan.id}`,
-        `Status: ${plan.status} · Revision: ${plan.revision}`,
+        `Status: ${plan.status} · Approval: ${plan.approval} · Revision: ${plan.revision}`,
         "",
         "Tasks:",
         ...tasks,
