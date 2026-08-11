@@ -7,6 +7,7 @@ const ROLES = [
     "architect",
     "implementer",
     "reviewer",
+    "wiki-compiler",
 ];
 function variantText(variant) {
     return variant ? ` (${variant})` : "";

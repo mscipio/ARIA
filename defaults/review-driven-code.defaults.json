@@ -37,6 +37,11 @@
       "model": "opencode-go/deepseek-v4-pro",
       "mode": "subagent",
       "promptFile": "prompts/reviewer.md"
+    },
+    "wiki-compiler": {
+      "model": "opencode-go/deepseek-v4-pro",
+      "mode": "subagent",
+      "promptFile": "prompts/wiki-compiler.md"
     }
   }
 }

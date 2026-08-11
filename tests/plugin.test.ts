@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import reviewDrivenCodePlugin, { reviewDrivenCodePlugin as pluginModule } from "../src/index";
+import { getPackageRoot } from "../src/defaults";
 
 const server = pluginModule.server;
 const tempDirs: string[] = [];
@@ -74,7 +75,7 @@ describe("reviewDrivenCodePlugin", () => {
     expect(typeof server).toBe("function");
   });
 
-  it("registers exactly seven agents and the plan tool", async () => {
+  it("registers exactly eight agents and the plan tool", async () => {
     const plugin = await load({ directory: await project() } as never);
     const config: Config = {};
     await plugin.config?.(config);
@@ -87,11 +88,13 @@ describe("reviewDrivenCodePlugin", () => {
       "architect",
       "implementer",
       "reviewer",
+      "wiki-compiler",
     ]);
     expect(config.agent?.director?.mode).toBe("primary");
     expect(config.agent?.planner?.model).toBe("openai/gpt-5.6-terra");
     expect(config.agent?.planner?.mode).toBe("subagent");
     expect(config.agent?.architect?.mode).toBe("subagent");
+    expect(config.agent?.["wiki-compiler"]?.mode).toBe("subagent");
     expect(config.agent?.researcher).toBeUndefined();
     expect(config.agent?.tester).toBeUndefined();
     expect(config.command).toBeUndefined();
@@ -122,6 +125,7 @@ describe("reviewDrivenCodePlugin", () => {
         architect: "allow",
         implementer: "allow",
         reviewer: "allow",
+        "wiki-compiler": "allow",
       },
     });
     expect(permission("explorer")).toMatchObject({ edit: "deny", bash: "deny", glob: "allow" });
@@ -145,8 +149,91 @@ describe("reviewDrivenCodePlugin", () => {
       expect(permission(role)).not.toHaveProperty("engram_mem_timeline");
     }
     // reviewer has plan "allow" so it can get; but not create/replace/update/add/remediate/approve/close
-    for (const role of ["explorer", "visualizer", "implementer", "reviewer"]) {
+    for (const role of ["explorer", "visualizer", "implementer", "reviewer", "wiki-compiler"]) {
       expect(permission(role)).toMatchObject({ task: "deny" });
+    }
+    // wiki-compiler: genuinely deny-by-default with scoped access only when WIKI_DIR is set
+    const wikiPerm = permission("wiki-compiler");
+    const pipelineRun = `${getPackageRoot()}/wiki-pipeline/run.py`;
+    expect(wikiPerm).toMatchObject({
+      "*": "deny",
+      plan: "deny",
+      task: "deny",
+    });
+    // MCP: no Engram, CodeGraph, or Context7 access — wiki-compiler
+    // reads engram from the local engram.db via archive-engram command
+    expect(wikiPerm).not.toHaveProperty("codegraph_*");
+    expect(wikiPerm).not.toHaveProperty("context7_*");
+    // Never has blanket engram_* or any engram MCP tools (not even read-only)
+    expect(wikiPerm).not.toHaveProperty("engram_*");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_save");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_judge");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_session_summary");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_search");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_get_observation");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_context");
+    expect(wikiPerm).not.toHaveProperty("engram_mem_timeline");
+    // Bash: only explicit run.py subcommands, no wildcard python
+    // Bash: only explicit run.py subcommands, no wildcard python
+    expect(permission("wiki-compiler")).toMatchObject({
+      bash: {
+        "*": "deny",
+        [`python ${pipelineRun} archive-opencode`]: "allow",
+        [`python ${pipelineRun} archive-engram`]: "allow",
+        [`python ${pipelineRun} archive-all`]: "allow",
+        [`python ${pipelineRun} lint`]: "allow",
+        [`python ${pipelineRun} primer`]: "allow",
+      },
+    });
+
+    const wikiBash = wikiPerm.bash as Record<string, unknown>;
+
+    expect(wikiBash).not.toHaveProperty(
+      "python *wiki-pipeline/run.py archive-opencode",
+    );
+    expect(wikiBash).not.toHaveProperty(
+      "python *wiki-pipeline/run.py archive-opencode *",
+    );
+    expect(wikiBash).not.toHaveProperty(
+      "python *wiki-pipeline/run.py archive-engram",
+    );
+    expect(wikiBash).not.toHaveProperty(
+      "python *wiki-pipeline/run.py archive-engram *",
+    );
+    expect(wikiBash).not.toHaveProperty("python -c *");
+    expect(wikiBash).not.toHaveProperty("python *run.py*");
+    expect(wikiBash).not.toHaveProperty("python *");
+    // external_directory, read, edit, glob, grep, list are scoped or denied depending on WIKI_DIR
+    if (process.env.WIKI_DIR) {
+      const wikiDir = process.env.WIKI_DIR;
+      expect(wikiPerm).toMatchObject({
+        read: { "*": "deny" },
+        edit: { "*": "deny" },
+        external_directory: { "*": "deny" },
+      });
+      expect(wikiPerm.read).toHaveProperty(`${wikiDir}/**`, "allow");
+      expect(wikiPerm.edit).toHaveProperty(`${wikiDir}/**`, "allow");
+      expect(wikiPerm.external_directory).toHaveProperty(wikiDir, "allow");
+      // glob, grep, list: scoped like read, not unscoped "allow"
+      expect(wikiPerm.glob).toBeTypeOf("object");
+      expect(wikiPerm.glob).toHaveProperty("*", "deny");
+      expect(wikiPerm.glob).toHaveProperty(`${wikiDir}/**`, "allow");
+      expect(wikiPerm.grep).toBeTypeOf("object");
+      expect(wikiPerm.grep).toHaveProperty("*", "deny");
+      expect(wikiPerm.grep).toHaveProperty(`${wikiDir}/**`, "allow");
+      expect(wikiPerm.list).toBeTypeOf("object");
+      expect(wikiPerm.list).toHaveProperty("*", "deny");
+      expect(wikiPerm.list).toHaveProperty(`${wikiDir}/**`, "allow");
+    } else {
+      expect(wikiPerm).toMatchObject({
+        glob: "deny",
+        grep: "deny",
+        list: "deny",
+        read: { "*": "deny" },
+        edit: { "*": "deny" },
+        bash: { "*": "deny" },
+        external_directory: "deny",
+      });
     }
   });
 

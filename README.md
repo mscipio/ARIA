@@ -243,6 +243,39 @@ reviewer  opencode-go/deepseek-v4-pro
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.code-ensemble/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
 
+## Wiki Compiler
+
+`wiki-compiler` is a separate, opt-in specialist for wiki operations. The director delegates to it only when the user explicitly requests Wiki lookup, archival, or curated compilation. It never runs automatically.
+
+### Modes
+
+- **Lookup** (read-only) — searches the curated wiki via `wiki-pipeline/search.py` against `WIKI_DIR/wiki/index.json`. No writes, no pipeline initialization, no archival, and no mandatory primer access. An existing primer may be consulted read-only when useful.
+- **Archival** (write, explicit request only) — archives raw session or observation data to `WIKI_DIR/raw/` as immutable provenance files. Three commands: `archive-opencode` (OpenCode sessions), `archive-engram` (Engram observations), and `archive-all` (both). Archival does not compile, promote raw material, or regenerate the primer; it only writes raw files and updates archive trackers.
+- **Compile / Update** (write, explicit request only) — promotes raw files into curated wiki pages following the manual compilation protocol (`wiki-pipeline/docs/compile-workflow.md`). For each candidate raw file the specialist inspects existing pages, deduplicates, and decides create/update/skip. Updates merge new information while preserving existing content and source provenance, then regenerate `wiki/index.md`, `wiki/index.json`, and append to `wiki/log.md`. An optional primer refresh and lint pass may follow.
+
+Ordinary lookup and compile/update do not archive automatically. Archival occurs only when the user explicitly requests it. There is no CLI command for compilation — compilation is a specialist-led manual workflow, not an automated process.
+
+### Configuration
+
+`WIKI_DIR` is the sole external wiki path, required to locate the Wiki. It must be set to a non-empty value before any wiki operation — write-capable (archival, compile, primer generation) and read-only search alike. When `WIKI_DIR` is absent, write work fails with a clear error before creating any file or directory, and read-only search returns a clear no-write configuration error.
+
+RDC ships and resolves its own pipeline, search, and documentation assets from the package root under `wiki-pipeline/`. Pipeline assets are published with the package as listed in `package.json`. The director receives no wiki filesystem paths or package paths — only the `wiki-compiler` specialist does.
+
+### Engram-to-Wiki boundary
+
+Engram-to-Wiki is not an automatic bridge. Engram archival is an explicit user-requested operation. Archived Engram observations remain immutable raw provenance files under `WIKI_DIR/raw/`. Promotion from raw to curated wiki pages is explicit and passes the specialist's deduplicate/create/update/skip curation gate. Engram remains distinct from curated wiki knowledge and from RDC Plan workflow state.
+
+### Out of scope
+
+The wiki-compiler does not reference, require, or support:
+
+- `REPO_DIR` or workspace-relative configuration
+- `myopencode` runtime dependency, modification, or deletion — myopencode is treated as a source-only upstream
+- Automatic wiki, archive, or primer behavior — every operation is explicit
+- Zotero, biblio, research, writing, or Phase 3 / wiki-bridge workflows
+- Root or plugin-local skill packages, global skill installation, setup lifecycle changes, symlinks, or new skill-source configuration
+- Refactors unrelated to wiki integration
+
 ## Development
 
 ```sh

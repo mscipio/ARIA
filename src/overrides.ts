@@ -19,6 +19,7 @@ const ROLES: RoleName[] = [
   "architect",
   "implementer",
   "reviewer",
+  "wiki-compiler",
 ];
 const ROLE_SET = new Set<string>(ROLES);
 const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
@@ -172,6 +173,15 @@ export function resolveReviewDrivenCodeConfig(
     "{{routing}}",
     generateRouting({ roles }),
   );
+
+  // Interpolate package root and WIKI_DIR paths ONLY into the wiki-compiler prompt.
+  if (roles["wiki-compiler"]) {
+    const wikiDir = process.env.WIKI_DIR ?? "";
+    roles["wiki-compiler"].promptText = roles["wiki-compiler"].promptText
+      .replace(/\{\{packageRoot\}\}/g, packageRoot)
+      .replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
+    // Ensure missing WIKI_DIR does not block startup: pass empty string.
+  }
 
   return { roles };
 }

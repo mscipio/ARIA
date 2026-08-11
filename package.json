@@ -20,6 +20,11 @@
     "dist/*.js",
     "dist/*.d.ts",
     "defaults",
+    "wiki-pipeline/__init__.py",
+    "wiki-pipeline/run.py",
+    "wiki-pipeline/compiler.py",
+    "wiki-pipeline/search.py",
+    "wiki-pipeline/docs",
     "README.md",
     "LICENSE"
   ],

@@ -1,4 +1,4 @@
-export type RoleName = "director" | "explorer" | "visualizer" | "planner" | "architect" | "implementer" | "reviewer";
+export type RoleName = "director" | "explorer" | "visualizer" | "planner" | "architect" | "implementer" | "reviewer" | "wiki-compiler";
 export interface RoleDefaults {
     model: string;
     variant?: string;

@@ -44,6 +44,13 @@ const requiredPaths = [
   "defaults/prompts/visualizer.md",
   "dist/lifecycle.js",
   "dist/lifecycle.d.ts",
+  // wiki-pipeline: implementation + supporting docs
+  "wiki-pipeline/__init__.py",
+  "wiki-pipeline/compiler.py",
+  "wiki-pipeline/run.py",
+  "wiki-pipeline/search.py",
+  "wiki-pipeline/docs/compile-workflow.md",
+  "wiki-pipeline/docs/instructions.md",
 ];
 for (const path of requiredPaths) {
   if (!packedPaths.has(path)) fail(`packed tarball is missing ${path}`);

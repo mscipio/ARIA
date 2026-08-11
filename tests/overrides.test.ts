@@ -205,6 +205,7 @@ describe("review-driven-code overrides", () => {
       expect(config.roles.director.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2");
       expect(config.roles.director.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro");
       expect(config.roles.director.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code");
+      expect(config.roles.director.promptText).toContain("wiki-compiler: `wiki-compiler` → opencode-go/deepseek-v4-pro");
     });
 
     it("routing reflects project model override", async () => {
@@ -233,6 +234,44 @@ describe("review-driven-code overrides", () => {
       expect(config.roles.director.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2\n");
       expect(config.roles.director.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro\n");
       expect(config.roles.director.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code\n");
+      expect(config.roles.director.promptText).toContain("wiki-compiler: `wiki-compiler` → opencode-go/deepseek-v4-pro\n");
+    });
+
+    it("wiki-compiler model and variant overrides resolve correctly", async () => {
+      const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-overrides-"));
+      tempDirs.push(root);
+      await writeFile(resolve(root, "review-driven-code.json"), JSON.stringify({
+        roles: { "wiki-compiler": { model: "openai/gpt-5.4-mini", variant: "high" } },
+      }));
+      const config = resolveReviewDrivenCodeConfig(root);
+      expect(config.roles["wiki-compiler"].model).toBe("openai/gpt-5.4-mini");
+      expect(config.roles["wiki-compiler"].variant).toBe("high");
+      expect(config.roles.director.promptText).toContain("wiki-compiler: `wiki-compiler` → openai/gpt-5.4-mini [high]");
+    });
+
+    it("wiki-compiler defaults resolve without WIKI_DIR env (missing env does not break startup)", () => {
+      delete process.env.WIKI_DIR;
+      const config = resolveReviewDrivenCodeConfig(tmpdir());
+      expect(config.roles["wiki-compiler"].model).toBe("opencode-go/deepseek-v4-pro");
+      expect(config.roles["wiki-compiler"].promptText).toBeDefined();
+      expect(config.roles["wiki-compiler"].promptText.length).toBeGreaterThan(0);
+      // Director prompt must never contain packageRoot or WIKI_DIR paths.
+      expect(config.roles.director.promptText).not.toContain("{{packageRoot}}");
+      expect(config.roles.director.promptText).not.toContain("{{WIKI_DIR}}");
+    });
+
+    it("wiki-compiler prompt receives resolved packageRoot and WIKI_DIR when set", () => {
+      process.env.WIKI_DIR = "/home/user/wiki";
+      const config = resolveReviewDrivenCodeConfig(tmpdir());
+      delete process.env.WIKI_DIR;
+      // Path placeholders resolved in wiki-compiler prompt only.
+      expect(config.roles["wiki-compiler"].promptText).toContain("/home/user/wiki/wiki/");
+      expect(config.roles["wiki-compiler"].promptText).toContain("/home/user/wiki/raw/");
+      expect(config.roles["wiki-compiler"].promptText).not.toContain("{{WIKI_DIR}}");
+      expect(config.roles["wiki-compiler"].promptText).not.toContain("{{packageRoot}}");
+      // Other roles must never receive these paths.
+      expect(config.roles.director.promptText).not.toContain("/home/user/wiki");
+      expect(config.roles.planner.promptText).not.toContain("/home/user/wiki");
     });
   });
 

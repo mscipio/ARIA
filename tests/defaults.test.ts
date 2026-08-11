@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("review-driven-code defaults", () => {
-  it("contains exactly the seven supported agents", () => {
+  it("contains exactly the eight supported agents", () => {
     const defaults = loadDefaultConfig();
     expect(Object.keys(defaults.roles)).toEqual([
       "director",
@@ -25,6 +25,7 @@ describe("review-driven-code defaults", () => {
       "architect",
       "implementer",
       "reviewer",
+      "wiki-compiler",
     ]);
     expect(defaults.roles.planner).not.toHaveProperty("fallbacks");
     expect(defaults.roles.architect).not.toHaveProperty("fallbacks");
@@ -219,5 +220,58 @@ describe("review-driven-code defaults", () => {
     expect(config.roles.reviewer.promptText).toContain("MUST NOT return `PASS` while any explicit approved acceptance criterion is unverified or unsatisfied");
     expect(config.roles.reviewer.promptText).toContain("Every approved criterion must appear in this list");
     expect(config.roles.reviewer.promptText).toContain("with the criterion quoted and a one-line evidence rationale");
+  });
+
+  it("director prompt allows explicit delegation to wiki-compiler, never automatic", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles.director.promptText).toContain("wiki-compiler");
+    expect(config.roles.director.promptText).toContain("Delegate to wiki-compiler only when the user explicitly requests");
+    expect(config.roles.director.promptText).toContain("Wiki lookup, archival");
+    expect(config.roles.director.promptText).toContain("curated wiki compilation/update");
+    expect(config.roles.director.promptText).toContain("Never delegate to wiki-compiler automatically or for any other purpose");
+  });
+
+  it("wiki-compiler prompt is loaded and resolvable", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    expect(config.roles["wiki-compiler"].model).toBe("opencode-go/deepseek-v4-pro");
+    expect(config.roles["wiki-compiler"].mode).toBe("subagent");
+    expect(config.roles["wiki-compiler"].promptText).toContain("wiki-compiler");
+    expect(config.roles["wiki-compiler"].promptText).toContain("Lookup");
+    expect(config.roles["wiki-compiler"].promptText).toContain("Archival");
+    expect(config.roles["wiki-compiler"].promptText).toContain("Compile");
+  });
+
+  it("wiki-compiler prompt requires WIKI_DIR for ALL modes including lookup", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    const prompt = config.roles["wiki-compiler"].promptText;
+    expect(prompt).toContain("ALL modes");
+    expect(prompt).toContain("lookup, archival, and compile");
+    expect(prompt).toContain("Without WIKI_DIR, no wiki operation can proceed");
+  });
+
+  it("wiki-compiler prompt has no REPO_DIR or myopencode references", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    const prompt = config.roles["wiki-compiler"].promptText;
+    expect(prompt).not.toContain("REPO_DIR");
+    expect(prompt).not.toContain("myopencode");
+  });
+
+  it("wiki-compiler support does not break the existing six coding-role contracts", () => {
+    const config = resolveReviewDrivenCodeConfig(tmpdir());
+    // All original seven roles are intact
+    expect(config.roles.director.model).toBe("opencode-go/deepseek-v4-pro");
+    expect(config.roles.explorer.model).toBe("opencode-go/deepseek-v4-flash");
+    expect(config.roles.visualizer.model).toBe("opencode-go/kimi-k2.7-code");
+    expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+    expect(config.roles.architect.model).toBe("openai/gpt-5.6-sol");
+    expect(config.roles.implementer.model).toBe("opencode-go/glm-5.2");
+    expect(config.roles.reviewer.model).toBe("opencode-go/deepseek-v4-pro");
+    // Original prompts are unaffected
+    expect(config.roles.director.promptText).toContain("Review-Driven Coding director");
+    expect(config.roles.explorer.promptText).toContain("explorer");
+    expect(config.roles.planner.promptText).toContain("planner");
+    expect(config.roles.architect.promptText).toContain("architect");
+    expect(config.roles.implementer.promptText).toContain("implementer");
+    expect(config.roles.reviewer.promptText).toContain("reviewer");
   });
 });

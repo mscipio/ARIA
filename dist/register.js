@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin";
+import { getPackageRoot } from "./defaults.js";
 import { resolveReviewDrivenCodeConfig } from "./overrides.js";
 import { addPlanTasks, approvePlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
 import { formatClosedPlanOutput, formatPlanOutput, formatToolError, planToolTitle, } from "./present.js";
@@ -112,7 +113,62 @@ const SUBAGENT_PERMISSIONS = {
         skill: "allow",
         plan: "allow",
     },
+    "wiki-compiler": {
+        ...BASE_PERMISSION,
+        read: { "*": "deny" },
+        edit: { "*": "deny" },
+        glob: "deny",
+        grep: "deny",
+        list: "deny",
+        bash: { "*": "deny" },
+        external_directory: "deny",
+    },
 };
+const PACKAGE_ROOT = getPackageRoot();
+function buildWikiCompilerPermissions() {
+    const wikiDir = process.env.WIKI_DIR;
+    if (!wikiDir) {
+        return SUBAGENT_PERMISSIONS["wiki-compiler"];
+    }
+    const pipelineRun = `${PACKAGE_ROOT}/wiki-pipeline/run.py`;
+    const readScope = {
+        "*": "deny",
+    };
+    readScope[`${wikiDir}/**`] = "allow";
+    readScope[`${PACKAGE_ROOT}/wiki-pipeline/**`] = "allow";
+    const editScope = {
+        "*": "deny",
+    };
+    editScope[`${wikiDir}/**`] = "allow";
+    const externalDirScope = {
+        "*": "deny",
+    };
+    externalDirScope[wikiDir] = "allow";
+    externalDirScope[PACKAGE_ROOT] = "allow";
+    // Discovery tools scoped to the same boundaries as read
+    const discoveryScope = {
+        "*": "deny",
+    };
+    discoveryScope[`${wikiDir}/**`] = "allow";
+    discoveryScope[`${PACKAGE_ROOT}/wiki-pipeline/**`] = "allow";
+    return {
+        ...BASE_PERMISSION,
+        glob: discoveryScope,
+        grep: discoveryScope,
+        list: discoveryScope,
+        read: readScope,
+        edit: editScope,
+        bash: {
+            "*": "deny",
+            [`python ${pipelineRun} archive-opencode`]: "allow",
+            [`python ${pipelineRun} archive-engram`]: "allow",
+            [`python ${pipelineRun} archive-all`]: "allow",
+            [`python ${pipelineRun} lint`]: "allow",
+            [`python ${pipelineRun} primer`]: "allow",
+        },
+        external_directory: externalDirScope,
+    };
+}
 const SUBAGENT_ROLES = Object.keys(SUBAGENT_PERMISSIONS);
 function agentDefinitions(config) {
     const taskPermissions = {
@@ -123,6 +179,7 @@ function agentDefinitions(config) {
         architect: "allow",
         implementer: "allow",
         reviewer: "allow",
+        "wiki-compiler": "allow",
     };
     const definitions = {
         director: {
@@ -148,7 +205,9 @@ function agentDefinitions(config) {
             model: roleConfig.model,
             ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
             prompt: roleConfig.promptText,
-            permission: SUBAGENT_PERMISSIONS[role],
+            permission: role === "wiki-compiler"
+                ? buildWikiCompilerPermissions()
+                : SUBAGENT_PERMISSIONS[role],
         };
     }
     return definitions;

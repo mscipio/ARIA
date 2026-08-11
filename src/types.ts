@@ -5,7 +5,8 @@ export type RoleName =
   | "planner"
   | "architect"
   | "implementer"
-  | "reviewer";
+  | "reviewer"
+  | "wiki-compiler";
 
 export interface RoleDefaults {
   model: string;

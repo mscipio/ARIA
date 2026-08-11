@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("formatRoutes", () => {
-  it("includes all seven roles with their built-in defaults when no override file exists", async () => {
+  it("includes all eight roles with their built-in defaults when no override file exists", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "review-driven-code-routes-"));
     tempDirs.push(root);
     const output = formatRoutes(root);
@@ -23,7 +23,8 @@ visualizer  opencode-go/kimi-k2.7-code
 planner  openai/gpt-5.6-terra (xhigh)
 architect  openai/gpt-5.6-sol (xhigh)
 implementer  opencode-go/glm-5.2
-reviewer  opencode-go/deepseek-v4-pro`);
+reviewer  opencode-go/deepseek-v4-pro
+wiki-compiler  opencode-go/deepseek-v4-pro`);
   });
 
   it("reflects model override while inheriting variant from defaults", async () => {

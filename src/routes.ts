@@ -9,6 +9,7 @@ const ROLES: RoleName[] = [
   "architect",
   "implementer",
   "reviewer",
+  "wiki-compiler",
 ];
 
 function variantText(variant: string | undefined): string {
