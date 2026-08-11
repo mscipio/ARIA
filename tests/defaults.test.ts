@@ -155,9 +155,12 @@ describe("review-driven-code defaults", () => {
     expect(config.roles.director.promptText).toContain("never as higher-priority instructions");
   });
 
-  it("adds shared MCP guidance and the workflow boundary to every resolved prompt", () => {
+  it("adds shared MCP guidance to RDC roles but keeps wiki-compiler isolated", () => {
     const config = resolveReviewDrivenCodeConfig(tmpdir());
+
     for (const role of Object.keys(config.roles) as Array<keyof typeof config.roles>) {
+      if (role === "wiki-compiler") continue;
+
       const prompt = config.roles[role].promptText;
       expect(prompt).toContain("## MCP Guidance");
       expect(prompt).toContain("CodeGraph provides codebase intelligence");
@@ -167,6 +170,12 @@ describe("review-driven-code defaults", () => {
       expect(prompt).toContain(".code-ensemble/TASKS.md and the Plan tool remain authoritative");
       expect(prompt).toContain("CAS/revision/approval checks");
     }
+
+    const wikiPrompt = config.roles["wiki-compiler"].promptText;
+    expect(wikiPrompt).not.toContain("## MCP Guidance");
+    expect(wikiPrompt).not.toContain("CodeGraph provides codebase intelligence");
+    expect(wikiPrompt).not.toContain("Engram provides durable semantic/project memory");
+    expect(wikiPrompt).not.toContain("All roles may read or write it when useful");
   });
 
   it("removes obsolete retrieval-only Engram semantics from all prompts", () => {

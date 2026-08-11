@@ -165,7 +165,9 @@ export function resolveReviewDrivenCodeConfig(
       ...roleDefaults,
       model: projectOverride?.model ?? globalOverride?.model ?? roleDefaults.model,
       variant: projectOverride?.variant ?? globalOverride?.variant ?? roleDefaults.variant,
-      promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
+      promptText: role === "wiki-compiler"
+        ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
+        : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
     }];
   })) as ResolvedReviewDrivenCodeConfig["roles"];
 

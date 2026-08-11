@@ -12,7 +12,8 @@ When the user asks a question whose answer lives in the curated wiki, search and
 2. Match the user's query against page filenames, titles, summaries, keywords, and links in the index.
 3. Read only the most relevant matching `.md` files under `{{WIKI_DIR}}/wiki/`.
 4. If `index.json` is missing or unusable, read the `{{WIKI_DIR}}/wiki/` directory to obtain the available page names, identify plausible candidates from their filenames, and read only those candidates.
-5. Return concise findings and identify the source wiki pages used.
+5. Before returning, perform one bounded coverage check against `{{WIKI_DIR}}/wiki/index.json`: use the user's core query terms plus directly related terms surfaced by the strongest matches (for example subsystem names, component names, or close synonyms). Read any additional clearly relevant pages found by this single expansion pass.
+6. Return concise findings and identify the source wiki pages used.
 
 The context primer at `{{WIKI_DIR}}/.state/context-primer.md` may be consulted read-only when it would materially help locate relevant content. It is never required and is never generated or refreshed during lookup.
 
