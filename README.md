@@ -147,8 +147,8 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 ## Install
 
 ```sh
-git clone https://github.com/mscipio/review-driven-code.git
-cd review-driven-code
+git clone https://github.com/mscipio/ARIA.git
+cd aria
 npm ci --omit=dev
 node ./bin/aria.mjs setup
 node ./bin/aria.mjs doctor

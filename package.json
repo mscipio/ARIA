@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mscipio/review-driven-code.git"
+    "url": "https://github.com/mscipio/ARIA.git"
   },
   "engines": {
     "node": ">=20.19.0"
