@@ -268,7 +268,7 @@ export async function update(binaryUrl, executor = defaultExecutor) {
     // -----------------------------------------------------------------------
     // Handoff — spawn the updated checkout in a new process
     // -----------------------------------------------------------------------
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
     const handoffRunResult = await run(executor, checkout, process.execPath, binPath, "deps", "sync");
     const handoffResult = {
         ...handoffRunResult,

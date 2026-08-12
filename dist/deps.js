@@ -410,7 +410,7 @@ async function syncEngramGitHub(executor, fileOps = defaultFileOps) {
     // Use a unique temp directory for all intermediate files
     let tmpDir;
     try {
-        tmpDir = await mkdtemp(join(tmpdir(), "rdc-engram-"));
+        tmpDir = await mkdtemp(join(tmpdir(), "aria-engram-"));
     }
     catch (err) {
         return { action: "tmpdir-failed", error: `Could not create temp directory: ${err instanceof Error ? err.message : String(err)}` };
@@ -686,7 +686,7 @@ export async function doctor(executor = defaultExecutor, configDir) {
 }
 export function formatDoctor(version, status) {
     const lines = [
-        `Review-Driven Coding ${version}`,
+        `ARIA ${version}`,
         "",
         `OpenCode     ${status.opencode.found ? `[OK] ${status.opencode.version}` : "[FAIL] not found"}`,
         `Engram       ${status.engram.found ? `[OK] ${status.engram.version}` : "[FAIL] not found"}`,

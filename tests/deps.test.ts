@@ -631,7 +631,7 @@ describe("formatDoctor", () => {
       codegraph: { found: true, version: "1.3.1", connected: true },
     };
     const output = formatDoctor("0.1.0", status);
-    expect(output).toContain("Review-Driven Coding 0.1.0");
+    expect(output).toContain("ARIA 0.1.0");
     expect(output).toContain("OpenCode     [OK] 1.18.15");
     expect(output).toContain("Engram       [OK] 1.20.0");
     expect(output).toContain("Context7     [OK] configured");

@@ -3,24 +3,29 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { getPackageRoot, loadDefaultConfig } from "./defaults.js";
 const ROLES = [
-    "director",
+    "coder",
     "explorer",
     "visualizer",
     "planner",
     "architect",
     "implementer",
     "reviewer",
-    "wiki-compiler",
+    "archivist",
+    "writer",
 ];
 const ROLE_SET = new Set(ROLES);
+const LEGACY_ROLE_ALIASES = {
+    director: "coder",
+    "wiki-compiler": "archivist",
+};
 const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
 const SHARED_MCP_GUIDANCE = `## MCP Guidance
 
 Use any available MCP whenever it materially improves the evidence; these are preferred evidence sources, not exclusive routing. Do not force unnecessary calls.
 - CodeGraph provides codebase intelligence for structure, symbols and references, dependencies, impact, and locating paths.
 - Context7 provides current, version-specific external library, framework, and API documentation plus supported interfaces; use it instead of guessing external behavior.
-- Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. All roles may read or write it when useful.
-- Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .code-ensemble/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .code-ensemble/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.`;
+- Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. Use it only within the selected role's explicit permissions and boundaries.
+- Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .aria/rdc/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .aria/rdc/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.`;
 function withMcpGuidance(promptText) {
     const normalized = promptText.trimEnd();
     const returnMarker = "\nReturn:\n";
@@ -65,7 +70,7 @@ function isString(value) {
 function isModelIdentifier(value) {
     return isString(value) && /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/.test(value);
 }
-export function parseOverrides(raw, filePath = "review-driven-code.json") {
+export function parseOverrides(raw, filePath = "aria.json") {
     if (!isObject(raw))
         fail(filePath, "(root)", raw, "object");
     const rootKeys = Object.keys(raw);
@@ -79,8 +84,12 @@ export function parseOverrides(raw, filePath = "review-driven-code.json") {
         fail(filePath, "roles", rolesValue, "object");
     const roles = {};
     for (const [key, value] of Object.entries(rolesValue)) {
-        if (!ROLE_SET.has(key))
+        const role = ROLE_SET.has(key) ? key : LEGACY_ROLE_ALIASES[key];
+        if (!role)
             fail(filePath, `roles.${key}`, key, "valid role");
+        if (roles[role]) {
+            fail(filePath, `roles.${key}`, key, `role override not duplicated via alias for ${role}`);
+        }
         if (!isObject(value))
             fail(filePath, `roles.${key}`, value, "object");
         const roleKeys = Object.keys(value);
@@ -103,7 +112,7 @@ export function parseOverrides(raw, filePath = "review-driven-code.json") {
             }
             override.variant = rawRole.variant;
         }
-        roles[key] = override;
+        roles[role] = override;
     }
     return { roles };
 }
@@ -116,18 +125,26 @@ function generateRouting(resolved) {
         return `- ${role}: \`${role}\` → ${config.model}${formatRoutingVariant(config.variant)}`;
     }).join("\n");
 }
-export function resolveReviewDrivenCodeConfig(worktree, options = {}, metaUrl = import.meta.url) {
+export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.url) {
     const defaults = loadDefaultConfig(metaUrl);
     const packageRoot = getPackageRoot(metaUrl);
-    // Global config (optional) — per-user overrides in ~/.config/opencode/review-driven-code.json
-    const globalPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
-    const globalOverrides = existsSync(globalPath)
+    // Global config: ARIA is canonical; the pre-ARIA filename remains a read-only fallback.
+    const globalAriaPath = resolve(homedir(), ".config", "opencode", "aria.json");
+    const globalLegacyPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
+    const globalPath = existsSync(globalAriaPath)
+        ? globalAriaPath
+        : (existsSync(globalLegacyPath) ? globalLegacyPath : undefined);
+    const globalOverrides = globalPath
         ? parseOverrides(parseJSON(readFileSync(globalPath, "utf8"), globalPath), globalPath)
         : {};
-    // Project config — explicit or auto-discovered review-driven-code.json
+    // Project config: explicit path wins; otherwise prefer aria.json and fall back to the legacy filename.
     const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
-    const discoveredPath = resolve(worktree, "review-driven-code.json");
-    const overridePath = explicitPath ?? (existsSync(discoveredPath) ? discoveredPath : undefined);
+    const discoveredAriaPath = resolve(worktree, "aria.json");
+    const discoveredLegacyPath = resolve(worktree, "review-driven-code.json");
+    const overridePath = explicitPath
+        ?? (existsSync(discoveredAriaPath)
+            ? discoveredAriaPath
+            : (existsSync(discoveredLegacyPath) ? discoveredLegacyPath : undefined));
     const overrides = overridePath && existsSync(overridePath)
         ? parseOverrides(parseJSON(readFileSync(overridePath, "utf8"), overridePath), overridePath)
         : {};
@@ -139,14 +156,16 @@ export function resolveReviewDrivenCodeConfig(worktree, options = {}, metaUrl = 
                 ...roleDefaults,
                 model: projectOverride?.model ?? globalOverride?.model ?? roleDefaults.model,
                 variant: projectOverride?.variant ?? globalOverride?.variant ?? roleDefaults.variant,
-                promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
+                promptText: role === "archivist" || role === "writer"
+                    ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
+                    : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
             }];
     }));
-    roles.director.promptText = roles.director.promptText.replace("{{routing}}", generateRouting({ roles }));
-    // Interpolate package root and WIKI_DIR paths ONLY into the wiki-compiler prompt.
-    if (roles["wiki-compiler"]) {
+    roles.coder.promptText = roles.coder.promptText.replace("{{routing}}", generateRouting({ roles }));
+    // Interpolate package root and WIKI_DIR paths ONLY into the archivist prompt.
+    if (roles["archivist"]) {
         const wikiDir = process.env.WIKI_DIR ?? "";
-        roles["wiki-compiler"].promptText = roles["wiki-compiler"].promptText
+        roles["archivist"].promptText = roles["archivist"].promptText
             .replace(/\{\{packageRoot\}\}/g, packageRoot)
             .replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
         // Ensure missing WIKI_DIR does not block startup: pass empty string.

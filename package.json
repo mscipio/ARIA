@@ -1,8 +1,8 @@
 {
-  "name": "review-driven-code",
+  "name": "aria",
   "version": "0.1.0",
   "private": false,
-  "description": "An OpenCode orchestration plugin for review-driven coding: conversational director, architect plan review, explicit human approval before implementation, independent reviewer verification, and autonomous remediation within approved scope.",
+  "description": "ARIA (Archival, Research, Implementation, and Authoring): a multi-role OpenCode workstation with Review-Driven Coding, scientific/professional writing, curated knowledge archival, and planned research support.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,6 +20,7 @@
     "dist/*.js",
     "dist/*.d.ts",
     "defaults",
+    "skills",
     "wiki-pipeline/__init__.py",
     "wiki-pipeline/run.py",
     "wiki-pipeline/compiler.py",
@@ -29,7 +30,7 @@
     "LICENSE"
   ],
   "bin": {
-    "rdc": "./bin/rdc.mjs"
+    "aria": "./bin/aria.mjs"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",

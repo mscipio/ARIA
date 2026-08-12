@@ -2,7 +2,7 @@ import { tool, type Plugin } from "@opencode-ai/plugin";
 import path from "node:path";
 
 import { getPackageRoot } from "./defaults.js";
-import { resolveReviewDrivenCodeConfig } from "./overrides.js";
+import { resolveAriaConfig } from "./overrides.js";
 import {
   addPlanTasks,
   approvePlan,
@@ -19,7 +19,7 @@ import {
   formatToolError,
   planToolTitle,
 } from "./present.js";
-import type { ReviewDrivenCodePluginOptions, ResolvedReviewDrivenCodeConfig, RoleName } from "./types.js";
+import type { AriaPluginOptions, ResolvedAriaConfig, RoleName } from "./types.js";
 
 function stringField(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -37,20 +37,20 @@ function projectDirectory(input: unknown): string {
   );
 }
 
-function pluginOptions(options: unknown): ReviewDrivenCodePluginOptions {
+function pluginOptions(options: unknown): AriaPluginOptions {
   const configPath = stringField(options, "configPath");
   return configPath ? { configPath } : {};
 }
 
 const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>> = {
-  director: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
+  coder: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
   planner: new Set(["get", "create"]),
   architect: new Set(["get", "replace"]),
   reviewer: new Set(["get"]),
 };
 
 function authorizePlan(context: unknown, action: string): string | null {
-  if (!stringField(context, "sessionID")) return "A sessionID is required to use Review-Driven Coding tools";
+  if (!stringField(context, "sessionID")) return "A sessionID is required to use ARIA RDC plan tools";
   const agent = stringField(context, "agent");
   if (!agent || !PLAN_ACTIONS_BY_ROLE[agent]?.has(action)) {
     return `Role ${agent ?? "unknown"} may not ${action} the plan`;
@@ -61,7 +61,7 @@ function authorizePlan(context: unknown, action: string): string | null {
 type PermissionAction = "allow" | "ask" | "deny";
 type PermissionRule = PermissionAction | Record<string, PermissionAction>;
 type AgentPermission = Record<string, PermissionRule>;
-type SubagentRole = Exclude<RoleName, "director">;
+type NonCoderRole = Exclude<RoleName, "coder">;
 
 const BASE_PERMISSION: AgentPermission = {
   "*": "deny",
@@ -112,11 +112,41 @@ const REQUIRED_MCP_PERMISSION: AgentPermission = {
   "codegraph_*": "allow",
 };
 
-const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
-  explorer: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION },
-  visualizer: { ...BASE_PERMISSION, ...REQUIRED_MCP_PERMISSION, read: PROTECTED_READ, skill: "allow" },
-  planner: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
-  architect: { ...CODE_READ, ...REQUIRED_MCP_PERMISSION, webfetch: "allow", websearch: "allow", skill: "allow", plan: "allow" },
+function skillAccess(...names: string[]): Record<string, PermissionAction> {
+  return Object.fromEntries([
+    ["*", "deny"],
+    ...names.map((name) => [name, "allow"] as const),
+  ]);
+}
+
+const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
+  explorer: {
+    ...CODE_READ,
+    ...REQUIRED_MCP_PERMISSION,
+    skill: skillAccess("rdc-code-exploration"),
+  },
+  visualizer: {
+    ...BASE_PERMISSION,
+    ...REQUIRED_MCP_PERMISSION,
+    read: PROTECTED_READ,
+    skill: skillAccess("rdc-visual-analysis"),
+  },
+  planner: {
+    ...CODE_READ,
+    ...REQUIRED_MCP_PERMISSION,
+    webfetch: "allow",
+    websearch: "allow",
+    skill: skillAccess("rdc-implementation-planning", "rdc-testing-discipline"),
+    plan: "allow",
+  },
+  architect: {
+    ...CODE_READ,
+    ...REQUIRED_MCP_PERMISSION,
+    webfetch: "allow",
+    websearch: "allow",
+    skill: skillAccess("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
+    plan: "allow",
+  },
   implementer: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
@@ -135,7 +165,7 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
       "yarn publish*": "deny",
       "bun publish*": "deny",
     },
-    skill: "allow",
+    skill: skillAccess("rdc-code-implementation", "rdc-testing-discipline"),
   },
   reviewer: {
     ...CODE_READ,
@@ -143,10 +173,24 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
     bash: "allow",
     webfetch: "allow",
     websearch: "allow",
-    skill: "allow",
+    skill: skillAccess("rdc-implementation-review", "rdc-testing-discipline"),
     plan: "allow",
   },
-  "wiki-compiler": {
+  writer: {
+    ...BASE_PERMISSION,
+    read: PROTECTED_READ,
+    skill: skillAccess(
+      "aria-academic-writing",
+      "aria-writing-anti-ai",
+      "aria-review-response",
+      "aria-paper-self-review",
+    ),
+    task: {
+      "*": "deny",
+      "archivist": "allow",
+    },
+  },
+  "archivist": {
     ...BASE_PERMISSION,
     read: { "*": "deny" },
     edit: { "*": "deny" },
@@ -154,17 +198,19 @@ const SUBAGENT_PERMISSIONS: Record<SubagentRole, AgentPermission> = {
     grep: "deny",
     list: "deny",
     bash: { "*": "deny" },
+    skill: skillAccess("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
     external_directory: "deny",
   },
 };
 
 const PACKAGE_ROOT = getPackageRoot();
+const PACKAGE_SKILLS_ROOT = path.join(PACKAGE_ROOT, "skills");
 
-function buildWikiCompilerPermissions(worktree: string): AgentPermission {
+function buildArchivistPermissions(worktree: string): AgentPermission {
   const wikiDir = process.env.WIKI_DIR;
 
   if (!wikiDir) {
-    return SUBAGENT_PERMISSIONS["wiki-compiler"];
+    return ROLE_PERMISSIONS["archivist"];
   }
 
   const pipelineRoot = path.join(PACKAGE_ROOT, "wiki-pipeline");
@@ -211,14 +257,15 @@ function buildWikiCompilerPermissions(worktree: string): AgentPermission {
       [`python ${pipelineRun} lint`]: "allow",
       [`python ${pipelineRun} primer`]: "allow",
     },
+    skill: skillAccess("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
     external_directory: externalDirScope,
   };
 }
 
-const SUBAGENT_ROLES = Object.keys(SUBAGENT_PERMISSIONS) as SubagentRole[];
+const NON_CODER_ROLES = Object.keys(ROLE_PERMISSIONS) as NonCoderRole[];
 
 function agentDefinitions(
-  config: ResolvedReviewDrivenCodeConfig,
+  config: ResolvedAriaConfig,
   worktree: string,
 ): Record<string, unknown> {
   const taskPermissions: Record<string, "allow" | "deny"> = {
@@ -229,15 +276,15 @@ function agentDefinitions(
     architect: "allow",
     implementer: "allow",
     reviewer: "allow",
-    "wiki-compiler": "allow",
+    "archivist": "allow",
   };
   const definitions: Record<string, unknown> = {
-    director: {
+    coder: {
       description: "Coordinates planning, implementation, and review.",
-      mode: "primary",
-      model: config.roles.director.model,
-      ...(config.roles.director.variant ? { variant: config.roles.director.variant } : {}),
-      prompt: config.roles.director.promptText,
+      mode: config.roles.coder.mode,
+      model: config.roles.coder.model,
+      ...(config.roles.coder.variant ? { variant: config.roles.coder.variant } : {}),
+      prompt: config.roles.coder.promptText,
       permission: {
         ...REQUIRED_MCP_PERMISSION,
         edit: "deny",
@@ -248,35 +295,54 @@ function agentDefinitions(
     },
   };
 
-  for (const role of SUBAGENT_ROLES) {
+  for (const role of NON_CODER_ROLES) {
     const roleConfig = config.roles[role];
     definitions[role] = {
-      description: `${role} specialist for Review-Driven Coding.`,
-      mode: "subagent",
+      description: role === "writer"
+        ? "Primary scientific, academic, and professional writing agent."
+        : role === "archivist"
+          ? "Direct or delegated specialist for curated Wiki lookup and maintenance."
+          : `${role} coding specialist for ARIA Review-Driven Coding.`,
+      mode: roleConfig.mode,
       model: roleConfig.model,
       ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
       prompt: roleConfig.promptText,
-      permission: role === "wiki-compiler"
-        ? buildWikiCompilerPermissions(worktree)
-        : SUBAGENT_PERMISSIONS[role],
+      permission: role === "archivist"
+        ? buildArchivistPermissions(worktree)
+        : ROLE_PERMISSIONS[role],
     };
   }
 
   return definitions;
 }
 
-export const reviewDrivenCodePlugin: Plugin = async (input, options = {}) => {
+export const ariaPlugin: Plugin = async (input, options = {}) => {
   const directory = projectDirectory(input);
-  const config = resolveReviewDrivenCodeConfig(directory, pluginOptions(options));
+  const config = resolveAriaConfig(directory, pluginOptions(options));
 
   return {
     config: async (runtimeConfig) => {
       runtimeConfig.agent ??= {};
       Object.assign(runtimeConfig.agent, agentDefinitions(config, directory));
+
+      // These fields are supported by OpenCode 1.18.16 but are newer than the
+      // @opencode-ai/plugin SDK version currently used for ARIA's compile-time types.
+      const extendedConfig = runtimeConfig as typeof runtimeConfig & {
+        skills?: { paths?: string[] };
+      };
+
+      // Package-owned skills stay version-locked to the loaded ARIA package.
+      // OpenCode discovers ARIA and RDC skills directly from this additional root.
+      extendedConfig.skills ??= {};
+      extendedConfig.skills.paths ??= [];
+      if (!extendedConfig.skills.paths.includes(PACKAGE_SKILLS_ROOT)) {
+        extendedConfig.skills.paths.push(PACKAGE_SKILLS_ROOT);
+      }
+
     },
     tool: {
       plan: tool({
-        description: "Read or update the shared project plan in .code-ensemble/TASKS.md.",
+        description: "Read or update the shared project plan in .aria/rdc/TASKS.md.",
         args: {
           action: tool.schema
             .enum(["create", "get", "replace", "add", "remediate", "update", "approve", "close"])

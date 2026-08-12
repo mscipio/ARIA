@@ -1,9 +1,9 @@
 {
   "roles": {
-    "director": {
+    "coder": {
       "model": "opencode-go/deepseek-v4-pro",
       "mode": "primary",
-      "promptFile": "prompts/director.md"
+      "promptFile": "prompts/coder.md"
     },
     "explorer": {
       "model": "opencode-go/deepseek-v4-flash",
@@ -38,10 +38,16 @@
       "mode": "subagent",
       "promptFile": "prompts/reviewer.md"
     },
-    "wiki-compiler": {
+    "archivist": {
       "model": "opencode-go/deepseek-v4-pro",
-      "mode": "subagent",
-      "promptFile": "prompts/wiki-compiler.md"
+      "mode": "all",
+      "promptFile": "prompts/archivist.md"
+    },
+    "writer": {
+      "model": "openai/gpt-5.6-sol",
+      "variant": "medium",
+      "mode": "primary",
+      "promptFile": "prompts/writer.md"
     }
   }
 }

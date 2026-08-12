@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-// Review-Driven Coding CLI — dependency-free, Node standard library only.
-// Supported: rdc setup, rdc update, rdc deps sync, rdc doctor, rdc routes, rdc --help
+// ARIA CLI — dependency-free, Node standard library only.
+// Supported: aria setup, aria update, aria deps sync, aria doctor, aria routes, aria --help
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -20,18 +20,18 @@ function loadVersion() {
 
 function usage() {
   const version = loadVersion();
-  return `Review-Driven Coding CLI v${version}
+  return `ARIA CLI v${version}
 
 Usage:
-  rdc setup       Register RDC with OpenCode and synchronize dependencies
-  rdc update      Pull latest changes, reinstall, and re-sync dependencies
-  rdc deps sync   Synchronize required dependencies (Engram, Context7, CodeGraph)
-  rdc doctor      Report status of required dependencies
-  rdc routes      Print resolved model routes for each RDC role
-  rdc --help      Show this help message
-  rdc -h          Show this help message
-  rdc --version   Show version
-  rdc -v          Show version`;
+  aria setup       Register ARIA with OpenCode and synchronize dependencies
+  aria update      Pull latest changes, reinstall, and re-sync dependencies
+  aria deps sync   Synchronize required dependencies (Engram, Context7, CodeGraph)
+  aria doctor      Report status of required dependencies
+  aria routes      Print resolved model routes for each ARIA role
+  aria --help      Show this help message
+  aria -h          Show this help message
+  aria --version   Show version
+  aria -v          Show version`;
 }
 
 async function main() {
@@ -53,7 +53,7 @@ async function main() {
     const subcommand = args[1];
     if (subcommand !== "sync") {
       console.error(`Unknown deps subcommand: ${subcommand}`);
-      console.error("Usage: rdc deps sync");
+      console.error("Usage: aria deps sync");
       return 1;
     }
 
@@ -124,12 +124,12 @@ async function main() {
         console.error(`npm ci --omit=dev: [FAIL] ${npm.error || "npm install failed"}`);
       }
 
-      // Handoff — rdc deps sync in updated checkout
+      // Handoff — aria deps sync in updated checkout
       if (handoff.ok) {
-        console.log(`handoff (rdc deps sync): [OK] exit=0`);
+        console.log(`handoff (aria deps sync): [OK] exit=0`);
         if (handoff.stdout) console.log(handoff.stdout);
       } else if (handoff.error) {
-        console.error(`handoff (rdc deps sync): [FAIL] exit=${handoff.exitCode ?? "?"}`);
+        console.error(`handoff (aria deps sync): [FAIL] exit=${handoff.exitCode ?? "?"}`);
         if (handoff.stderr) console.error(handoff.stderr);
         // Also show sync subprocess exit status and output when available
         if (handoff.exitCode !== null) {
@@ -159,7 +159,7 @@ async function main() {
   }
 
   console.error(`Unknown command: ${command}`);
-  console.error("Run 'rdc --help' for usage.");
+  console.error("Run 'aria --help' for usage.");
   return 1;
 }
 

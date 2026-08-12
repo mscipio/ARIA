@@ -1,15 +1,16 @@
-import { resolveReviewDrivenCodeConfig } from "./overrides.js";
+import { resolveAriaConfig } from "./overrides.js";
 import type { RoleName } from "./types.js";
 
 const ROLES: RoleName[] = [
-  "director",
+  "coder",
   "explorer",
   "visualizer",
   "planner",
   "architect",
   "implementer",
   "reviewer",
-  "wiki-compiler",
+  "archivist",
+  "writer",
 ];
 
 function variantText(variant: string | undefined): string {
@@ -17,8 +18,8 @@ function variantText(variant: string | undefined): string {
 }
 
 export function formatRoutes(worktree: string = process.cwd()): string {
-  const config = resolveReviewDrivenCodeConfig(worktree);
-  const lines = ["Resolved RDC role routes:"];
+  const config = resolveAriaConfig(worktree);
+  const lines = ["Resolved ARIA role routes:"];
   for (const role of ROLES) {
     const roleConfig = config.roles[role];
     lines.push(`${role}  ${roleConfig.model}${variantText(roleConfig.variant)}`);

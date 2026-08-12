@@ -1,31 +1,31 @@
-# Review-Driven Coding
+# ARIA
 
-**RDC** is an OpenCode orchestration plugin that turns OpenCode into a focused software team with explicit human plan approval before any implementation begins.
+**ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `writer` and `archivist` own writing and knowledge workflows; `researcher` is the next planned role.
 
 ## Features
 
-- **Conversational director** — answers questions directly; creates plans only for non-trivial implementation requests
-- **Specialized roles** — explorer, visualizer, planner, architect, implementer, reviewer each with focused responsibility
+- **Conversational coder** — answers questions directly; creates plans only for non-trivial implementation requests
+- **Specialized roles** — coding specialists plus opt-in Wiki and scientific/professional writing specialists, each with focused authority
 - **Architect plan review** — QA before implementation: `READY` or `REVISED` with the smallest corrections needed
-- **Explicit human approval** — the director summarizes the plan and **stops and waits** for the user to approve before any code is written
+- **Explicit human approval** — the coder summarizes the plan and **stops and waits** for the user to approve before any code is written
 - **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
-- **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the director tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
-- **First-class MCP evidence** — every role can use CodeGraph, Context7, and Engram when they materially improve the work
+- **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
+- **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki and writer remain intentionally isolated
 
 ## Workflow
 
-1. At the start of every turn, the director calls `plan` action `get` to read `.code-ensemble/TASKS.md`. If an active plan exists, work continues it instead of planning again.
-2. For non-trivial new work, the director tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
+1. At the start of every turn, the coder calls `plan` action `get` to read `.aria/rdc/TASKS.md`. If an active plan exists, work continues it instead of planning again.
+2. For non-trivial new work, the coder tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
 3. The planner calls `plan` `get` then `create` to persist a title and an actionable, ordered task list; each task integrates its acceptance criteria and the relevant tests. The planner does not implement.
 4. The architect always runs as QA of the plan: it calls `plan` `get`, and replies `READY` if the plan is correct, or `plan` `replace` (with `expectedPlanID`/`revision`) to correct it and replies `REVISED` with the changes. Any `replace` invalidates previous approval.
-5. The director re-reads the plan, summarizes the title, tasks, and any architect changes to the user, and **stops and waits for explicit user approval**.
-6. Only after the user approves, the director calls `plan` action `approve` to persist the approval. Tasks cannot enter implementation until the current plan revision is approved.
-7. The implementer completes tasks and runs the relevant checks; the director records evidence by updating tasks.
+5. The coder re-reads the plan, summarizes the title, tasks, and any architect changes to the user, and **stops and waits for explicit user approval**.
+6. Only after the user approves, the coder calls `plan` action `approve` to persist the approval. Tasks cannot enter implementation until the current plan revision is approved.
+7. The implementer completes tasks and runs the relevant checks; the coder records evidence by updating tasks.
 8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
-9. If reviewer reports blocking findings for tasks within approved scope, the director uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews.
-10. If review reveals a material scope change, the director tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the director adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
-11. A clean, completed plan is archived under `.code-ensemble/plans/` via `plan` action `close`.
+9. If reviewer reports blocking findings for tasks within approved scope, the coder uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews.
+10. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
+11. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
 
 The tasklist is scoped to the worktree, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
 
@@ -33,21 +33,46 @@ The tasklist is scoped to the worktree, not to one OpenCode conversation. A new 
 
 | Agent | Responsibility | Default model |
 |---|---|---|
-| director | Coordinates work and maintains the shared plan | `opencode-go/deepseek-v4-pro` |
+| coder | Coordinates work and maintains the shared plan | `opencode-go/deepseek-v4-pro` |
 | explorer | Maps code, tests, and dependencies | `opencode-go/deepseek-v4-flash` |
 | visualizer | Interprets screenshots and diagrams | `opencode-go/kimi-k2.7-code` |
 | planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-5.6-terra` |
 | architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-5.6-sol` |
 | implementer | Edits code and runs relevant checks | `opencode-go/glm-5.2` |
 | reviewer | Finds regressions, risks, and missing verification | `opencode-go/deepseek-v4-pro` |
+| archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/deepseek-v4-pro` |
+| writer (`primary`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-5.6-sol` |
 
-Only implementer can use OpenCode's edit tool for application code. Implementer shell commands run without permission prompts, except destructive removal and package publishing commands, which remain blocked. Reviewer has unrestricted shell access for inspection and verification; director cannot edit or run shell commands.
+Only implementer can use OpenCode's edit tool for application code. Implementer shell commands run without permission prompts, except destructive removal and package publishing commands, which remain blocked. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
 
-Every specialist runs through OpenCode's native `task` tool, so planner and architect appear in the UI like any other subagent.
+Coding specialists run through OpenCode's native `task` tool. `writer` is selected directly as a primary agent, while `archivist` can be selected directly or delegated through `task`.
+
+`coder` and `writer` are primary agents. `archivist` uses OpenCode `mode: all`, so it is available both directly (for Wiki queries/maintenance) and as a delegated specialist. The future `researcher` role is intended to use the same `all` pattern.
+
+## Agent and Skill Architecture
+
+ARIA separates **role authority** from **task methodology**:
+
+- **Agent prompts** define identity, authority, delegation, hard boundaries, and required output contracts.
+- **Package-owned skills** (`rdc-*` for coding methodology, `aria-*` for broader ARIA capabilities) contain task-specific procedures and reusable expertise, loaded on demand through OpenCode's native `skill` tool.
+- **Tool permissions** enforce what each role can actually read, edit, execute, delegate, or load.
+- **Persisted state** (the Plan and curated Wiki) remains authoritative independently of prompts or skills.
+
+Examples:
+
+- explorer → `rdc-code-exploration`
+- planner → `rdc-implementation-planning` + `rdc-testing-discipline`
+- architect → `rdc-plan-review` or `rdc-scope-assessment`
+- implementer → `rdc-code-implementation` + proportional testing guidance
+- reviewer → `rdc-implementation-review` + proportional testing guidance
+- archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
+- writer → `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
+
+ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers its packaged `skills/` directory through OpenCode's native `skills.paths` configuration, so skills stay version-locked to the loaded ARIA package without copying files into the user's global skill directory or depending on myopencode/another registry.
 
 ## Shared Plan
 
-`.code-ensemble/TASKS.md` is the project-wide source of truth. RDC retains the inherited `.code-ensemble/` on-disk namespace for compatibility with its plan format; a future schema migration may rename this independently.
+`.aria/rdc/TASKS.md` is the project-wide source of truth for the coder workflow. On first Plan access, a legacy `.code-ensemble/` state directory is migrated once to `.aria/rdc/` when the canonical destination does not already exist.
 
 Schema v3 fields:
 
@@ -61,10 +86,10 @@ Schema v3 fields:
 
 Approval lifecycle:
 - `create` produces a plan with `approval: pending`
-- `approve` (director only) sets `approval: approved` and increments revision
+- `approve` (coder only) sets `approval: approved` and increments revision
 - `replace` (architect only) resets `approval: pending` (invalidates any previous approval)
-- `add` (director only) resets `approval: pending` (scope changes require re-approval)
-- `remediate` (director only) preserves `approval: approved` (autonomous remediation loop)
+- `add` (coder only) resets `approval: pending` (scope changes require re-approval)
+- `remediate` (coder only) preserves `approval: approved` (autonomous remediation loop)
 - `update`, `close` require `approval: approved`
 
 ```md
@@ -88,11 +113,11 @@ Revision: **4**
 
 ## Plan Tool ACL
 
-Only the `director`, planning specialists, and reviewer can call `plan`; every other agent has `plan: deny`.
+Only the `coder`, planning specialists, and reviewer can call `plan`; every other agent has `plan: deny`.
 
 | Agent | Allowed `plan` actions |
 |---|---|
-| director | `get`, `create`, `update`, `add`, `remediate`, `approve`, `close` |
+| coder | `get`, `create`, `update`, `add`, `remediate`, `approve`, `close` |
 | planner | `get`, `create` |
 | architect | `get`, `replace` |
 | reviewer | `get` |
@@ -102,7 +127,7 @@ Only the `director`, planning specialists, and reviewer can call `plan`; every o
 
 - `get` returns the active plan (or `No active plan.`).
 - `create` writes a new plan with `approval: pending` and returns the initial `revision` (`1`); rejected when an active plan already exists.
-- `approve` accepts the current `expectedPlanID` and `expectedRevision`, sets `approval: approved`, and increments the revision. Only the director may approve.
+- `approve` accepts the current `expectedPlanID` and `expectedRevision`, sets `approval: approved`, and increments the revision. Only the coder may approve.
 - `replace` accepts the current `expectedPlanID` and `expectedRevision` plus the corrected `title` and `tasks`, produces a new revision, and resets `approval: pending`. Used only by the architect before implementation starts.
 - `update`, `add`, `remediate`, and `close` require both `expectedPlanID` and `expectedRevision` to detect conflicts.
 - `update` requires `approval: approved`.
@@ -110,13 +135,13 @@ Only the `director`, planning specialists, and reviewer can call `plan`; every o
 - `remediate` requires `approval: approved` and all existing tasks completed; preserves `approval: approved` (autonomous remediation loop).
 - `close` requires `approval: approved` and all tasks completed; archives the plan.
 
-The director is the only agent allowed to approve, update plan status, add remediation tasks, and archive. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
+The coder is the only agent allowed to approve, update plan status, add remediation tasks, and archive. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
 
 ## Plan Ownership
 
 - **Planner** owns plan creation: it turns evidence into an actionable, ordered task list with integrated acceptance/tests and persists it with `create`.
 - **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes). Replace invalidates any previous approval. After review, the architect performs scope assessment: `SCOPE_CHANGE` or `WITHIN_SCOPE`.
-- **Director** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
+- **Coder** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
 - **Reviewer** independently reads the plan via `get` and evaluates each approved requirement against the actual implementation as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
 
 ## Install
@@ -125,22 +150,24 @@ The director is the only agent allowed to approve, update plan status, add remed
 git clone https://github.com/mscipio/review-driven-code.git
 cd review-driven-code
 npm ci --omit=dev
-node ./bin/rdc.mjs setup
-node ./bin/rdc.mjs doctor
+node ./bin/aria.mjs setup
+node ./bin/aria.mjs doctor
 ```
 
-The `node ./bin/rdc.mjs` form works from the cloned checkout without requiring the package bin to be on `PATH`. If you have installed RDC globally or linked it, the shorter `rdc setup` / `rdc doctor` forms are equivalent.
+The `node ./bin/aria.mjs` form works from the cloned checkout without requiring the package bin to be on `PATH`. If you have installed or linked ARIA, the shorter `aria setup` / `aria doctor` forms are equivalent.
 
 Restart OpenCode after setup to load the registered plugin.
 
 ## Configuration
 
-RDC resolves role model and variant overrides from two optional JSON files sharing the same schema. RDC reads both files but never writes them — create them manually.
+ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. ARIA reads both files but never writes them — create them manually.
 
 | File | Path | Scope |
 |------|------|-------|
-| Global | `~/.config/opencode/review-driven-code.json` | Per-user, applies to every project |
-| Project | `review-driven-code.json` in the worktree root (or an explicit path via the plugin `configPath` option) | Per-project |
+| Global | `~/.config/opencode/aria.json` | Per-user, applies to every project |
+| Project | `aria.json` in the worktree root (or an explicit path via the plugin `configPath` option) | Per-project |
+
+For transition compatibility, ARIA still reads the legacy `~/.config/opencode/review-driven-code.json` and project `review-driven-code.json` filenames when the corresponding `aria.json` file is absent. ARIA never writes or migrates these configuration files automatically; `aria.json` is canonical and wins when both names exist.
 
 ```json
 {
@@ -166,7 +193,7 @@ Missing a field at one level inherits the value from the level below — there i
 
 ## Required Integrations
 
-RDC requires three external integrations. RDC does not fork, vendor, or duplicate their internal implementation — updates track their latest stable upstream releases and services.
+ARIA currently requires three external integrations. ARIA does not fork, vendor, or duplicate their internal implementation — updates track their latest stable upstream releases and services.
 
 | Integration | Purpose | Upstream |
 |---|---|---|
@@ -177,33 +204,33 @@ RDC requires three external integrations. RDC does not fork, vendor, or duplicat
 ### Commands
 
 ```bash
-rdc setup      # Register RDC plugin with OpenCode and synchronize dependencies
-rdc update     # Pull latest changes, reinstall, and re-sync dependencies
-rdc deps sync  # Synchronize required integrations (Engram, Context7, CodeGraph)
-rdc doctor     # Report status of required integrations (read-only)
-rdc routes     # Print resolved model routes for each RDC role
+aria setup      # Register ARIA plugin with OpenCode and synchronize dependencies
+aria update     # Pull latest changes, reinstall, and re-sync dependencies
+aria deps sync  # Synchronize required integrations (Engram, Context7, CodeGraph)
+aria doctor     # Report status of required integrations (read-only)
+aria routes     # Print resolved model routes for each ARIA role
 ```
 
-### `rdc setup`
+### `aria setup`
 
-Registers the RDC plugin globally with OpenCode and runs the idempotent dependency sync. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
+Registers the ARIA plugin globally with OpenCode and runs the idempotent dependency sync. Package-owned skills are discovered directly from the loaded package through `skills.paths`. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
 
 - **First run**: registers the plugin, then synchronizes all dependencies.
 - **Repeated runs**: reports `already registered`, skips duplicate global registration, and still runs the dependency sync (which is itself idempotent).
 - **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks dependency sync.
 
-Setup fails non-zero at the labeled stage (registration or sync). OpenCode must be restarted after setup to load the registered plugin.
+Setup fails non-zero at the labeled stage (registration or dependency sync). OpenCode must be restarted after setup to load the registered plugin.
 
-Setup never creates or overwrites project `review-driven-code.json`, commits, pushes, or introduces postinstall, daemon, or background behavior.
+Setup never creates or overwrites project `aria.json`, commits, pushes, or introduces postinstall, daemon, or background behavior.
 
-### `rdc update`
+### `aria update`
 
 Pulls the latest changes from the upstream Git repository, reinstalls production dependencies, and hands off dependency synchronization to the updated checkout in a fresh process.
 
 ```bash
 # From the cloned checkout:
-node ./bin/rdc.mjs update
-node ./bin/rdc.mjs doctor
+node ./bin/aria.mjs update
+node ./bin/aria.mjs doctor
 ```
 
 The update workflow requires:
@@ -212,27 +239,27 @@ The update workflow requires:
 - A configured upstream remote
 - Fast-forward-only merge (`git pull --ff-only`)
 
-After `git pull --ff-only` and `npm ci --omit=dev` succeed, update spawns `node <checkout>/bin/rdc.mjs deps sync` in a new process using the updated checkout's code. The subprocess exit status and captured diagnostic output are reported. If any stage fails, update returns non-zero at the labeled stage and skips downstream stages.
+After `git pull --ff-only` and `npm ci --omit=dev` succeed, update spawns `node <checkout>/bin/aria.mjs deps sync` in a new process using the updated checkout's code. The subprocess exit status and captured diagnostic output are reported. If any stage fails, update returns non-zero at the labeled stage and skips downstream stages.
 
 OpenCode must be restarted after update to load the changed code.
 
-Neither `rdc setup` nor `rdc update` runs as a postinstall script, daemon, background task, or automatic update. Both are manual commands. Neither creates or overwrites project `review-driven-code.json`, creates commits, or pushes.
+Neither `aria setup` nor `aria update` runs as a postinstall script, daemon, background task, or automatic update. Both are manual commands. Neither creates or overwrites project `aria.json`, creates commits, or pushes.
 
-### `rdc deps sync`
+### `aria deps sync`
 
-Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `rdc setup` and the post-update handoff.
+Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `aria setup` and the post-update handoff.
 
-### `rdc doctor`
+### `aria doctor`
 
 Read-only status report. Checks that OpenCode, Engram, Context7, and CodeGraph are present and their MCP connections are active. Returns non-zero if any required integration is missing or disconnected.
 
-### `rdc routes`
+### `aria routes`
 
-Prints the resolved model (and optional variant) for every RDC role, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. If any configuration file is invalid the command fails with a non-zero exit code.
+Prints the resolved model (and optional variant) for every ARIA role, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. If any configuration file is invalid the command fails with a non-zero exit code.
 
 ```
-Resolved RDC role routes:
-director  opencode-go/deepseek-v4-pro
+Resolved ARIA role routes:
+coder  opencode-go/deepseek-v4-pro
 explorer  opencode-go/deepseek-v4-flash (high)
 visualizer  opencode-go/kimi-k2.7-code
 planner  openai/gpt-5.6-terra (xhigh)
@@ -241,15 +268,26 @@ implementer  opencode-go/glm-5.2
 reviewer  opencode-go/deepseek-v4-pro
 ```
 
-MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.code-ensemble/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
+MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
+
+## Writer
+
+`writer` is a primary agent for writing objectives rather than a general researcher. Invoke it directly for writing work; its small role prompt selects package-owned writing skills on demand:
+
+- `aria-academic-writing` — evidence-bounded peer-reviewed scientific prose and section-aware journal style
+- `aria-writing-anti-ai` — removes formulaic LLM prose while preserving technical meaning and appropriate formality
+- `aria-review-response` — reviewer-response/rebuttal strategy, evidence anchoring, and tone
+- `aria-paper-self-review` — structure, overclaim, claim-evidence, reproducibility, and submission-readiness audit
+
+The writer may task `archivist` only for explicitly read-only project/internal evidence. It does not query Zotero or the literature itself. A future `researcher` role will own those capabilities; the writer prompt already defines the handoff contract and marks unresolved external evidence as `[RESEARCH NEEDED]` or `[CITATION NEEDED]` until that role exists.
 
 ## Wiki Compiler
 
-`wiki-compiler` is a separate, opt-in specialist for wiki operations. The director delegates to it only when the user explicitly requests Wiki lookup, archival, or curated compilation. It never runs automatically.
+`archivist` is a separate, opt-in specialist for Wiki operations with `mode: all`: you can invoke it directly for queries, archival, or compilation, and another agent may delegate to it when appropriate. The coder delegates to it only when the user explicitly requests Wiki work. It never runs automatically.
 
 ### Modes
 
-- **Lookup** (read-only) — searches the curated wiki via `wiki-pipeline/search.py` against `WIKI_DIR/wiki/index.json`. No writes, no pipeline initialization, no archival, and no mandatory primer access. An existing primer may be consulted read-only when useful.
+- **Lookup** (read-only) — reads `WIKI_DIR/wiki/index.json`, selects the strongest curated page matches, and performs one bounded related-term coverage pass. No writes, no pipeline initialization, no archival, and no mandatory primer access. An existing primer may be consulted read-only when useful.
 - **Archival** (write, explicit request only) — archives raw session or observation data to `WIKI_DIR/raw/` as immutable provenance files. Three commands: `archive-opencode` (OpenCode sessions), `archive-engram` (Engram observations), and `archive-all` (both). Archival does not compile, promote raw material, or regenerate the primer; it only writes raw files and updates archive trackers.
 - **Compile / Update** (write, explicit request only) — promotes raw files into curated wiki pages following the manual compilation protocol (`wiki-pipeline/docs/compile-workflow.md`). For each candidate raw file the specialist inspects existing pages, deduplicates, and decides create/update/skip. Updates merge new information while preserving existing content and source provenance, then regenerate `wiki/index.md`, `wiki/index.json`, and append to `wiki/log.md`. An optional primer refresh and lint pass may follow.
 
@@ -259,7 +297,7 @@ Ordinary lookup and compile/update do not archive automatically. Archival occurs
 
 `WIKI_DIR` is the sole external wiki path, required to locate the Wiki. It must be set to a non-empty value before any wiki operation — write-capable (archival, compile, primer generation) and read-only search alike. When `WIKI_DIR` is absent, write work fails with a clear error before creating any file or directory, and read-only search returns a clear no-write configuration error.
 
-RDC ships and resolves its own pipeline, search, and documentation assets from the package root under `wiki-pipeline/`. Pipeline assets are published with the package as listed in `package.json`. The director receives no wiki filesystem paths or package paths — only the `wiki-compiler` specialist does.
+ARIA ships its Wiki procedures as package skills and its pipeline/documentation assets under `wiki-pipeline/`. Pipeline assets are published with the package as listed in `package.json`. The coder receives no wiki filesystem paths or package paths — only the `archivist` specialist does.
 
 ### Engram-to-Wiki boundary
 
@@ -267,13 +305,12 @@ Engram-to-Wiki is not an automatic bridge. Engram archival is an explicit user-r
 
 ### Out of scope
 
-The wiki-compiler does not reference, require, or support:
+The archivist does not reference, require, or support:
 
 - `REPO_DIR` or workspace-relative configuration
 - `myopencode` runtime dependency, modification, or deletion — myopencode is treated as a source-only upstream
 - Automatic wiki, archive, or primer behavior — every operation is explicit
 - Zotero, biblio, research, writing, or Phase 3 / wiki-bridge workflows
-- Root or plugin-local skill packages, global skill installation, setup lifecycle changes, symlinks, or new skill-source configuration
 - Refactors unrelated to wiki integration
 
 ## Development
@@ -288,7 +325,7 @@ npm run smoke:package
 
 ## Acknowledgement
 
-Review-Driven Coding is derived from [cgize/code-ensemble](https://github.com/cgize/code-ensemble) and retains its MIT license.
+ARIA's Review-Driven Coding subsystem is derived from [cgize/code-ensemble](https://github.com/cgize/code-ensemble) and retains its MIT license.
 
 ## License
 

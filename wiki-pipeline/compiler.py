@@ -436,7 +436,7 @@ class WikiCompiler:
         Archived session IDs are tracked in .state/archived_sessions.json.
 
         Compilation into wiki pages is handled separately by the
-        wiki-compiler specialist, which reads from raw/, plans and
+        archivist specialist, which reads from raw/, plans and
         compiles pages, and writes to wiki/.
 
         Parameters
