@@ -1,8 +1,17 @@
 import { realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { depsSync, defaultExecutor, type Executor } from "./deps.js";
+import {
+  configureModels,
+  type ModelConfigurationResult,
+  type ModelConfigureInput,
+  type ModelConfigureOptions,
+  type ModelConfigureOutput,
+} from "./model-config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,6 +27,36 @@ export interface LifecycleResult {
 export interface SetupResult {
   registration: { action: "registered" | "already registered" | "failed"; detail?: string };
   sync: { ok: boolean; output?: string; error?: string };
+  /** Outcome of the optional model-configuration phase; absent unless requested. */
+  model?: ModelConfigurationResult;
+}
+
+/**
+ * Model-configuration seam for `setup` (defaults to the real `configureModels`),
+ * so tests can inject a mock without touching discovery or the interactive UI.
+ */
+export type ConfigureModelsFn = (
+  worktree: string,
+  options?: ModelConfigureOptions,
+) => Promise<ModelConfigurationResult>;
+
+/**
+ * Options for `setup`. All fields are optional: omitting them preserves the
+ * fully non-interactive `setup(binaryUrl, executor, depsSyncFn)` behavior.
+ */
+export interface SetupOptions {
+  /** Request the optional model-configuration phase after registration and sync. */
+  configure?: boolean;
+  /** Worktree passed to model configuration (defaults to `process.cwd()`). */
+  worktree?: string;
+  /** Terminal input stream for interactive prompts (defaults to `process.stdin`). */
+  input?: Readable;
+  /** Terminal output stream for prompts (defaults to `process.stdout`). */
+  output?: Writable;
+  /** Explicit TTY override (defaults to `process.stdin.isTTY`). */
+  tty?: boolean;
+  /** Model-configuration seam (defaults to the real `configureModels`). */
+  configureModelsFn?: ConfigureModelsFn;
 }
 
 export interface CommandResult {
@@ -130,13 +169,38 @@ function parsePluginSpecifiers(output: string): { recognized: boolean; specifier
 }
 
 // ---------------------------------------------------------------------------
-// setup — registration + dependency sync
+// Terminal seam helpers for the optional model-configuration phase
+// ---------------------------------------------------------------------------
+
+/** Build a `ModelConfigureInput` seam reading one trimmed line from a stream. */
+function terminalInput(inputStream: Readable, outputStream: Writable): ModelConfigureInput {
+  return (prompt) =>
+    new Promise((resolveInput, rejectInput) => {
+      const terminal = createInterface({ input: inputStream, output: outputStream });
+      terminal.question(prompt, (answer) => {
+        terminal.close();
+        resolveInput(answer.trim());
+      });
+      terminal.on("error", rejectInput);
+    });
+}
+
+/** Build a `ModelConfigureOutput` seam emitting one line to a stream. */
+function terminalOutput(stream: Writable): ModelConfigureOutput {
+  return (text) => {
+    stream.write(`${text}\n`);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// setup — registration + dependency sync (+ optional model configuration)
 // ---------------------------------------------------------------------------
 
 export async function setup(
   binaryUrl: string,
   executor: Executor = defaultExecutor,
   depsSyncFn: typeof depsSync = depsSync,
+  options: SetupOptions = {},
 ): Promise<LifecycleResult> {
   const checkout = await resolveCheckout(binaryUrl);
   const pluginUri = pathToFileURL(checkout).href;
@@ -231,6 +295,66 @@ export async function setup(
   }
 
   const syncOk = syncResult.ok;
+
+  // -----------------------------------------------------------------------
+  // Phase 3 — optional interactive model configuration. Runs only when
+  // `--configure` was requested and both registration and sync succeeded;
+  // registration/sync failure short-circuiting and ordering are unchanged.
+  // -----------------------------------------------------------------------
+
+  if (syncOk && options.configure) {
+    const configureModelsFn = options.configureModelsFn ?? configureModels;
+    const worktree = options.worktree ?? process.cwd();
+    const modelOptions: ModelConfigureOptions = {};
+    if (options.input) modelOptions.input = terminalInput(options.input, options.output ?? process.stdout);
+    if (options.output) modelOptions.output = terminalOutput(options.output);
+    if (options.tty !== undefined) modelOptions.tty = options.tty;
+
+    let modelResult: ModelConfigurationResult;
+    try {
+      modelResult = await configureModelsFn(worktree, modelOptions);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        stage: "model_configuration",
+        setup: {
+          registration: { action: registrationAction, detail: registrationDetail },
+          sync: { ok: true, output: "all dependencies synchronized" },
+          model: {
+            status: "failed",
+            message: "Model configuration failed; no changes were persisted.",
+            error: `configureModels threw: ${message}`,
+          },
+        },
+      };
+    }
+
+    // "configured", "unchanged", and non-TTY "skipped" all leave setup
+    // healthy; only an explicit discovery/write failure fails the phase.
+    if (modelResult.status === "failed") {
+      return {
+        ok: false,
+        stage: "model_configuration",
+        setup: {
+          registration: { action: registrationAction, detail: registrationDetail },
+          sync: { ok: true, output: "all dependencies synchronized" },
+          model: modelResult,
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      stage: "complete",
+      setup: {
+        registration: { action: registrationAction, detail: registrationDetail },
+        sync: { ok: true, output: "all dependencies synchronized" },
+        model: modelResult,
+      },
+    };
+  }
+
   return {
     ok: syncOk,
     stage: syncOk ? "complete" : "sync",

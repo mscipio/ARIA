@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import { ConfigValidationError, parseOverrides, resolveAriaConfig } from "../src/overrides";
+import { ConfigValidationError, parseOverrides, readGlobalAriaOverrides, resolveAriaConfig } from "../src/overrides";
 
 const tempDirs: string[] = [];
 
@@ -137,7 +137,7 @@ describe("ARIA overrides", () => {
       expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
     });
 
-    it("overrides model only, inherits variant from defaults", async () => {
+    it("overrides model only and clears the inherited default variant", async () => {
       const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
       tempDirs.push(root);
       await writeFile(resolve(root, "aria.json"), JSON.stringify({
@@ -145,7 +145,7 @@ describe("ARIA overrides", () => {
       }));
       const config = resolveAriaConfig(root);
       expect(config.roles.planner.model).toBe("openai/gpt-5.4-mini");
-      expect(config.roles.planner.variant).toBe("xhigh");
+      expect(config.roles.planner.variant).toBeUndefined();
     });
 
     it("overrides variant only, inherits model from defaults", async () => {
@@ -172,7 +172,7 @@ describe("ARIA overrides", () => {
       expect(config.roles.planner.model).toBe("openai/gpt-5.4-mini");
       expect(config.roles.planner.variant).toBe("high");
       expect(config.roles.architect.model).toBe("openai/gpt-5.6-sol");
-      expect(config.roles.architect.variant).toBe("xhigh");
+      expect(config.roles.architect.variant).toBeUndefined();
     });
 
     it("empty role override inherits defaults", async () => {
@@ -254,14 +254,15 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/deepseek-v4-pro");
     });
 
-    it("routing reflects project model override", async () => {
+    it("routing reflects project model override and drops the cleared variant", async () => {
       const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
       tempDirs.push(root);
       await writeFile(resolve(root, "aria.json"), JSON.stringify({
         roles: { planner: { model: "openai/gpt-5.4-mini" } },
       }));
       const config = resolveAriaConfig(root);
-      expect(config.roles.coder.promptText).toContain("planner: `planner` → openai/gpt-5.4-mini [xhigh]");
+      expect(config.roles.coder.promptText).toContain("planner: `planner` → openai/gpt-5.4-mini\n");
+      expect(config.roles.coder.promptText).not.toContain("planner: `planner` → openai/gpt-5.4-mini [xhigh]");
     });
 
     it("routing reflects project variant override", async () => {
@@ -357,7 +358,29 @@ describe("ARIA overrides", () => {
       expect(resolveAriaConfig(root).roles.planner.model).toBe("openai/legacy-global-model");
     });
 
-    it("reads global override when no project config exists", async () => {
+    it("readGlobalAriaOverrides prefers canonical aria.json, falls back to legacy, and yields {} when absent", async () => {
+      const home = await mkdtemp(resolve(tmpdir(), "aria-global-read-"));
+      tempDirs.push(home);
+      process.env.HOME = home;
+
+      // Neither file exists: validated empty read.
+      expect(readGlobalAriaOverrides()).toEqual({});
+
+      const globalConfigDir = resolve(home, ".config", "opencode");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(resolve(globalConfigDir, "review-driven-code.json"), JSON.stringify({
+        roles: { planner: { model: "openai/legacy-global-model" } },
+      }));
+      expect(readGlobalAriaOverrides().roles?.planner?.model).toBe("openai/legacy-global-model");
+
+      // Canonical wins when both exist.
+      await writeFile(resolve(globalConfigDir, "aria.json"), JSON.stringify({
+        roles: { planner: { model: "openai/canonical-global-model" } },
+      }));
+      expect(readGlobalAriaOverrides().roles?.planner?.model).toBe("openai/canonical-global-model");
+    });
+
+    it("global model-only override clears the default variant", async () => {
       const home = await mkdtemp(resolve(tmpdir(), "aria-home-"));
       tempDirs.push(home);
       process.env.HOME = home;
@@ -373,7 +396,7 @@ describe("ARIA overrides", () => {
 
       const config = resolveAriaConfig(root);
       expect(config.roles.planner.model).toBe("openai/global-model");
-      expect(config.roles.planner.variant).toBe("xhigh"); // from default
+      expect(config.roles.planner.variant).toBeUndefined();
     });
 
     it("project overrides global per-field", async () => {
@@ -398,7 +421,7 @@ describe("ARIA overrides", () => {
       expect(config.roles.planner.variant).toBe("project-variant"); // project wins
     });
 
-    it("project model overrides global model", async () => {
+    it("project model-only override clears the lower variant", async () => {
       const home = await mkdtemp(resolve(tmpdir(), "aria-home-"));
       tempDirs.push(home);
       process.env.HOME = home;
@@ -417,7 +440,7 @@ describe("ARIA overrides", () => {
 
       const config = resolveAriaConfig(root);
       expect(config.roles.planner.model).toBe("openai/project-model"); // project wins
-      expect(config.roles.planner.variant).toBe("global-variant"); // inherited from global
+      expect(config.roles.planner.variant).toBeUndefined(); // project model clears the inherited variant
     });
   });
 

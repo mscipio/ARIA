@@ -61,6 +61,8 @@ const requiredPaths = [
   "skills/aria-paper-self-review/SKILL.md",
   "dist/lifecycle.js",
   "dist/lifecycle.d.ts",
+  "dist/model-config.js",
+  "dist/model-config.d.ts",
   // wiki-pipeline: implementation + supporting docs
   "wiki-pipeline/__init__.py",
   "wiki-pipeline/compiler.py",
@@ -203,6 +205,9 @@ console.log("smoke-package: ok", {
   }
   if (!helpOutput.includes("update")) {
     fail("aria --help does not mention update");
+  }
+  if (!helpOutput.includes("--configure")) {
+    fail("aria --help does not advertise setup --configure");
   }
 } finally {
   rmSync(tarball, { force: true });

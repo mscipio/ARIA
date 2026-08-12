@@ -57,6 +57,7 @@
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.1",
+    "@opencode-ai/sdk": "1.18.1",
     "proper-lockfile": "4.1.2"
   },
   "devDependencies": {

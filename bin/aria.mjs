@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // ARIA CLI — dependency-free, Node standard library only.
-// Supported: aria setup, aria update, aria deps sync, aria doctor, aria routes, aria --help
+// Supported: aria setup [--configure], aria update, aria deps sync, aria doctor, aria routes, aria --help
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -23,15 +23,16 @@ function usage() {
   return `ARIA CLI v${version}
 
 Usage:
-  aria setup       Register ARIA with OpenCode and synchronize dependencies
-  aria update      Pull latest changes, reinstall, and re-sync dependencies
-  aria deps sync   Synchronize required dependencies (Engram, Context7, CodeGraph)
-  aria doctor      Report status of required dependencies
-  aria routes      Print resolved model routes for each ARIA role
-  aria --help      Show this help message
-  aria -h          Show this help message
-  aria --version   Show version
-  aria -v          Show version`;
+  aria setup                 Register ARIA with OpenCode and synchronize dependencies
+  aria setup --configure     Then interactively configure ARIA role models
+  aria update                Pull latest changes, reinstall, and re-sync dependencies
+  aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
+  aria doctor                Report status of required dependencies
+  aria routes                Print resolved model routes for each ARIA role
+  aria --help                Show this help message
+  aria -h                    Show this help message
+  aria --version             Show version
+  aria -v                    Show version`;
 }
 
 async function main() {
@@ -72,11 +73,26 @@ async function main() {
   }
 
   if (command === "setup") {
+    // Only the intended setup option is accepted: --configure
+    const unexpected = args.slice(1).filter((arg) => arg !== "--configure");
+    if (unexpected.length > 0) {
+      console.error(`Unknown setup option: ${unexpected.join(" ")}`);
+      console.error("Usage: aria setup [--configure]");
+      return 1;
+    }
+    const configureRequested = args.includes("--configure");
+
     const { setup } = await import("../dist/lifecycle.js");
-    const result = await setup(import.meta.url);
+    const result = await setup(import.meta.url, undefined, undefined, {
+      configure: configureRequested,
+      worktree: process.cwd(),
+      input: process.stdin,
+      output: process.stdout,
+      tty: process.stdin.isTTY === true,
+    });
 
     if (result.setup) {
-      const { registration, sync } = result.setup;
+      const { registration, sync, model } = result.setup;
 
       // Registration
       if (registration.action === "registered") {
@@ -93,6 +109,19 @@ async function main() {
         console.log(`Sync: [OK] ${sync.output || "all dependencies synchronized"}`);
       } else if (sync.error) {
         console.error(`Sync: [FAIL] ${sync.error}`);
+      }
+
+      // Model configuration (optional third phase, present only when requested)
+      if (model) {
+        if (model.status === "configured") {
+          console.log(`Model configuration: [OK] ${model.message}`);
+        } else if (model.status === "unchanged") {
+          console.log(`Model configuration: unchanged. ${model.message}`);
+        } else if (model.status === "skipped") {
+          console.log(`Model configuration: skipped. ${model.message}`);
+        } else {
+          console.error(`Model configuration: [FAIL] ${model.error || model.message}`);
+        }
       }
     }
 
