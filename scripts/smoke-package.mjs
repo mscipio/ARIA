@@ -28,22 +28,46 @@ if (!entry?.filename) fail("npm pack did not return a tarball");
 const packedPaths = new Set((entry.files ?? []).map((file) => file.path.replaceAll("\\", "/")));
 const requiredPaths = [
   "package.json",
-  "bin/rdc.mjs",
+  "bin/aria.mjs",
   "dist/index.js",
   "dist/index.d.ts",
   "dist/register.js",
   "dist/deps.js",
   "dist/routes.js",
-  "defaults/review-driven-code.defaults.json",
-  "defaults/prompts/director.md",
+  "defaults/aria.defaults.json",
+  "defaults/prompts/coder.md",
   "defaults/prompts/planner.md",
   "defaults/prompts/architect.md",
   "defaults/prompts/implementer.md",
   "defaults/prompts/reviewer.md",
   "defaults/prompts/explorer.md",
   "defaults/prompts/visualizer.md",
+  "defaults/prompts/archivist.md",
+  "defaults/prompts/writer.md",
+  "skills/rdc-code-exploration/SKILL.md",
+  "skills/rdc-visual-analysis/SKILL.md",
+  "skills/rdc-implementation-planning/SKILL.md",
+  "skills/rdc-plan-review/SKILL.md",
+  "skills/rdc-scope-assessment/SKILL.md",
+  "skills/rdc-code-implementation/SKILL.md",
+  "skills/rdc-implementation-review/SKILL.md",
+  "skills/rdc-testing-discipline/SKILL.md",
+  "skills/aria-wiki-lookup/SKILL.md",
+  "skills/aria-wiki-archive/SKILL.md",
+  "skills/aria-wiki-compile/SKILL.md",
+  "skills/aria-academic-writing/SKILL.md",
+  "skills/aria-writing-anti-ai/SKILL.md",
+  "skills/aria-review-response/SKILL.md",
+  "skills/aria-paper-self-review/SKILL.md",
   "dist/lifecycle.js",
   "dist/lifecycle.d.ts",
+  // wiki-pipeline: implementation + supporting docs
+  "wiki-pipeline/__init__.py",
+  "wiki-pipeline/compiler.py",
+  "wiki-pipeline/run.py",
+  "wiki-pipeline/search.py",
+  "wiki-pipeline/docs/compile-workflow.md",
+  "wiki-pipeline/docs/instructions.md",
 ];
 for (const path of requiredPaths) {
   if (!packedPaths.has(path)) fail(`packed tarball is missing ${path}`);
@@ -60,7 +84,7 @@ for (const path of packedPaths) {
 }
 
 const tarball = join(packageRoot, entry.filename);
-const installRoot = mkdtempSync(join(tmpdir(), "review-driven-code-package-"));
+const installRoot = mkdtempSync(join(tmpdir(), "aria-package-"));
 const probePath = join(installRoot, "probe.mjs");
 
 try {
@@ -72,11 +96,11 @@ try {
 
   writeFileSync(
     probePath,
-    `const pluginModule = await import("review-driven-code");
+    `const pluginModule = await import("aria");
 const plugin = pluginModule.default;
 
-if (plugin?.id !== "review-driven-code") {
-  console.error("smoke-package: expected plugin id review-driven-code, got", plugin?.id);
+if (plugin?.id !== "aria") {
+  console.error("smoke-package: expected plugin id aria, got", plugin?.id);
   process.exit(1);
 }
 if (typeof plugin?.server !== "function") {
@@ -96,18 +120,30 @@ if (typeof hooks?.tool?.plan !== "object" && typeof hooks?.tool?.plan !== "funct
 
 const config = {};
 await hooks.config(config);
-const director = config.agent?.director;
-if (director?.mode !== "primary") {
-  console.error("smoke-package: director.mode is not primary");
+const coder = config.agent?.coder;
+if (coder?.mode !== "primary") {
+  console.error("smoke-package: coder.mode is not primary");
   process.exit(1);
 }
-if (director?.hidden === true) {
-  console.error("smoke-package: director must not be hidden");
+if (coder?.hidden === true) {
+  console.error("smoke-package: coder must not be hidden");
+  process.exit(1);
+}
+if (config.agent?.writer?.mode !== "primary") {
+  console.error("smoke-package: writer.mode is not primary");
+  process.exit(1);
+}
+if (config.agent?.["archivist"]?.mode !== "all") {
+  console.error("smoke-package: archivist.mode is not all");
+  process.exit(1);
+}
+if (!(config.skills?.paths ?? []).some((value) => value.endsWith("/aria/skills") || value.endsWith("\\aria\\skills"))) {
+  console.error("smoke-package: package skill path is not registered", config.skills?.paths);
   process.exit(1);
 }
 
 const agents = Object.keys(config.agent ?? {});
-const expected = ["director", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"];
+const expected = ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "writer", "archivist"];
 if (expected.some((name) => !agents.includes(name))) {
   console.error("smoke-package: missing agents", expected.filter((name) => !agents.includes(name)));
   process.exit(1);
@@ -128,45 +164,45 @@ console.log("smoke-package: ok", {
     env: process.env,
   });
 
-  // Verify rdc routes binary works from the installed package
-  const rdcBin = join(installRoot, "node_modules", ".bin", "rdc");
-  const routesOutput = execFileSync(process.execPath, [rdcBin, "routes"], {
+  // Verify aria routes binary works from the installed package
+  const ariaBin = join(installRoot, "node_modules", ".bin", "aria");
+  const routesOutput = execFileSync(process.execPath, [ariaBin, "routes"], {
     cwd: installRoot,
     encoding: "utf8",
     env: process.env,
   });
-  if (!routesOutput.includes("Resolved RDC role routes:")) {
-    fail("rdc routes did not produce expected header");
+  if (!routesOutput.includes("Resolved ARIA role routes:")) {
+    fail("aria routes did not produce expected header");
   }
-  if (!routesOutput.includes("director  opencode-go/deepseek-v4-pro")) {
-    fail("rdc routes did not include director role");
+  if (!routesOutput.includes("coder  opencode-go/deepseek-v4-pro")) {
+    fail("aria routes did not include coder role");
   }
 
-  // Verify rdc routes honors project-local review-driven-code.json from CWD
+  // Verify aria routes honors project-local aria.json from CWD
   writeFileSync(
-    join(installRoot, "review-driven-code.json"),
+    join(installRoot, "aria.json"),
     JSON.stringify({ roles: { explorer: { variant: "xhigh" } } }),
   );
-  const overrideOutput = execFileSync(process.execPath, [rdcBin, "routes"], {
+  const overrideOutput = execFileSync(process.execPath, [ariaBin, "routes"], {
     cwd: installRoot,
     encoding: "utf8",
     env: process.env,
   });
   if (!overrideOutput.includes("explorer  opencode-go/deepseek-v4-flash (xhigh)")) {
-    fail("rdc routes did not reflect project-local review-driven-code.json override");
+    fail("aria routes did not reflect project-local aria.json override");
   }
 
   // Verify installed-package help lists setup and update
-  const helpOutput = execFileSync(process.execPath, [rdcBin, "--help"], {
+  const helpOutput = execFileSync(process.execPath, [ariaBin, "--help"], {
     cwd: installRoot,
     encoding: "utf8",
     env: process.env,
   });
   if (!helpOutput.includes("setup")) {
-    fail("rdc --help does not mention setup");
+    fail("aria --help does not mention setup");
   }
   if (!helpOutput.includes("update")) {
-    fail("rdc --help does not mention update");
+    fail("aria --help does not mention update");
   }
 } finally {
   rmSync(tarball, { force: true });

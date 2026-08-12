@@ -1,8 +1,8 @@
-import type { ReviewDrivenCodePluginOptions, ReviewDrivenCodeProjectOverrides, ResolvedReviewDrivenCodeConfig } from "./types.js";
+import type { AriaPluginOptions, AriaProjectOverrides, ResolvedAriaConfig } from "./types.js";
 declare class ConfigValidationError extends Error {
     constructor(filePath: string, path: string, got: unknown, want: string);
 }
-export declare function parseOverrides(raw: unknown, filePath?: string): ReviewDrivenCodeProjectOverrides;
-export declare function resolveReviewDrivenCodeConfig(worktree: string, options?: ReviewDrivenCodePluginOptions, metaUrl?: string): ResolvedReviewDrivenCodeConfig;
+export declare function parseOverrides(raw: unknown, filePath?: string): AriaProjectOverrides;
+export declare function resolveAriaConfig(worktree: string, options?: AriaPluginOptions, metaUrl?: string): ResolvedAriaConfig;
 export { ConfigValidationError };
 //# sourceMappingURL=overrides.d.ts.map

@@ -1,20 +1,22 @@
 export type RoleName =
-  | "director"
+  | "coder"
   | "explorer"
   | "visualizer"
   | "planner"
   | "architect"
   | "implementer"
-  | "reviewer";
+  | "reviewer"
+  | "archivist"
+  | "writer";
 
 export interface RoleDefaults {
   model: string;
   variant?: string;
-  mode: "primary" | "subagent";
+  mode: "primary" | "subagent" | "all";
   promptFile: string;
 }
 
-export interface ReviewDrivenCodeDefaults {
+export interface AriaDefaults {
   roles: Record<RoleName, RoleDefaults>;
 }
 
@@ -23,11 +25,11 @@ export interface RoleOverride {
   variant?: string;
 }
 
-export interface ReviewDrivenCodePluginOptions {
+export interface AriaPluginOptions {
   configPath?: string;
 }
 
-export interface ReviewDrivenCodeProjectOverrides {
+export interface AriaProjectOverrides {
   roles?: Partial<Record<RoleName, RoleOverride>>;
 }
 
@@ -35,6 +37,6 @@ export interface ResolvedRoleConfig extends RoleDefaults {
   promptText: string;
 }
 
-export interface ResolvedReviewDrivenCodeConfig {
+export interface ResolvedAriaConfig {
   roles: Record<RoleName, ResolvedRoleConfig>;
 }

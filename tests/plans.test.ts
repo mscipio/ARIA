@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 async function project(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "review-driven-code-plans-"));
+  const root = await mkdtemp(join(tmpdir(), "aria-plans-"));
   tempDirs.push(root);
   return root;
 }
@@ -48,6 +48,7 @@ describe("shared Markdown plan", () => {
     expect(plan.tasks.map((task) => task.id)).toEqual(["T001", "T002"]);
 
     const active = await readActivePlan(root);
+    expect(active?.markdown).toContain("<!-- aria-rdc-plan");
     expect(active?.markdown).toContain("# Plan: Feature");
     expect(active?.markdown).toContain("- [ ] **T001** Implement behavior");
     expect(active?.markdown).toContain("Approval: **pending**");
@@ -270,11 +271,11 @@ describe("shared Markdown plan", () => {
       .rejects.toThrow(/plan id conflict/);
   });
 
-  it("does not follow a symlinked .code-ensemble directory", async () => {
+  it("does not follow a symlinked .aria directory", async () => {
     const root = await project();
     const outside = await project();
     try {
-      await symlink(outside, join(root, ".code-ensemble"), "junction");
+      await symlink(outside, join(root, ".aria"), "junction");
     } catch (error) {
       if (["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
       throw error;
@@ -284,7 +285,7 @@ describe("shared Markdown plan", () => {
 
   it("rejects creating a second active plan", async () => {
     const root = await project();
-    await mkdir(join(root, ".code-ensemble"), { recursive: true });
+    await mkdir(join(root, ".aria/rdc"), { recursive: true });
     await createPlan(root, "First", ["Task"]);
     await expect(createPlan(root, "Second", ["Task"])).rejects.toThrow(/already exists/);
   });
@@ -292,7 +293,7 @@ describe("shared Markdown plan", () => {
   it("rejects manipulated task identifiers", async () => {
     const root = await project();
     await createPlan(root, "Tampered", ["Task"]);
-    const file = join(root, ".code-ensemble", "TASKS.md");
+    const file = join(root, ".aria/rdc", "TASKS.md");
     const markdown = await readFile(file, "utf8");
     await writeFile(file, markdown.replace('"id":"T001"', '"id":"T099"'), "utf8");
     await expect(readActivePlan(root)).rejects.toThrow(/invalid task/);
@@ -302,7 +303,7 @@ describe("shared Markdown plan", () => {
     const root = await project();
     const created = await createPlan(root, "Collision", ["Task"]);
     const completed = await approveAndCompleteAll(root, created);
-    const archiveDirectory = join(root, ".code-ensemble", "plans");
+    const archiveDirectory = join(root, ".aria/rdc", "plans");
     await mkdir(archiveDirectory);
     await writeFile(join(archiveDirectory, `${created.id}.md`), "existing archive", "utf8");
 
@@ -321,7 +322,7 @@ describe("shared Markdown plan", () => {
       revision: completed.revision + 1,
       updatedAt: new Date().toISOString(),
     };
-    const archiveDirectory = join(root, ".code-ensemble", "plans");
+    const archiveDirectory = join(root, ".aria/rdc", "plans");
     await mkdir(archiveDirectory);
     await writeFile(join(archiveDirectory, `${created.id}.md`), renderPlan(archivedPlan), "utf8");
 
@@ -342,7 +343,7 @@ describe("shared Markdown plan", () => {
       approval: "pending", // wrong — should be "approved"
       updatedAt: new Date().toISOString(),
     };
-    const archiveDirectory = join(root, ".code-ensemble", "plans");
+    const archiveDirectory = join(root, ".aria/rdc", "plans");
     await mkdir(archiveDirectory);
     await writeFile(join(archiveDirectory, `${created.id}.md`), renderPlan(mismatchedApproval), "utf8");
 
@@ -357,7 +358,7 @@ describe("shared Markdown plan", () => {
     const root = await project();
     const created = await createPlan(root, "Cancellation", ["Task"]);
     const approved = await approvePlan(root, created.id, created.revision);
-    const file = join(root, ".code-ensemble", "TASKS.md");
+    const file = join(root, ".aria/rdc", "TASKS.md");
     let release!: () => void;
     let acquired!: () => void;
     const acquiredLock = new Promise<void>((resolve) => {
@@ -391,8 +392,8 @@ describe("shared Markdown plan", () => {
 
   it("allows only one writer to reclaim a stale lock", async () => {
     const root = await project();
-    const stateDirectory = join(root, ".code-ensemble");
-    await mkdir(stateDirectory);
+    const stateDirectory = join(root, ".aria/rdc");
+    await mkdir(stateDirectory, { recursive: true });
     const lock = join(stateDirectory, "TASKS.md.lock");
     await mkdir(lock);
     const stale = new Date(Date.now() - 10_000);
@@ -406,9 +407,48 @@ describe("shared Markdown plan", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
   });
 
+  it("migrates legacy .code-ensemble state to .aria/rdc on first Plan access", async () => {
+    const root = await project();
+    const legacy = join(root, ".code-ensemble");
+    const legacyPlans = join(legacy, "plans");
+    await mkdir(legacyPlans, { recursive: true });
+
+    const plan: SharedPlan = {
+      version: 3,
+      id: "7e3f1a92-0000-4000-8000-000000000000",
+      revision: 1,
+      status: "active",
+      approval: "pending",
+      title: "Legacy plan",
+      createdAt: "2026-07-20T12:00:00.000Z",
+      updatedAt: "2026-07-20T12:00:00.000Z",
+      tasks: [{ id: "T001", text: "Task", status: "pending" }],
+    };
+    const legacyMarkdown = renderPlan(plan).replace("<!-- aria-rdc-plan", "<!-- code-ensemble-plan");
+    await writeFile(join(legacy, "TASKS.md"), legacyMarkdown, "utf8");
+    await writeFile(join(legacyPlans, "old.md"), "legacy archive", "utf8");
+
+    const active = await readActivePlan(root);
+    expect(active?.plan).toMatchObject({ id: plan.id, title: "Legacy plan" });
+    expect(await readFile(join(root, ".aria", "rdc", "TASKS.md"), "utf8")).toContain("code-ensemble-plan");
+    expect(await readFile(join(root, ".aria", "rdc", "plans", "old.md"), "utf8")).toBe("legacy archive");
+    await expect(readFile(join(root, ".code-ensemble", "TASKS.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prefers existing .aria/rdc state and leaves legacy state untouched", async () => {
+    const root = await project();
+    const canonical = await createPlan(root, "Canonical", ["Task"]);
+    await mkdir(join(root, ".code-ensemble"), { recursive: true });
+    await writeFile(join(root, ".code-ensemble", "sentinel"), "legacy", "utf8");
+
+    const active = await readActivePlan(root);
+    expect(active?.plan.id).toBe(canonical.id);
+    expect(await readFile(join(root, ".code-ensemble", "sentinel"), "utf8")).toBe("legacy");
+  });
+
   it("rejects schema v2 plans", async () => {
     const root = await project();
-    await mkdir(join(root, ".code-ensemble"), { recursive: true });
+    await mkdir(join(root, ".aria/rdc"), { recursive: true });
     const v2Plan = {
       version: 2,
       id: "7e3f1a92-0000-4000-8000-000000000000",
@@ -421,13 +461,13 @@ describe("shared Markdown plan", () => {
     };
     const metadata = `<!-- code-ensemble-plan\n${JSON.stringify(v2Plan)}\n-->\n`;
     const markdown = `${metadata}\n# Plan: Old Plan\n\nStatus: **active**\nRevision: **1**\n\n## Tasks\n\n- [ ] **T001** Task\n`;
-    await writeFile(join(root, ".code-ensemble", "TASKS.md"), markdown, "utf8");
+    await writeFile(join(root, ".aria/rdc", "TASKS.md"), markdown, "utf8");
     await expect(readActivePlan(root)).rejects.toThrow(/invalid plan data/);
   });
 
   it("rejects a closed plan whose approval is not approved", async () => {
     const root = await project();
-    await mkdir(join(root, ".code-ensemble"), { recursive: true });
+    await mkdir(join(root, ".aria/rdc"), { recursive: true });
     const closedPlan: SharedPlan = {
       version: 3,
       id: "7e3f1a92-0000-4000-8000-000000000000",
@@ -441,7 +481,7 @@ describe("shared Markdown plan", () => {
     };
     const metadata = `<!-- code-ensemble-plan\n${JSON.stringify(closedPlan)}\n-->\n`;
     const markdown = `${metadata}\n# Plan: Closed but pending\n\nStatus: **closed**\nApproval: **pending**\nRevision: **2**\n\n## Tasks\n\n- [x] **T001** Task\n`;
-    await writeFile(join(root, ".code-ensemble", "TASKS.md"), markdown, "utf8");
+    await writeFile(join(root, ".aria/rdc", "TASKS.md"), markdown, "utf8");
     await expect(readActivePlan(root)).rejects.toThrow(/invalid plan data/);
   });
 });

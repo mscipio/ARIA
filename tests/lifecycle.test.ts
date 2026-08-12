@@ -79,7 +79,7 @@ function collectingExecutor(
   return { executor, calls };
 }
 
-/** Build a fixture checkout directory with bin/rdc.mjs. When `name` is given, the checkout is a subdirectory with that name inside the temp dir. */
+/** Build a fixture checkout directory with bin/aria.mjs. When `name` is given, the checkout is a subdirectory with that name inside the temp dir. */
 async function makeFixtureCheckout(name?: string): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "rdc-lifecycle-"));
   tempDirs.push(root);
@@ -87,13 +87,13 @@ async function makeFixtureCheckout(name?: string): Promise<string> {
   if (name) await mkdir(checkoutDir, { recursive: true });
   const binDir = resolve(checkoutDir, "bin");
   await mkdir(binDir, { recursive: true });
-  await writeFile(resolve(binDir, "rdc.mjs"), "#!/usr/bin/env node\nconsole.log('ok');");
+  await writeFile(resolve(binDir, "aria.mjs"), "#!/usr/bin/env node\nconsole.log('ok');");
   return checkoutDir;
 }
 
 /** Build a file:// URL for a fixture binary */
 function binaryUrl(checkout: string): string {
-  return pathToFileURL(resolve(checkout, "bin", "rdc.mjs")).href;
+  return pathToFileURL(resolve(checkout, "bin", "aria.mjs")).href;
 }
 
 /** Introspection output with the given plugin registered (real OpenCode format) */
@@ -161,10 +161,10 @@ describe("resolveCheckout", () => {
     // Create a deeper nested structure
     const nestedBin = resolve(checkout, "nested", "bin");
     await mkdir(nestedBin, { recursive: true });
-    await writeFile(resolve(nestedBin, "rdc.mjs"), "code");
+    await writeFile(resolve(nestedBin, "aria.mjs"), "code");
     // resolveCheckout goes binDir -> parent = checkout, regardless of nesting
     // from the task spec: parent of parent of bin/
-    const url = pathToFileURL(resolve(nestedBin, "rdc.mjs")).href;
+    const url = pathToFileURL(resolve(nestedBin, "aria.mjs")).href;
     const resolved = await resolveCheckout(url);
     expect(resolved).toBe(resolve(checkout, "nested"));
   });
@@ -660,7 +660,7 @@ describe("setup return values for CLI formatting", () => {
 describe("update", () => {
   it("completes update successfully: clean tree, upstream, pull, npm ci, handoff", async () => {
     const checkout = await makeFixtureCheckout();
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
 
     const { executor, calls } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
@@ -804,7 +804,7 @@ describe("update", () => {
 
   it("captures non-zero handoff exit status with stdout and stderr", async () => {
     const checkout = await makeFixtureCheckout();
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
 
     const { executor, calls } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
@@ -844,7 +844,7 @@ describe("update", () => {
 
   it("handles spawn errors (process fails to start)", async () => {
     const checkout = await makeFixtureCheckout();
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
 
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
@@ -864,7 +864,7 @@ describe("update", () => {
 
   it("preserves handoff stdout and stderr in success", async () => {
     const checkout = await makeFixtureCheckout();
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
 
     const executor = mockExecutor({
       "git status --porcelain": { stdout: "" },
@@ -883,7 +883,7 @@ describe("update", () => {
 
   it("resolves update checkout with spaces in path", async () => {
     const checkout = await makeFixtureCheckout("my project (v2)");
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
@@ -904,7 +904,7 @@ describe("update", () => {
 describe("update return values for CLI formatting", () => {
   it("success returns all stages ok with handoff stdout", async () => {
     const checkout = await makeFixtureCheckout();
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
@@ -936,7 +936,7 @@ describe("update return values for CLI formatting", () => {
 
   it("handoff failure returns exit code and stderr", async () => {
     const checkout = await makeFixtureCheckout();
-    const binPath = resolve(checkout, "bin", "rdc.mjs");
+    const binPath = resolve(checkout, "bin", "aria.mjs");
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },

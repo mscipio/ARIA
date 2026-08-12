@@ -1,13 +1,17 @@
 import { lstat, open, rename, unlink, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 
-import { safeProjectFile, verifySafeParent, withFileLock } from "./paths.js";
+import { canonicalWorktree, ensureSafeDirectory, safeProjectFile, verifySafeParent, withFileLock } from "./paths.js";
 
-const ACTIVE_PLAN_PATH = ".code-ensemble/TASKS.md";
+const ARIA_RDC_STATE_DIR = ".aria/rdc";
+const LEGACY_STATE_DIR = ".code-ensemble";
+const ACTIVE_PLAN_PATH = `${ARIA_RDC_STATE_DIR}/TASKS.md`;
 const MAX_PLAN_BYTES = 1024 * 1024;
 const MAX_TASKS = 100;
 const MAX_LINE_LENGTH = 4_000;
-const METADATA_START = "<!-- code-ensemble-plan\n";
+const METADATA_START = "<!-- aria-rdc-plan\n";
+const LEGACY_METADATA_START = "<!-- code-ensemble-plan\n";
 const METADATA_END = "\n-->\n";
 const PLAN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -69,10 +73,13 @@ export function renderPlan(plan: SharedPlan): string {
 }
 
 function parsePlan(markdown: string): SharedPlan {
-  if (!markdown.startsWith(METADATA_START)) throw new Error("TASKS.md has invalid plan metadata");
-  const end = markdown.indexOf(METADATA_END, METADATA_START.length);
+  const metadataStart = markdown.startsWith(METADATA_START)
+    ? METADATA_START
+    : (markdown.startsWith(LEGACY_METADATA_START) ? LEGACY_METADATA_START : undefined);
+  if (!metadataStart) throw new Error("TASKS.md has invalid plan metadata");
+  const end = markdown.indexOf(METADATA_END, metadataStart.length);
   if (end < 0) throw new Error("TASKS.md has incomplete plan metadata");
-  const value = JSON.parse(markdown.slice(METADATA_START.length, end)) as Partial<SharedPlan>;
+  const value = JSON.parse(markdown.slice(metadataStart.length, end)) as Partial<SharedPlan>;
   if (
     value.version !== 3 ||
     typeof value.id !== "string" ||
@@ -139,7 +146,44 @@ async function readBounded(filePath: string): Promise<string> {
   }
 }
 
+async function migrateLegacyState(worktree: string): Promise<void> {
+  const root = await canonicalWorktree(worktree);
+  const canonicalDir = resolve(root, ARIA_RDC_STATE_DIR);
+
+  try {
+    const info = await lstat(canonicalDir);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error(`Path is not a safe directory: ${canonicalDir}`);
+    }
+    return;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const legacyDir = resolve(root, LEGACY_STATE_DIR);
+  try {
+    const info = await lstat(legacyDir);
+    if (info.isSymbolicLink() || !info.isDirectory()) {
+      throw new Error(`Path is not a safe directory: ${legacyDir}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+
+  await ensureSafeDirectory(root, resolve(root, ".aria"), true);
+  try {
+    await rename(legacyDir, canonicalDir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+    const current = await lstat(canonicalDir).catch(() => undefined);
+    if (!current || current.isSymbolicLink() || !current.isDirectory()) throw error;
+  }
+}
+
 async function activePlanFile(worktree: string): Promise<{ root: string; path: string }> {
+  await migrateLegacyState(worktree);
   return safeProjectFile(worktree, ACTIVE_PLAN_PATH, { createParent: true });
 }
 
@@ -396,7 +440,7 @@ export async function closePlan(
       updatedAt: new Date().toISOString(),
     };
     const markdown = renderPlan(closed);
-    const archive = await safeProjectFile(worktree, `.code-ensemble/plans/${closed.id}.md`, { createParent: true });
+    const archive = await safeProjectFile(worktree, `${ARIA_RDC_STATE_DIR}/plans/${closed.id}.md`, { createParent: true });
     await verifySafeParent(archive.root, archive.path);
     let archiveHandle: Awaited<ReturnType<typeof open>> | undefined;
     let createdArchive = false;
