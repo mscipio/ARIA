@@ -6,6 +6,7 @@ export type RoleName =
   | "architect"
   | "implementer"
   | "reviewer"
+  | "researcher"
   | "archivist"
   | "writer";
 

@@ -7,6 +7,7 @@ const ROLES = [
     "architect",
     "implementer",
     "reviewer",
+    "researcher",
     "archivist",
     "writer",
 ];

@@ -16,9 +16,9 @@ describe("package-owned ARIA skills", () => {
       .map((entry) => entry.name)
       .sort();
 
-    expect(names).toHaveLength(15);
+    expect(names).toHaveLength(16);
     expect(names.filter((name) => name.startsWith("rdc-"))).toHaveLength(8);
-    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(7);
+    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(8);
     for (const name of names) {
       expect(name).toMatch(/^(rdc|aria)-/);
       expect(skill(name)).toContain(`name: ${name}`);
@@ -63,5 +63,29 @@ describe("package-owned ARIA skills", () => {
     expect(skill("aria-review-response")).toContain("Defend");
     expect(skill("aria-paper-self-review")).toContain("Claim audit");
     expect(skill("aria-paper-self-review")).toContain("[CITATION NEEDED]");
+  });
+
+  it("keeps the research evidence skill bounded to ARIA's evidence workflow", () => {
+    const research = skill("aria-research-evidence");
+    // Evidence ladder and provenance/labeling rules.
+    expect(research).toContain("Evidence ladder");
+    expect(research).toContain("Inspected full text");
+    expect(research).toContain("Passage with expanded context");
+    expect(research).toContain("Abstract / snippet");
+    expect(research).toContain("primary/authoritative sources");
+    expect(research).toContain("library-vs-external provenance");
+    // Passage-context expansion before passage-specific claims.
+    expect(research).toContain("get_passage_context");
+    // Disagreement, uncertainty, and gap reporting with structured handoff.
+    expect(research).toContain("Report disagreement, uncertainty, and gaps");
+    expect(research).toContain("structured evidence handoff");
+    // ZotPilot-aware without nested user-level workflows or new backends.
+    expect(research).toContain("ZotPilot MCP research tools directly");
+    expect(research).not.toContain("load `ztp-research`");
+    expect(research).not.toContain("load `ztp-review`");
+    expect(research).toContain("do not spawn nested researcher subagents");
+    expect(research).toContain("do not install a second Zotero backend or MCP");
+    // No automatic Engram persistence.
+    expect(research).toContain("Do not persist anything to Engram automatically");
   });
 });

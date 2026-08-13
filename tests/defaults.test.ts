@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("ARIA defaults", () => {
-  it("contains exactly the nine supported agents", () => {
+  it("contains exactly the ten supported agents", () => {
     const defaults = loadDefaultConfig();
     expect(Object.keys(defaults.roles)).toEqual([
       "coder",
@@ -25,11 +25,18 @@ describe("ARIA defaults", () => {
       "architect",
       "implementer",
       "reviewer",
+      "researcher",
       "archivist",
       "writer",
     ]);
     expect(defaults.roles.planner).not.toHaveProperty("fallbacks");
     expect(defaults.roles.architect).not.toHaveProperty("fallbacks");
+    expect(defaults.roles.researcher).toEqual({
+      model: "openai/gpt-5.6-sol",
+      variant: "medium",
+      mode: "all",
+      promptFile: "prompts/researcher.md",
+    });
   });
 
   it("merges model and variant overrides", async () => {
@@ -68,6 +75,7 @@ describe("ARIA defaults", () => {
     expect(config.roles.coder.mode).toBe("primary");
     expect(config.roles.writer.mode).toBe("primary");
     expect(config.roles["archivist"].mode).toBe("all");
+    expect(config.roles.researcher.mode).toBe("all");
   });
 
   it("coder preserves the human approval gate", () => {
@@ -156,6 +164,10 @@ describe("ARIA defaults", () => {
       expect(prompt).toContain("Engram is not authoritative transactional workflow state");
     }
 
+    // researcher has its own ZotPilot/Context7-specific guidance, not the
+    // shared CodeGraph/Engram guidance.
+    expect(config.roles.researcher.promptText).not.toContain("## MCP Guidance");
+    expect(config.roles.researcher.promptText).not.toContain("CodeGraph provides codebase intelligence");
     expect(config.roles["archivist"].promptText).not.toContain("## MCP Guidance");
     expect(config.roles.writer.promptText).not.toContain("## MCP Guidance");
   });
@@ -182,13 +194,39 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("load `aria-paper-self-review`");
     expect(prompt).toContain("task `archivist`");
     expect(prompt).toContain("read-only lookup");
-    expect(prompt).toContain("When a `researcher` role becomes available");
+    expect(prompt).toContain("task `researcher`");
+    expect(prompt).toContain("Ask for evidence, not manuscript prose");
     expect(prompt).toContain("[RESEARCH NEEDED]");
     expect(prompt).toContain("[CITATION NEEDED]");
-    expect(prompt).toContain("Do not perform literature research yourself");
+    expect(prompt).toContain("Do not perform literature research or Zotero work yourself");
+    expect(prompt).not.toContain("When a `researcher` role becomes available");
     expect(prompt).not.toContain("## Academic journal style");
     expect(prompt).not.toContain("## Anti-template prose discipline");
     expect(prompt).not.toContain("## MCP Guidance");
+  });
+
+  it("researcher prompt defines direct/delegable evidence research with hard boundaries", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles.researcher.promptText;
+    expect(prompt).toContain("`researcher` role");
+    expect(prompt).toContain("Load `aria-research-evidence`");
+    expect(prompt).toContain("Distinguish library evidence");
+    expect(prompt).toContain("primary/authoritative sources");
+    expect(prompt).toContain("[full text]");
+    expect(prompt).toContain("[abstract/snippet]");
+    expect(prompt).toContain("[EVIDENCE GAP]");
+    expect(prompt).toContain("ZotPilot MCP research/read tools directly");
+    expect(prompt).toContain("Zotero mutation is approval-gated");
+    expect(prompt).toContain("explicit user approval");
+    expect(prompt).toContain("Do not persist anything to Engram automatically");
+    expect(prompt).toContain("Do not draft manuscript or rebuttal prose");
+    expect(prompt).toContain("do not spawn nested researcher subagents");
+    expect(prompt).toContain("You cannot edit project files");
+    // No automatic mutation or unsupported integration promises; user-level
+    // ztp workflows are named only as a boundary, not invoked.
+    expect(prompt).not.toMatch(/automatically (ingest|mutate|update|write)/);
+    expect(prompt).toContain("Do not delegate every request to user-level `ztp-research`/`ztp-review` workflows");
+    expect(prompt).not.toContain("load `ztp-research`");
+    expect(prompt).not.toContain("load `ztp-review`");
   });
 
   it("contains no obsolete retrieval-only Engram wording", () => {

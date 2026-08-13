@@ -112,6 +112,46 @@ const REQUIRED_MCP_PERMISSION: AgentPermission = {
   "codegraph_*": "allow",
 };
 
+// Verified ZotPilot MCP inventory (environment-provided; not part of this
+// repository's dependencies). Verified against zotpilot 0.5.3 in this
+// environment: the FastMCP server is named `zotpilot` (`zotpilot mcp serve`),
+// and OpenCode exposes its tools as `zotpilot_<tool>`, the same server-name
+// prefix convention used for engram/context7/codegraph above. Tool IDs were
+// enumerated from the live server's `tools/list` response on 2026-08-13:
+// 14 research/read tools and 8 mutation tools (all others are unlisted and
+// fall back to the base `*` deny — no wildcard ZotPilot grant is encoded).
+const ZOTPILOT_MCP_READ: AgentPermission = {
+  "zotpilot_search_papers": "allow",
+  "zotpilot_search_topic": "allow",
+  "zotpilot_search_boolean": "allow",
+  "zotpilot_search_formulas": "allow",
+  "zotpilot_advanced_search": "allow",
+  "zotpilot_search_academic_databases": "allow",
+  "zotpilot_browse_library": "allow",
+  "zotpilot_get_paper_details": "allow",
+  "zotpilot_get_notes": "allow",
+  "zotpilot_get_annotations": "allow",
+  "zotpilot_get_citations": "allow",
+  "zotpilot_get_passage_context": "allow",
+  "zotpilot_get_index_stats": "allow",
+  "zotpilot_get_paper_for_tutor": "allow",
+};
+
+// ZotPilot mutation tools are approval-gated (`ask`); the permission model
+// supports per-tool ask (OpenCode PermissionAction: allow | deny | ask). The
+// researcher prompt additionally requires explicit user approval before any
+// Zotero mutation.
+const ZOTPILOT_MCP_MUTATION: AgentPermission = {
+  "zotpilot_index_library": "ask",
+  "zotpilot_index_formulas": "ask",
+  "zotpilot_ingest_by_identifiers": "ask",
+  "zotpilot_create_note": "ask",
+  "zotpilot_manage_tags": "ask",
+  "zotpilot_manage_collections": "ask",
+  "zotpilot_annotate_pdf": "ask",
+  "zotpilot_save_reading_persona": "ask",
+};
+
 function skillAccess(...names: string[]): Record<string, PermissionAction> {
   return Object.fromEntries([
     ["*", "deny"],
@@ -176,6 +216,27 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     skill: skillAccess("rdc-implementation-review", "rdc-testing-discipline"),
     plan: "allow",
   },
+  researcher: {
+    ...BASE_PERMISSION,
+    read: PROTECTED_READ,
+    glob: "allow",
+    grep: "allow",
+    list: "allow",
+    webfetch: "allow",
+    websearch: "allow",
+    "context7_*": "allow",
+    ...ZOTPILOT_MCP_READ,
+    ...ZOTPILOT_MCP_MUTATION,
+    skill: skillAccess("aria-research-evidence"),
+    // Deny-by-default shell access: only the zotpilot executable family is
+    // approval-gated as a fallback/administrative path, never allowed and
+    // never the primary ZotPilot interface (the MCP tools are).
+    bash: {
+      "*": "deny",
+      "zotpilot": "ask",
+      "zotpilot *": "ask",
+    },
+  },
   writer: {
     ...BASE_PERMISSION,
     read: PROTECTED_READ,
@@ -188,6 +249,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     task: {
       "*": "deny",
       "archivist": "allow",
+      "researcher": "allow",
     },
   },
   "archivist": {
@@ -276,6 +338,7 @@ function agentDefinitions(
     architect: "allow",
     implementer: "allow",
     reviewer: "allow",
+    researcher: "allow",
     "archivist": "allow",
   };
   const definitions: Record<string, unknown> = {
@@ -300,9 +363,11 @@ function agentDefinitions(
     definitions[role] = {
       description: role === "writer"
         ? "Primary scientific, academic, and professional writing agent."
-        : role === "archivist"
-          ? "Direct or delegated specialist for curated Wiki lookup and maintenance."
-          : `${role} coding specialist for ARIA Review-Driven Coding.`,
+        : role === "researcher"
+          ? "Direct or delegated specialist for external literature and evidence research."
+          : role === "archivist"
+            ? "Direct or delegated specialist for curated Wiki lookup and maintenance."
+            : `${role} coding specialist for ARIA Review-Driven Coding.`,
       mode: roleConfig.mode,
       model: roleConfig.model,
       ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),

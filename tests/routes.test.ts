@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("formatRoutes", () => {
-  it("includes all nine roles with their built-in defaults when no override file exists", async () => {
+  it("includes all ten roles with their built-in defaults when no override file exists", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
     tempDirs.push(root);
     const output = formatRoutes(root);
@@ -24,8 +24,31 @@ planner  openai/gpt-5.6-terra (xhigh)
 architect  openai/gpt-5.6-sol (xhigh)
 implementer  opencode-go/glm-5.2
 reviewer  opencode-go/deepseek-v4-pro
+researcher  openai/gpt-5.6-sol (medium)
 archivist  opencode-go/deepseek-v4-pro
 writer  openai/gpt-5.6-sol (medium)`);
+  });
+
+  it("reflects researcher model override and clears the inherited default variant", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
+    tempDirs.push(root);
+    await writeFile(resolve(root, "aria.json"), JSON.stringify({
+      roles: { researcher: { model: "openai/gpt-5.6-terra" } },
+    }));
+    const output = formatRoutes(root);
+    expect(output).toContain("researcher  openai/gpt-5.6-terra");
+    expect(output).not.toContain("researcher  openai/gpt-5.6-terra (medium)");
+    expect(output).not.toContain("researcher  openai/gpt-5.6-sol");
+  });
+
+  it("reflects researcher variant override while inheriting model from defaults", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
+    tempDirs.push(root);
+    await writeFile(resolve(root, "aria.json"), JSON.stringify({
+      roles: { researcher: { variant: "xhigh" } },
+    }));
+    const output = formatRoutes(root);
+    expect(output).toContain("researcher  openai/gpt-5.6-sol (xhigh)");
   });
 
   it("reflects model override and clears the inherited default variant", async () => {

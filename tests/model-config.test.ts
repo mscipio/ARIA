@@ -67,6 +67,7 @@ const ROLES = [
   "architect",
   "implementer",
   "reviewer",
+  "researcher",
   "archivist",
   "writer",
 ] as const;
@@ -342,7 +343,7 @@ describe("discoverAvailableModels", () => {
 // ---------------------------------------------------------------------------
 
 describe("configureModels", () => {
-  it("shows the four-layer precedence for all nine roles and the simplified menu", async () => {
+  it("shows the four-layer precedence for all ten roles and the simplified menu", async () => {
     await makeHome(); // isolate from the real user global config
     const worktree = await makeWorktree();
     const { input } = scriptedInput([""]); // Enter at the top menu keeps current
@@ -365,10 +366,15 @@ describe("configureModels", () => {
     for (const role of ROLES) {
       expect(text).toContain(`  ${role}\n    default:`);
     }
-    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(9);
-    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(9);
-    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(9);
-    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(9);
+    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(10);
+    // researcher appears between reviewer and archivist with its packaged
+    // sol/medium default (absent global/project layers render as dashes).
+    expect(text).toContain(
+      "  researcher\n    default:   openai/gpt-5.6-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-5.6-sol (medium)\x1b[0m [not listed by OpenCode]",
+    );
     // Absent layers render as plain hyphens; coder resolves to its ARIA
     // default, whose value is bolded in TTY output.
     expect(text).toContain(
@@ -490,6 +496,36 @@ describe("configureModels", () => {
     expect(await readWrittenRoles(home)).toEqual({
       planner: { model: "openai/gpt-5.6-terra", variant: "high" },
     });
+  });
+
+  it("configures researcher and clears the inherited variant on a model-only change", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    // deepseek-v4-pro reports no variants, so choosing it clears the
+    // researcher default's inherited medium variant.
+    const { input } = scriptedInput(["2", "researcher", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    expect(result.changedRoles).toEqual(["researcher"]);
+    expect(lines.join("\n")).toContain("Roles available: coder, explorer, visualizer, planner, architect, implementer, reviewer, researcher, archivist, writer");
+    expect(await readWrittenRoles(home)).toEqual({
+      researcher: { model: "opencode-go/deepseek-v4-pro" },
+    });
+
+    // Model-only override clears the inherited variant as existing behavior
+    // requires; other roles keep their packaged defaults.
+    const resolved = resolveAriaConfig(worktree);
+    expect(resolved.roles.researcher.model).toBe("opencode-go/deepseek-v4-pro");
+    expect(resolved.roles.researcher.variant).toBeUndefined();
+    expect(resolved.roles.writer.variant).toBe("medium");
   });
 
   it("shows numbered choices for a substring search and honors no-variant", async () => {
@@ -927,7 +963,7 @@ describe("configureModels", () => {
     expect(result.status).toBe("unchanged");
     const text = lines.join("\n");
     const rule = `  ${"-".repeat(60)}`;
-    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(8); // between the nine roles
+    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(9); // between the ten roles
     expect(text).toContain(`${rule}\n  explorer`); // after coder's block
     expect(text).not.toContain(`${rule}\n\nWhat would you like to do?`); // never after writer
     // The single-role configuration view starts after the roles prompt line.
@@ -953,7 +989,7 @@ describe("configureModels", () => {
     expect(text).toContain("resolved:  \x1b[1mopencode-go/deepseek-v4-pro\x1b[0m");
     // Exactly one bold segment per role (the resolved value); labels and other
     // layers stay unbolded, and no warnings render here.
-    expect(text.split("\x1b[1m").length - 1).toBe(9);
+    expect(text.split("\x1b[1m").length - 1).toBe(10);
     expect(text.split("\x1b[31m").length - 1).toBe(0);
   });
 
