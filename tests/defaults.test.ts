@@ -54,7 +54,7 @@ describe("ARIA defaults", () => {
   it("ships defaults and package-owned skills", () => {
     const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
     expect(packageJson.name).toBe("aria");
-    expect(packageJson.version).toBe("0.2.0");
+    expect(packageJson.version).toBe("0.3.0");
     expect(packageJson.files).toContain("defaults");
     expect(packageJson.files).toContain("skills");
   });

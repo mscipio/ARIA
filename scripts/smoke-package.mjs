@@ -88,6 +88,11 @@ for (const path of packedPaths) {
 const tarball = join(packageRoot, entry.filename);
 const installRoot = mkdtempSync(join(tmpdir(), "aria-package-"));
 const probePath = join(installRoot, "probe.mjs");
+const smokeEnv = {
+  ...process.env,
+  HOME: installRoot,
+  USERPROFILE: installRoot,
+};
 
 try {
   runNpm(["init", "--yes"], { cwd: installRoot, stdio: "ignore" });
@@ -163,7 +168,7 @@ console.log("smoke-package: ok", {
   execFileSync(process.execPath, [probePath], {
     cwd: installRoot,
     stdio: "inherit",
-    env: process.env,
+    env: smokeEnv,
   });
 
   // Verify aria routes binary works from the installed package
@@ -171,7 +176,7 @@ console.log("smoke-package: ok", {
   const routesOutput = execFileSync(process.execPath, [ariaBin, "routes"], {
     cwd: installRoot,
     encoding: "utf8",
-    env: process.env,
+    env: smokeEnv,
   });
   if (!routesOutput.includes("Resolved ARIA role routes:")) {
     fail("aria routes did not produce expected header");
@@ -188,7 +193,7 @@ console.log("smoke-package: ok", {
   const overrideOutput = execFileSync(process.execPath, [ariaBin, "routes"], {
     cwd: installRoot,
     encoding: "utf8",
-    env: process.env,
+    env: smokeEnv,
   });
   if (!overrideOutput.includes("explorer  opencode-go/deepseek-v4-flash (xhigh)")) {
     fail("aria routes did not reflect project-local aria.json override");
@@ -198,7 +203,7 @@ console.log("smoke-package: ok", {
   const helpOutput = execFileSync(process.execPath, [ariaBin, "--help"], {
     cwd: installRoot,
     encoding: "utf8",
-    env: process.env,
+    env: smokeEnv,
   });
   if (!helpOutput.includes("setup")) {
     fail("aria --help does not mention setup");
