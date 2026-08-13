@@ -28,6 +28,12 @@ export interface AvailableModel {
   name: string;
   /** Model-reported variant IDs. */
   variants: string[];
+  /**
+   * True when the model's verbose metadata reported a `variants` key (even an
+   * explicitly empty object). Absent/false means variant metadata is not
+   * observable, so a configured variant for this model cannot be verified.
+   */
+  variantsObservable?: boolean;
 }
 
 /**
@@ -115,6 +121,9 @@ function verboseModelFromBlock(id: string, jsonText: string): AvailableModel | u
     return undefined;
   }
   const { providerID, modelID } = splitModelIdentifier(id);
+  // A `variants` key (even `{}`) means the model reported variant metadata;
+  // its absence means variant metadata is not observable.
+  const variantsObservable = Object.prototype.hasOwnProperty.call(info, "variants");
   const variants =
     info.variants && typeof info.variants === "object" && !Array.isArray(info.variants)
       ? Object.keys(info.variants).filter((variant) => variant.trim().length > 0)
@@ -125,6 +134,7 @@ function verboseModelFromBlock(id: string, jsonText: string): AvailableModel | u
     modelID,
     name: typeof info.name === "string" && info.name.trim().length > 0 ? info.name : modelID,
     variants,
+    variantsObservable,
   };
 }
 

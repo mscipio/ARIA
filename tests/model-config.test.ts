@@ -238,6 +238,12 @@ describe("parseModelList", () => {
   it("ignores blank and malformed lines", () => {
     expect(parseModelList("\nnot a model\nbroken/model id\n")).toEqual([]);
   });
+
+  it("leaves variant metadata unobservable for the plain model list", () => {
+    const models = parseModelList("opencode/deepseek-v4-flash\n");
+    expect(models[0]?.variants).toEqual([]);
+    expect(models[0]?.variantsObservable).toBeUndefined();
+  });
 });
 
 describe("parseModelVerbose", () => {
@@ -271,6 +277,26 @@ describe("parseModelVerbose", () => {
 
     expect(models).toHaveLength(1);
     expect(models[0]?.variants).toEqual([]);
+    expect(models[0]?.variantsObservable).toBe(true);
+  });
+
+  it("marks variant metadata observable for a reported variants object", () => {
+    const models = parseModelVerbose(VERBOSE_MODELS_OUTPUT);
+    expect(models[0]?.variantsObservable).toBe(true);
+  });
+
+  it("marks variant metadata not observable when the verbose block omits variants", () => {
+    const models = parseModelVerbose([
+      "openai/gpt-5.6-terra",
+      "{",
+      '  "id": "gpt-5.6-terra",',
+      '  "providerID": "openai",',
+      '  "name": "GPT 5.6 Terra"',
+      "}",
+    ].join("\n"));
+
+    expect(models).toHaveLength(1);
+    expect(models[0]?.variantsObservable).toBe(false);
   });
 });
 

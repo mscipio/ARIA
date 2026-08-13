@@ -27,7 +27,7 @@ Usage:
   aria setup --configure     Then interactively configure ARIA role models
   aria update                Pull latest changes, reinstall, and re-sync dependencies
   aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
-  aria doctor                Report status of required dependencies
+  aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria routes                Print resolved model routes for each ARIA role
   aria --help                Show this help message
   aria -h                    Show this help message
@@ -65,11 +65,10 @@ async function main() {
   }
 
   if (command === "doctor") {
-    const { doctor, formatDoctor, doctorExitCode } = await import("../dist/deps.js");
-    const version = loadVersion();
-    const status = await doctor();
-    console.log(formatDoctor(version, status));
-    return doctorExitCode(status);
+    const { runDoctor, formatDoctorReport, doctorExitCode } = await import("../dist/doctor.js");
+    const report = await runDoctor();
+    console.log(formatDoctorReport(report));
+    return doctorExitCode(report.findings);
   }
 
   if (command === "setup") {

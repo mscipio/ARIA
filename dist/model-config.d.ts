@@ -10,6 +10,12 @@ export interface AvailableModel {
     name: string;
     /** Model-reported variant IDs. */
     variants: string[];
+    /**
+     * True when the model's verbose metadata reported a `variants` key (even an
+     * explicitly empty object). Absent/false means variant metadata is not
+     * observable, so a configured variant for this model cannot be verified.
+     */
+    variantsObservable?: boolean;
 }
 /**
  * Available models discovered for a worktree.

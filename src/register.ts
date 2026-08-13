@@ -326,21 +326,239 @@ function buildArchivistPermissions(worktree: string): AgentPermission {
 
 const NON_CODER_ROLES = Object.keys(ROLE_PERMISSIONS) as NonCoderRole[];
 
+/**
+ * Coder task permissions: the coder coordinates the other roles via the task
+ * tool, which is denied by default and allowed for every packaged role.
+ */
+const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
+  "*": "deny",
+  explorer: "allow",
+  visualizer: "allow",
+  planner: "allow",
+  architect: "allow",
+  implementer: "allow",
+  reviewer: "allow",
+  researcher: "allow",
+  "archivist": "allow",
+};
+
+/**
+ * Coder permission construction. Kept as a single named construction (rather
+ * than an inline literal) so the read-only doctor can validate that the coder
+ * carries the canonical `REQUIRED_MCP_PERMISSION` grants without copying the
+ * permission table.
+ */
+function coderPermission(): AgentPermission {
+  return {
+    ...REQUIRED_MCP_PERMISSION,
+    edit: "deny",
+    bash: "deny",
+    task: TASK_PERMISSIONS,
+    plan: "allow",
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Read-only capability/package inventory (consumed by the ARIA doctor)
+// ---------------------------------------------------------------------------
+
+/**
+ * De-duplicated names of the package-owned skills that the packaged roles
+ * actually allow, in canonical role order (coder grants none; the
+ * WIKI_DIR-expanded archivist allows the same three wiki skills as the
+ * unexpanded role). Derived from `ROLE_PERMISSIONS` rather than copied, so a
+ * role permission change is reflected here automatically.
+ */
+export const PACKAGE_SKILL_NAMES: readonly string[] = (() => {
+  const names = new Set<string>();
+  for (const role of NON_CODER_ROLES) {
+    const skill = ROLE_PERMISSIONS[role].skill;
+    if (!skill || typeof skill !== "object" || Array.isArray(skill)) continue;
+    for (const [name, action] of Object.entries(skill)) {
+      if (name !== "*" && action === "allow") names.add(name);
+    }
+  }
+  return [...names];
+})();
+
+/** Does the permission map carry every canonical required MCP grant? */
+function hasRequiredMcp(permission: AgentPermission): boolean {
+  return Object.entries(REQUIRED_MCP_PERMISSION).every(
+    ([key, action]) => permission[key] === action,
+  );
+}
+
+/**
+ * Roles that carry every canonical required MCP grant (Engram/Context7/
+ * CodeGraph): the coder plus the six RDC coding roles. Derived from the
+ * coder permission construction and `ROLE_PERMISSIONS`; researcher, writer,
+ * and archivist are intentionally not included.
+ */
+export const CODING_ROLES: readonly RoleName[] = [
+  ...(hasRequiredMcp(coderPermission()) ? (["coder"] as const) : []),
+  ...NON_CODER_ROLES.filter((role) => hasRequiredMcp(ROLE_PERMISSIONS[role])),
+];
+
+/** Effective permissions of every packaged role (coder + non-coder roles). */
+export function effectiveRolePermissions(): Record<RoleName, AgentPermission> {
+  return {
+    coder: coderPermission(),
+    ...ROLE_PERMISSIONS,
+  };
+}
+
+/** Whether an agent permission entry is a permissive grant (allow/ask). */
+function isGrant(action: unknown): boolean {
+  return action === "allow" || action === "ask";
+}
+
+/**
+ * Validate effective role requirements against the canonical contract:
+ * coding roles carry every `REQUIRED_MCP_PERMISSION` grant, the researcher
+ * carries Context7 plus the exact ZotPilot policy, and writer/archivist are
+ * not treated as coding roles (no required-MCP grants).
+ *
+ * Returns a human-readable issue per violation; empty when canonical.
+ */
+export function roleRequirementIssues(
+  permissions: Record<RoleName, AgentPermission> = effectiveRolePermissions(),
+): string[] {
+  const issues: string[] = [];
+  const codingNames = CODING_ROLES;
+  // Coding roles are every packaged role except the three non-coding roles
+  // (researcher/writer/archivist); derived from NON_CODER_ROLES.
+  const expectedCoding = NON_CODER_ROLES.filter(
+    (role) => role !== "researcher" && role !== "writer" && role !== "archivist",
+  );
+
+  for (const role of expectedCoding) {
+    if (!codingNames.includes(role)) {
+      issues.push(`coding role ${role} is missing an Engram/Context7/CodeGraph grant`);
+      continue;
+    }
+    for (const [key, action] of Object.entries(REQUIRED_MCP_PERMISSION)) {
+      if (permissions[role][key] !== action) {
+        issues.push(`${role} permission ${key} is not ${action}`);
+      }
+    }
+  }
+  for (const [key, action] of Object.entries(REQUIRED_MCP_PERMISSION)) {
+    if (permissions.coder[key] !== action) {
+      issues.push(`coder permission ${key} is not ${action}`);
+    }
+  }
+
+  // Non-coding roles: researcher has Context7 only; writer/archivist none.
+  const nonCoding: Array<{ role: RoleName; allowed: string[] }> = [
+    { role: "researcher", allowed: ["context7_*"] },
+    { role: "writer", allowed: [] },
+    { role: "archivist", allowed: [] },
+  ];
+  for (const { role, allowed } of nonCoding) {
+    if (codingNames.includes(role)) {
+      issues.push(`${role} is treated as a coding role but must not be`);
+    }
+    for (const key of Object.keys(REQUIRED_MCP_PERMISSION)) {
+      if (!allowed.includes(key) && isGrant(permissions[role][key])) {
+        issues.push(`${role} unexpectedly grants ${key} = ${String(permissions[role][key])}`);
+      }
+      if (allowed.includes(key) && permissions[role][key] !== "allow") {
+        issues.push(`${role} is missing required ${key} = allow`);
+      }
+    }
+  }
+
+  return issues;
+}
+
+export interface ZotPilotPolicyValidation {
+  /** Canonical expected read tool IDs (allow). */
+  expectedReadIds: string[];
+  /** Canonical expected mutation tool IDs (ask). */
+  expectedMutationIds: string[];
+  /** Effective non-wildcard ZotPilot entries present in the researcher permission. */
+  present: string[];
+  /** Canonical IDs missing from the effective entries. */
+  missing: string[];
+  /** Effective IDs that are not canonical. */
+  unexpected: string[];
+  /** ZotPilot allow/ask wildcard entries (including `zotpilot_*`). */
+  wildcards: string[];
+  /** Human-readable policy violations; empty when the policy is canonical. */
+  issues: string[];
+}
+
+/**
+ * Internal ZotPilot policy validation (not a live tool inventory): compares
+ * the canonical expected read/mutation IDs with the effective researcher
+ * permission entries. Requires every read ID = `allow` and every mutation
+ * ID = `ask`, requires the read/mutation sets to be disjoint, and rejects any
+ * ZotPilot allow/ask wildcard (including `zotpilot_*`).
+ */
+export function validateZotPilotPolicy(
+  permission: AgentPermission = ROLE_PERMISSIONS.researcher,
+): ZotPilotPolicyValidation {
+  const expectedReadIds = Object.keys(ZOTPILOT_MCP_READ);
+  const expectedMutationIds = Object.keys(ZOTPILOT_MCP_MUTATION);
+  const expected = new Set([...expectedReadIds, ...expectedMutationIds]);
+
+  const wildcards: string[] = [];
+  const present: string[] = [];
+  for (const [key, action] of Object.entries(permission)) {
+    if (!key.startsWith("zotpilot")) continue;
+    if (!isGrant(action)) continue;
+    if (key.includes("*")) {
+      wildcards.push(key);
+    } else {
+      present.push(key);
+    }
+  }
+
+  const presentSet = new Set(present);
+  const missing = [...expected].filter((id) => !presentSet.has(id));
+  const unexpected = present.filter((id) => !expected.has(id));
+
+  const issues: string[] = [];
+  for (const id of wildcards) {
+    issues.push(`ZotPilot wildcard grant ${id} is not allowed`);
+  }
+  for (const id of expectedReadIds) {
+    if (permission[id] !== "allow") {
+      issues.push(`ZotPilot read ${id} must be allow (got ${String(permission[id])})`);
+    }
+  }
+  for (const id of expectedMutationIds) {
+    if (permission[id] !== "ask") {
+      issues.push(`ZotPilot mutation ${id} must be ask (got ${String(permission[id])})`);
+    }
+  }
+  for (const id of expectedMutationIds) {
+    if (expectedReadIds.includes(id)) {
+      issues.push(`ZotPilot ID ${id} is in both the read and mutation sets`);
+    }
+  }
+  for (const id of missing) {
+    issues.push(`ZotPilot policy ID ${id} is missing`);
+  }
+  for (const id of unexpected) {
+    issues.push(`ZotPilot policy ID ${id} is unexpected`);
+  }
+
+  return {
+    expectedReadIds,
+    expectedMutationIds,
+    present,
+    missing,
+    unexpected,
+    wildcards,
+    issues,
+  };
+}
+
 function agentDefinitions(
   config: ResolvedAriaConfig,
   worktree: string,
 ): Record<string, unknown> {
-  const taskPermissions: Record<string, "allow" | "deny"> = {
-    "*": "deny",
-    explorer: "allow",
-    visualizer: "allow",
-    planner: "allow",
-    architect: "allow",
-    implementer: "allow",
-    reviewer: "allow",
-    researcher: "allow",
-    "archivist": "allow",
-  };
   const definitions: Record<string, unknown> = {
     coder: {
       description: "Coordinates planning, implementation, and review.",
@@ -348,13 +566,7 @@ function agentDefinitions(
       model: config.roles.coder.model,
       ...(config.roles.coder.variant ? { variant: config.roles.coder.variant } : {}),
       prompt: config.roles.coder.promptText,
-      permission: {
-        ...REQUIRED_MCP_PERMISSION,
-        edit: "deny",
-        bash: "deny",
-        task: taskPermissions,
-        plan: "allow",
-      },
+      permission: coderPermission(),
     },
   };
 
