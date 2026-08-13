@@ -4,14 +4,12 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
-import type { ModelV2Info, ProviderV2Info } from "@opencode-ai/sdk/v2/types";
-
 import {
   configureModels,
   discoverAvailableModels,
   ModelDiscoveryError,
-  normalizeAvailableModels,
-  normalizeAvailableProviders,
+  parseModelList,
+  parseModelVerbose,
   type ModelConfigureInput,
   type ModelConfigureOutput,
   type ModelDiscovery,
@@ -19,20 +17,17 @@ import {
 import { resolveAriaConfig } from "../src/overrides.js";
 
 // ---------------------------------------------------------------------------
-// SDK seam mocks (only the discoverAvailableModels tests exercise them)
+// opencode CLI seam mock (only the discoverAvailableModels tests exercise it)
 // ---------------------------------------------------------------------------
 
-const sdkMocks = vi.hoisted(() => ({
-  createOpencodeServer: vi.fn(),
-  createOpencodeClient: vi.fn(),
+type ExecCallback = (error: Error | null, stdout?: string, stderr?: string) => void;
+
+const execMocks = vi.hoisted(() => ({
+  execFile: vi.fn(),
 }));
 
-vi.mock("@opencode-ai/sdk/v2", () => ({
-  createOpencodeServer: sdkMocks.createOpencodeServer,
-}));
-
-vi.mock("@opencode-ai/sdk/v2/client", () => ({
-  createOpencodeClient: sdkMocks.createOpencodeClient,
+vi.mock("node:child_process", () => ({
+  execFile: execMocks.execFile,
 }));
 
 // ---------------------------------------------------------------------------
@@ -41,22 +36,26 @@ vi.mock("@opencode-ai/sdk/v2/client", () => ({
 
 const tempDirs: string[] = [];
 let originalHome: string | undefined;
+let originalNoColor: string | undefined;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
+  originalNoColor = process.env.NO_COLOR;
+  delete process.env.NO_COLOR; // ANSI styling enabled unless a test sets it
   vi.clearAllMocks();
-  sdkMocks.createOpencodeServer.mockResolvedValue({ url: "http://127.0.0.1:4321", close: () => undefined });
-  sdkMocks.createOpencodeClient.mockReturnValue({
-    v2: {
-      model: { list: async () => ({ data: { data: [] }, error: undefined }) },
-      provider: { list: async () => ({ data: { data: [] }, error: undefined }) },
+  execMocks.execFile.mockReset();
+  execMocks.execFile.mockImplementation(
+    (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+      callback(null, "", "");
     },
-  });
+  );
 });
 
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalNoColor === undefined) delete process.env.NO_COLOR;
+  else process.env.NO_COLOR = originalNoColor;
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -71,39 +70,6 @@ const ROLES = [
   "archivist",
   "writer",
 ] as const;
-
-/** ModelV2Info fixture; variant entries may carry a defensive `disabled` flag. */
-function makeModelInfo(
-  overrides: Omit<Partial<ModelV2Info>, "variants"> & {
-    variants?: Array<{ id: string; disabled?: boolean }>;
-  },
-): ModelV2Info {
-  return {
-    id: "deepseek-v4-pro",
-    providerID: "opencode-go",
-    name: "DeepSeek V4 Pro",
-    api: { id: "ai-sdk", type: "aisdk", package: "ai-sdk" },
-    capabilities: { tools: true, input: ["text"], output: ["text"] },
-    request: { headers: {}, body: {} },
-    variants: [],
-    time: { released: 0 },
-    cost: [],
-    status: "active",
-    enabled: true,
-    limit: { context: 128000, output: 32000 },
-    ...overrides,
-  } as ModelV2Info;
-}
-
-function makeProviderInfo(overrides: Partial<ProviderV2Info>): ProviderV2Info {
-  return {
-    id: "opencode-go",
-    name: "OpenCode Go",
-    api: { type: "openai-compatible", url: "http://localhost" },
-    request: {},
-    ...overrides,
-  } as ProviderV2Info;
-}
 
 /** Scripted input seam: answers in order, then empty string (cancel). */
 function scriptedInput(answers: string[]): { input: ModelConfigureInput; calls: string[] } {
@@ -158,6 +124,41 @@ async function writeGlobalConfig(
   return path;
 }
 
+async function readWrittenRoles(home: string): Promise<Record<string, { model?: string; variant?: string }>> {
+  const written = JSON.parse(
+    await readFile(resolve(globalConfigDir(home), "aria.json"), "utf8"),
+  ) as { roles?: Record<string, { model?: string; variant?: string }> };
+  return written.roles ?? {};
+}
+
+const PLAIN_MODELS_OUTPUT = [
+  "opencode-go/deepseek-v4-pro",
+  "openai/gpt-5.6-terra",
+].join("\n");
+
+const VERBOSE_MODELS_OUTPUT = [
+  "opencode-go/deepseek-v4-pro",
+  "{",
+  '  "id": "deepseek-v4-pro",',
+  '  "providerID": "opencode-go",',
+  '  "name": "DeepSeek V4 Pro",',
+  '  "variants": {',
+  '    "low": { "reasoningEffort": "low" },',
+  '    "high": { "reasoningEffort": "high" }',
+  "  }",
+  "}",
+  "openai/gpt-5.6-terra",
+  "{",
+  '  "id": "gpt-5.6-terra",',
+  '  "providerID": "openai",',
+  '  "name": "GPT 5.6 Terra",',
+  '  "variants": {',
+  '    "xhigh": { "reasoningEffort": "xhigh" },',
+  '    "high": { "reasoningEffort": "high" }',
+  "  }",
+  "}",
+].join("\n");
+
 const DISCOVERED_MODELS: ModelDiscovery = {
   models: [
     {
@@ -175,68 +176,100 @@ const DISCOVERED_MODELS: ModelDiscovery = {
       variants: ["xhigh", "high"],
     },
   ],
-  providers: [],
+};
+
+/** `count` discovered models sharing the `bench/model-NN` identifier family. */
+function makeManyModels(count: number): ModelDiscovery {
+  return {
+    models: Array.from({ length: count }, (_unused, index) => {
+      const number = String(index + 1).padStart(2, "0");
+      return {
+        id: `bench/model-${number}`,
+        providerID: "bench",
+        modelID: `model-${number}`,
+        name: `Model ${number}`,
+        variants: [],
+      };
+    }),
+  };
+}
+
+/** DISCOVERED_MODELS plus a second gpt-5.6 model for multi-match searches. */
+const WITH_LUNA_MODELS: ModelDiscovery = {
+  models: [
+    ...DISCOVERED_MODELS.models,
+    {
+      id: "openai/gpt-5.6-luna",
+      providerID: "openai",
+      modelID: "gpt-5.6-luna",
+      name: "GPT 5.6 Luna",
+      variants: [],
+    },
+  ],
 };
 
 // ---------------------------------------------------------------------------
-// normalizeAvailableModels / normalizeAvailableProviders
+// opencode CLI output parsers
 // ---------------------------------------------------------------------------
 
-describe("normalizeAvailableModels", () => {
-  it("retains enabled models with active providers and normalizes identifiers", () => {
-    const providers = [
-      makeProviderInfo({ id: "opencode-go" }),
-      makeProviderInfo({ id: "openai", disabled: true }),
-      makeProviderInfo({ id: "other", name: "Other" }),
-    ];
-    const models = [
-      makeModelInfo({ providerID: "opencode-go", id: "deepseek-v4-pro" }),
-      // Model already reports the provider prefix — must not be double-prefixed.
-      makeModelInfo({ providerID: "opencode-go", id: "opencode-go/deepseek-v4-flash" }),
-      // Enabled model whose provider is disabled — not offered.
-      makeModelInfo({ providerID: "openai", id: "gpt-5.6-terra" }),
-      // Disabled model — not offered.
-      makeModelInfo({ providerID: "opencode-go", id: "disabled-model", enabled: false }),
-      // Model from a provider missing from the provider list — not offered.
-      makeModelInfo({ providerID: "ghost", id: "ghost-model" }),
-    ];
+describe("parseModelList", () => {
+  it("parses one usable model identifier per line", () => {
+    const models = parseModelList("opencode/deepseek-v4-flash\n\nopenai/gpt-5.6-terra\n");
 
-    const normalized = normalizeAvailableModels(models, providers);
-
-    expect(normalized.map((model) => model.id)).toEqual([
-      "opencode-go/deepseek-v4-pro",
-      "opencode-go/deepseek-v4-flash",
+    expect(models).toEqual([
+      {
+        id: "opencode/deepseek-v4-flash",
+        providerID: "opencode",
+        modelID: "deepseek-v4-flash",
+        name: "deepseek-v4-flash",
+        variants: [],
+      },
+      {
+        id: "openai/gpt-5.6-terra",
+        providerID: "openai",
+        modelID: "gpt-5.6-terra",
+        name: "gpt-5.6-terra",
+        variants: [],
+      },
     ]);
-    expect(normalized[1]?.modelID).toBe("deepseek-v4-flash");
   });
 
-  it("exposes only enabled, non-empty reported variants", () => {
-    const providers = [makeProviderInfo({})];
-    const models = [
-      makeModelInfo({
-        variants: [
-          { id: "xhigh" },
-          { id: "low", disabled: true },
-          { id: "   " },
-        ],
-      }),
-    ];
-
-    const normalized = normalizeAvailableModels(models, providers);
-    expect(normalized[0]?.variants).toEqual(["xhigh"]);
+  it("ignores blank and malformed lines", () => {
+    expect(parseModelList("\nnot a model\nbroken/model id\n")).toEqual([]);
   });
 });
 
-describe("normalizeAvailableProviders", () => {
-  it("retains only active providers", () => {
-    const providers = [
-      makeProviderInfo({ id: "opencode-go" }),
-      makeProviderInfo({ id: "disabled-provider", disabled: true }),
-    ];
+describe("parseModelVerbose", () => {
+  it("extracts models with names and reported variants", () => {
+    const models = parseModelVerbose(VERBOSE_MODELS_OUTPUT);
 
-    expect(normalizeAvailableProviders(providers).map((provider) => provider.id)).toEqual([
-      "opencode-go",
+    expect(models.map((model) => model.id)).toEqual([
+      "opencode-go/deepseek-v4-pro",
+      "openai/gpt-5.6-terra",
     ]);
+    expect(models[0]).toMatchObject({
+      id: "opencode-go/deepseek-v4-pro",
+      providerID: "opencode-go",
+      modelID: "deepseek-v4-pro",
+      name: "DeepSeek V4 Pro",
+      variants: ["low", "high"],
+    });
+    expect(models[1]?.variants).toEqual(["xhigh", "high"]);
+  });
+
+  it("reports no variants for an empty variants object", () => {
+    const models = parseModelVerbose([
+      "openai/gpt-5.6-terra",
+      "{",
+      '  "id": "gpt-5.6-terra",',
+      '  "providerID": "openai",',
+      '  "name": "GPT 5.6 Terra",',
+      '  "variants": {}',
+      "}",
+    ].join("\n"));
+
+    expect(models).toHaveLength(1);
+    expect(models[0]?.variants).toEqual([]);
   });
 });
 
@@ -245,59 +278,42 @@ describe("normalizeAvailableProviders", () => {
 // ---------------------------------------------------------------------------
 
 describe("discoverAvailableModels", () => {
-  it("discovers models and providers, then closes the ephemeral server", async () => {
-    const close = vi.fn();
-    sdkMocks.createOpencodeServer.mockResolvedValue({ url: "http://127.0.0.1:4321", close });
-    sdkMocks.createOpencodeClient.mockReturnValue({
-      v2: {
-        model: {
-          list: vi.fn(async () => ({
-            data: { data: [makeModelInfo({ variants: [{ id: "high" }] })] },
-            error: undefined,
-          })),
-        },
-        provider: {
-          list: vi.fn(async () => ({
-            data: { data: [makeProviderInfo({})] },
-            error: undefined,
-          })),
-        },
+  it("merges opencode models with --verbose metadata", async () => {
+    execMocks.execFile.mockImplementation(
+      (_file: string, args: string[], _options: unknown, callback: ExecCallback) => {
+        callback(null, args.includes("--verbose") ? VERBOSE_MODELS_OUTPUT : PLAIN_MODELS_OUTPUT, "");
       },
-    });
+    );
 
-    const worktree = "/tmp/example-worktree";
-    const discovered = await discoverAvailableModels(worktree);
+    const discovered = await discoverAvailableModels("/tmp/example-worktree");
 
-    expect(discovered).toEqual({
-      models: [
-        {
-          id: "opencode-go/deepseek-v4-pro",
-          providerID: "opencode-go",
-          modelID: "deepseek-v4-pro",
-          name: "DeepSeek V4 Pro",
-          variants: ["high"],
-        },
-      ],
-      providers: [{ id: "opencode-go", name: "OpenCode Go" }],
-    });
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(sdkMocks.createOpencodeClient).toHaveBeenCalledWith({
-      baseUrl: "http://127.0.0.1:4321",
-      directory: worktree,
-    });
+    expect(discovered.models.map((model) => model.id)).toEqual([
+      "opencode-go/deepseek-v4-pro",
+      "openai/gpt-5.6-terra",
+    ]);
+    expect(discovered.models[0]?.variants).toEqual(["low", "high"]);
+    expect(discovered.models[0]?.name).toBe("DeepSeek V4 Pro");
+    expect(execMocks.execFile).toHaveBeenCalledTimes(2);
+    expect(execMocks.execFile).toHaveBeenCalledWith(
+      "opencode",
+      ["models"],
+      expect.objectContaining({ cwd: "/tmp/example-worktree" }),
+      expect.any(Function),
+    );
+    expect(execMocks.execFile).toHaveBeenCalledWith(
+      "opencode",
+      ["models", "--verbose"],
+      expect.objectContaining({ cwd: "/tmp/example-worktree" }),
+      expect.any(Function),
+    );
   });
 
-  it("fails discovery on a V2 endpoint response error, closing the server", async () => {
-    const close = vi.fn();
-    sdkMocks.createOpencodeServer.mockResolvedValue({ url: "http://127.0.0.1:4321", close });
-    sdkMocks.createOpencodeClient.mockReturnValue({
-      v2: {
-        model: {
-          list: async () => ({ data: undefined, error: { message: "service unavailable" } }),
-        },
-        provider: { list: async () => ({ data: { data: [] }, error: undefined }) },
+  it("fails cleanly when the opencode CLI exits non-zero", async () => {
+    execMocks.execFile.mockImplementation(
+      (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+        callback(Object.assign(new Error("opencode: command not found"), { code: "ENOENT" }));
       },
-    });
+    );
 
     const error = await discoverAvailableModels("/tmp/worktree").then(
       () => undefined,
@@ -305,15 +321,18 @@ describe("discoverAvailableModels", () => {
     );
 
     expect(error).toBeInstanceOf(ModelDiscoveryError);
-    expect((error as Error).message).toContain("model discovery failed");
-    expect(close).toHaveBeenCalledTimes(1);
+    expect((error as Error).message).toContain("opencode models failed");
   });
 
-  it("fails cleanly when the OpenCode server fails to start", async () => {
-    sdkMocks.createOpencodeServer.mockRejectedValue(new Error("spawn failed"));
+  it("fails cleanly when opencode models lists nothing", async () => {
+    execMocks.execFile.mockImplementation(
+      (_file: string, args: string[], _options: unknown, callback: ExecCallback) => {
+        callback(null, args.includes("--verbose") ? VERBOSE_MODELS_OUTPUT : "", "");
+      },
+    );
 
     await expect(discoverAvailableModels("/tmp/worktree")).rejects.toThrow(
-      /OpenCode server failed to start/,
+      /no usable models/,
     );
   });
 });
@@ -323,30 +342,90 @@ describe("discoverAvailableModels", () => {
 // ---------------------------------------------------------------------------
 
 describe("configureModels", () => {
-  it("shows all nine roles with current and recommended availability diagnostics", async () => {
+  it("shows the four-layer precedence for all nine roles and the simplified menu", async () => {
     await makeHome(); // isolate from the real user global config
     const worktree = await makeWorktree();
-    const { input } = scriptedInput([""]); // cancel at the top choice
+    const { input } = scriptedInput([""]); // Enter at the top menu keeps current
     const { output, lines } = collectOutput();
 
-    const discovery = vi.fn(async () => ({
-      models: [DISCOVERED_MODELS.models[0]!],
-      providers: [],
-    }));
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
 
-    const result = await configureModels(worktree, { discovery, input, output, tty: true });
     expect(result.status).toBe("unchanged");
+    expect(result.message).toContain("Keeping current configuration");
 
     const text = lines.join("\n");
+    expect(text).toContain(
+      "What would you like to do?\n\n  1) Exit without changes\n  2) Configure roles",
+    );
     for (const role of ROLES) {
-      expect(text).toContain(`  ${role.padEnd(11)} current:`);
+      expect(text).toContain(`  ${role}\n    default:`);
     }
-    expect((text.match(/current:/g) ?? []).length).toBe(9);
-    expect((text.match(/recommended:/g) ?? []).length).toBe(9);
-    // Discovered model → available; undiscovered recommended route → unavailable.
-    expect(text).toMatch(/coder\s+current:\s+opencode-go\/deepseek-v4-pro \[available\]/);
-    expect(text).toMatch(/planner\s+current:\s+openai\/gpt-5\.6-terra \(xhigh\) \[unavailable\]/);
-    expect(text).toContain("recommended: openai/gpt-5.6-terra (xhigh) [unavailable]");
+    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(9);
+    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(9);
+    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(9);
+    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(9);
+    // Absent layers render as plain hyphens; coder resolves to its ARIA
+    // default, whose value is bolded in TTY output.
+    expect(text).toContain(
+      "  coder\n    default:   opencode-go/deepseek-v4-pro\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopencode-go/deepseek-v4-pro\x1b[0m",
+    );
+    // Resolved models the CLI did not list are flagged; listed ones are not
+    // labeled available/unavailable.
+    expect(text).toContain(
+      "resolved:  \x1b[1mopencode-go/deepseek-v4-flash (high)\x1b[0m [not listed by OpenCode]",
+    );
+    expect(text).toContain("resolved:  \x1b[1mopenai/gpt-5.6-terra (xhigh)\x1b[0m\n");
+    expect(text).not.toContain("[available]");
+    expect(text).not.toContain("[unavailable]");
+  });
+
+  it("shows global and project layers when overrides exist", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    await writeGlobalConfig(home, { planner: { model: "opencode-go/deepseek-v4-flash" } });
+    await writeFile(resolve(worktree, "aria.json"), `${JSON.stringify({
+      roles: { planner: { model: "openai/gpt-5.6-luna", variant: "xhigh" } },
+    })}\n`);
+    const { input } = scriptedInput([""]);
+    const { output, lines } = collectOutput();
+
+    await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(lines.join("\n")).toContain(
+      "  planner\n"
+      + "    default:   openai/gpt-5.6-terra (xhigh)\n"
+      + "    global:    opencode-go/deepseek-v4-flash\n"
+      + "    project:   openai/gpt-5.6-luna (xhigh)\n"
+      + "    resolved:  \x1b[1mopenai/gpt-5.6-luna (xhigh)\x1b[0m [not listed by OpenCode]",
+    );
+  });
+
+  it("uses 'default' terminology throughout", async () => {
+    await makeHome();
+    const worktree = await makeWorktree();
+    const { input } = scriptedInput(["2", "planner", "openai/gpt-5.6-terra", "2"]); // variant "high" diverges
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    const forbidden = ["re", "commended"].join("");
+    expect(lines.join("\n")).not.toContain(forbidden);
   });
 
   it("skips without discovery, prompts, or file creation when stdin is not a TTY", async () => {
@@ -367,11 +446,130 @@ describe("configureModels", () => {
     expect(existsSync(resolve(globalConfigDir(home), "aria.json"))).toBe(false);
   });
 
-  it("keeps recommended defaults without writing when nothing diverges", async () => {
+  it("keeps current configuration for option 1 without writing", async () => {
     const home = await makeHome();
     const worktree = await makeWorktree();
+    const configPath = await writeGlobalConfig(home, {
+      planner: { model: "openai/gpt-5.4-mini", variant: "high" },
+    });
+    const before = await readFile(configPath, "utf8");
     const { input } = scriptedInput(["1"]);
-    const { output } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output: collectOutput().output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("unchanged");
+    expect(result.message).toContain("Keeping current configuration");
+    expect(await readFile(configPath, "utf8")).toBe(before);
+  });
+
+  it("accepts an exact model ID and selects a variant", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    const { input } = scriptedInput(["2", "planner", "openai/gpt-5.6-terra", "2"]); // exact ID → variant "high"
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    expect(result.changedRoles).toEqual(["planner"]);
+    const text = lines.join("\n");
+    expect(text).toContain(
+      "Model:\n  Enter      keep current\n  0          use ARIA default\n  <text>     search OpenCode models",
+    );
+    expect(text).toContain("Variant:\n  Enter   no variant override\n  1) xhigh\n  2) high");
+    expect(await readWrittenRoles(home)).toEqual({
+      planner: { model: "openai/gpt-5.6-terra", variant: "high" },
+    });
+  });
+
+  it("shows numbered choices for a substring search and honors no-variant", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    // Seed a diverging planner override so the edit is a real change.
+    await writeGlobalConfig(home, { planner: { model: "opencode-go/deepseek-v4-flash" } });
+    // "gpt-5.6" matches terra and luna; pick terra, then Enter keeps no variant.
+    const { input } = scriptedInput(["2", "planner", "gpt-5.6", "1", ""]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => WITH_LUNA_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    const text = lines.join("\n");
+    expect(text).toContain("[1] openai/gpt-5.6-terra");
+    expect(text).toContain("[2] openai/gpt-5.6-luna");
+    expect(text).toContain("Variant:\n  Enter   no variant override\n  1) xhigh\n  2) high");
+    expect(await readWrittenRoles(home)).toEqual({
+      planner: { model: "openai/gpt-5.6-terra" },
+    });
+  });
+
+  it("asks to refine a search with more than ten matches", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    // "model" matches all twelve; "model-0" narrows to the nine 01..09 models.
+    const { input } = scriptedInput(["2", "planner", "model", "model-0", "1"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => makeManyModels(12),
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    const text = lines.join("\n");
+    expect(text).toContain("12 matches — please refine your search.");
+    expect(text).toContain("[1] bench/model-01");
+    expect(await readWrittenRoles(home)).toEqual({
+      planner: { model: "bench/model-01" },
+    });
+  });
+
+  it("re-prompts on a search with no matches", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    const { input } = scriptedInput(["2", "planner", "zzz", "openai/gpt-5.6-luna"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => WITH_LUNA_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    expect(lines.join("\n")).toContain("No matches. Please try again.");
+    expect(await readWrittenRoles(home)).toEqual({
+      planner: { model: "openai/gpt-5.6-luna" },
+    });
+  });
+
+  it("keeps the current assignment when the model prompt is left empty", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    const configPath = await writeGlobalConfig(home, {
+      planner: { model: "openai/gpt-5.4-mini", variant: "high" },
+    });
+    const before = await readFile(configPath, "utf8");
+    const { input } = scriptedInput(["2", "planner", ""]);
+    const { output, lines } = collectOutput();
 
     const result = await configureModels(worktree, {
       discovery: async () => DISCOVERED_MODELS,
@@ -381,41 +579,37 @@ describe("configureModels", () => {
     });
 
     expect(result.status).toBe("unchanged");
-    expect(result.message).toContain("recommended defaults");
-    expect(existsSync(resolve(globalConfigDir(home), "aria.json"))).toBe(false);
+    expect(lines.join("\n")).not.toContain("Variant:");
+    // The single-role view renders the absent project layer as a plain hyphen.
+    expect(lines.join("\n")).toContain(
+      "  planner\n"
+      + "    default:   openai/gpt-5.6-terra (xhigh)\n"
+      + "    global:    openai/gpt-5.4-mini (high)\n"
+      + "    project:   -\n"
+      + "    resolved:  \x1b[1mopenai/gpt-5.4-mini (high)\x1b[0m [not listed by OpenCode]",
+    );
+    expect(await readFile(configPath, "utf8")).toBe(before);
   });
 
-  it("distinguishes keep-current (no writes) from keep-recommended-default (removes diverging overrides)", async () => {
+  it("removes the global override for 0 (use ARIA default)", async () => {
     const home = await makeHome();
     const worktree = await makeWorktree();
     const configPath = await writeGlobalConfig(home, {
-      planner: { model: "openai/gpt-5.4-mini", variant: "high" },
+      planner: { model: "openai/gpt-5.4-mini", variant: "xhigh" },
     });
-    const before = await readFile(configPath, "utf8");
-    const options = {
+    const { input } = scriptedInput(["2", "planner", "0"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
       discovery: async () => DISCOVERED_MODELS,
-      tty: true as const,
-    };
-
-    // Keep current assignments: nothing is written.
-    const keepCurrent = await configureModels(worktree, {
-      ...options,
-      input: scriptedInput(["2"]).input,
-      output: collectOutput().output,
+      input,
+      output,
+      tty: true,
     });
-    expect(keepCurrent.status).toBe("unchanged");
-    expect(keepCurrent.message).toContain("Keeping current assignments");
-    expect(await readFile(configPath, "utf8")).toBe(before);
 
-    // Keep recommended defaults: the diverging planner override is removed.
-    const keepRecommended = await configureModels(worktree, {
-      ...options,
-      input: scriptedInput(["1"]).input,
-      output: collectOutput().output,
-    });
-    expect(keepRecommended.status).toBe("configured");
-    expect(keepRecommended.changedRoles).toEqual(["planner"]);
-
+    expect(result.status).toBe("configured");
+    expect(result.changedRoles).toEqual(["planner"]);
+    expect(lines.join("\n")).not.toContain("Variant:");
     const written = JSON.parse(await readFile(configPath, "utf8")) as { roles?: Record<string, unknown> };
     expect(written.roles?.planner).toBeUndefined();
   });
@@ -426,7 +620,7 @@ describe("configureModels", () => {
     const configPath = await writeGlobalConfig(home, {
       planner: { model: "openai/gpt-5.6-terra", variant: "low" }, // stale variant
     });
-    const { input } = scriptedInput(["3", "planner", "2", "2"]); // configure → planner → terra → high
+    const { input } = scriptedInput(["2", "planner", "openai/gpt-5.6-terra", "2"]);
     const { output } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -448,31 +642,6 @@ describe("configureModels", () => {
     expect(text).not.toContain("low");
   });
 
-  it("removes a role for recommended-default without writing sentinels", async () => {
-    const home = await makeHome();
-    const worktree = await makeWorktree();
-    const configPath = await writeGlobalConfig(home, {
-      planner: { model: "openai/gpt-5.4-mini", variant: "xhigh" },
-    });
-    const { input } = scriptedInput(["3", "planner", "0"]); // configure → planner → recommended default
-    const { output } = collectOutput();
-
-    const result = await configureModels(worktree, {
-      discovery: async () => DISCOVERED_MODELS,
-      input,
-      output,
-      tty: true,
-    });
-
-    expect(result.status).toBe("configured");
-    expect(result.changedRoles).toEqual(["planner"]);
-
-    const text = await readFile(configPath, "utf8");
-    const written = JSON.parse(text) as { roles?: Record<string, unknown> };
-    expect(written.roles?.planner).toBeUndefined();
-    expect(text).not.toContain("null");
-  });
-
   it("preserves untouched global roles while editing one role", async () => {
     const home = await makeHome();
     const worktree = await makeWorktree();
@@ -481,7 +650,7 @@ describe("configureModels", () => {
       architect: { model: "openai/gpt-5.6-sol", variant: "low" },
       reviewer: { model: "opencode-go/custom-reviewer" },
     });
-    const { input } = scriptedInput(["3", "reviewer", "1"]); // reviewer → deepseek-v4-pro
+    const { input } = scriptedInput(["2", "reviewer", "opencode-go/deepseek-v4-pro"]);
     const { output } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -515,7 +684,7 @@ describe("configureModels", () => {
     const canonicalPath = resolve(globalConfigDir(home), "aria.json");
     expect(existsSync(canonicalPath)).toBe(false);
 
-    const { input } = scriptedInput(["3", "reviewer", "1"]); // reviewer → deepseek-v4-pro
+    const { input } = scriptedInput(["2", "reviewer", "opencode-go/deepseek-v4-pro"]);
     const { output } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -545,8 +714,8 @@ describe("configureModels", () => {
     })}\n`);
     const projectBefore = await readFile(projectPath, "utf8");
 
-    const { input } = scriptedInput(["3", "planner", "1"]); // planner → deepseek-v4-pro
-    const { output } = collectOutput();
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
 
     const result = await configureModels(worktree, {
       discovery: async () => DISCOVERED_MODELS,
@@ -557,8 +726,10 @@ describe("configureModels", () => {
 
     expect(result.status).toBe("configured");
     expect(result.maskedRoles).toEqual(["planner"]);
-    expect(result.message).toContain("project-local aria.json pins the model field for planner");
-    expect(result.message).toContain("aria routes");
+    expect(lines.join("\n")).toContain(
+      "WARNING: Project-local aria.json pins the model field for planner",
+    );
+    expect(lines.join("\n")).toContain("aria routes");
     expect(await readFile(projectPath, "utf8")).toBe(projectBefore);
   });
 
@@ -572,8 +743,8 @@ describe("configureModels", () => {
     })}\n`);
     const projectBefore = await readFile(projectPath, "utf8");
 
-    const { input } = scriptedInput(["3", "planner", "1"]); // planner → deepseek-v4-pro
-    const { output } = collectOutput();
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
 
     const result = await configureModels(worktree, {
       discovery: async () => DISCOVERED_MODELS,
@@ -586,8 +757,9 @@ describe("configureModels", () => {
     // reported as unchangeable.
     expect(result.status).toBe("configured");
     expect(result.maskedRoles).toEqual(["planner"]);
-    expect(result.message).toContain("project-local aria.json pins the variant field for planner");
-    expect(result.message).not.toContain("resolved routes");
+    const text = lines.join("\n");
+    expect(text).toContain("WARNING: Project-local aria.json pins the variant field for planner");
+    expect(text).not.toContain("resolved routes");
     expect(await readFile(projectPath, "utf8")).toBe(projectBefore);
   });
 
@@ -601,7 +773,7 @@ describe("configureModels", () => {
     })}\n`);
     const projectBefore = await readFile(projectPath, "utf8");
 
-    const { input } = scriptedInput(["3", "planner", "1"]); // planner → deepseek-v4-pro
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
     const { output, lines } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -616,13 +788,21 @@ describe("configureModels", () => {
     // global value.
     expect(result.status).toBe("configured");
     expect(result.maskedRoles).toEqual(["planner"]);
-    expect(result.message).toContain("project-local aria.json pins the model field for planner");
-    expect(result.message).toContain("aria routes");
-    expect(lines.join("\n")).toMatch(/planner\s+current:.*\[project override\]/);
+    expect(lines.join("\n")).toContain(
+      "WARNING: Project-local aria.json pins the model field for planner",
+    );
+    expect(lines.join("\n")).toContain("aria routes");
+    expect(lines.join("\n")).toContain(
+      "  planner\n"
+      + "    default:   openai/gpt-5.6-terra (xhigh)\n"
+      + "    global:    openai/gpt-5.4-mini\n"
+      + "    project:   openai/gpt-5.4-mini\n"
+      + "    resolved:  \x1b[1mopenai/gpt-5.4-mini\x1b[0m [not listed by OpenCode]",
+    );
     expect(await readFile(projectPath, "utf8")).toBe(projectBefore);
   });
 
-  it("leaves an existing configuration untouched when discovery fails", async () => {
+  it("leaves an existing configuration untouched when the seam discovery fails", async () => {
     const home = await makeHome();
     const worktree = await makeWorktree();
     const configPath = await writeGlobalConfig(home, {
@@ -648,6 +828,31 @@ describe("configureModels", () => {
     expect(await readFile(configPath, "utf8")).toBe(before);
   });
 
+  it("leaves an existing configuration untouched when the opencode CLI discovery fails", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    const configPath = await writeGlobalConfig(home, {
+      planner: { model: "openai/gpt-5.4-mini" },
+    });
+    const before = await readFile(configPath, "utf8");
+    execMocks.execFile.mockImplementation(
+      (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+        callback(Object.assign(new Error("opencode: command not found"), { code: "ENOENT" }));
+      },
+    );
+    const { input, calls } = scriptedInput([]);
+    const { output } = collectOutput();
+
+    // Real discovery (no seam): shells out to the mocked CLI, which fails.
+    const result = await configureModels(worktree, { input, output, tty: true });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("opencode: command not found");
+    expect(result.message).toContain("left untouched");
+    expect(calls.length).toBe(0); // no prompt was ever asked
+    expect(await readFile(configPath, "utf8")).toBe(before);
+  });
+
   it("reports a write failure without creating or mutating configuration", async () => {
     const home = await makeHome();
     const worktree = await makeWorktree();
@@ -655,7 +860,7 @@ describe("configureModels", () => {
     await mkdir(resolve(home, ".config"), { recursive: true });
     await writeFile(globalConfigDir(home), "not a directory");
 
-    const { input } = scriptedInput(["3", "planner", "1"]); // planner → deepseek-v4-pro
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
     const { output } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -676,7 +881,7 @@ describe("configureModels", () => {
   it("persists a model-only planner override and resolves it with no variant on the next read", async () => {
     const home = await makeHome(); // no global aria.json
     const worktree = await makeWorktree(); // no project aria.json
-    const { input } = scriptedInput(["3", "planner", "1"]); // planner → deepseek-v4-pro (no variants)
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
     const { output } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -699,5 +904,165 @@ describe("configureModels", () => {
     const resolved = resolveAriaConfig(worktree);
     expect(resolved.roles.planner.model).toBe("opencode-go/deepseek-v4-pro");
     expect(resolved.roles.planner.variant).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Presentation (T001-T007): separators, bold resolved values, red warnings,
+  // ANSI/NO_COLOR behavior, and wording.
+  // -------------------------------------------------------------------------
+
+  it("separates overview role blocks with 60-hyphen rules, but not the single-role view", async () => {
+    await makeHome();
+    const worktree = await makeWorktree();
+    const { input } = scriptedInput(["2", "planner", ""]); // reach the single-role view, keep current
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("unchanged");
+    const text = lines.join("\n");
+    const rule = `  ${"-".repeat(60)}`;
+    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(8); // between the nine roles
+    expect(text).toContain(`${rule}\n  explorer`); // after coder's block
+    expect(text).not.toContain(`${rule}\n\nWhat would you like to do?`); // never after writer
+    // The single-role configuration view starts after the roles prompt line.
+    const singleRoleView = text.slice(text.indexOf("Roles available:"));
+    expect(singleRoleView).toContain("  planner\n    default:");
+    expect(singleRoleView).not.toContain(rule);
+  });
+
+  it("bolds only the resolved route value in TTY output", async () => {
+    await makeHome();
+    const worktree = await makeWorktree();
+    const { input } = scriptedInput([""]);
+    const { output, lines } = collectOutput();
+
+    await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    const text = lines.join("\n");
+    expect(text).toContain("resolved:  \x1b[1mopencode-go/deepseek-v4-pro\x1b[0m");
+    // Exactly one bold segment per role (the resolved value); labels and other
+    // layers stay unbolded, and no warnings render here.
+    expect(text.split("\x1b[1m").length - 1).toBe(9);
+    expect(text.split("\x1b[31m").length - 1).toBe(0);
+  });
+
+  it("renders project-mask warnings in red in TTY output and keeps results ANSI-free", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    await writeGlobalConfig(home, { planner: { model: "openai/gpt-5.4-mini" } });
+    await writeFile(resolve(worktree, "aria.json"), `${JSON.stringify({
+      roles: { planner: { model: "openai/project-planner" } },
+    })}\n`);
+
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    expect(result.maskedRoles).toEqual(["planner"]);
+    const text = lines.join("\n");
+    // Pre-prompt and post-write warnings are both red.
+    expect(text).toContain(
+      "\x1b[31mWARNING: Project-local aria.json pins the model field for planner",
+    );
+    expect(text.split("\x1b[31m").length - 1).toBe(2);
+    // Styling never leaks into the result object.
+    expect(JSON.stringify(result)).not.toContain("\x1b[");
+  });
+
+  it("warns that a fully masked role's resolved route is unaffected", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    await writeGlobalConfig(home, { planner: { model: "openai/gpt-5.4-mini" } });
+    await writeFile(resolve(worktree, "aria.json"), `${JSON.stringify({
+      roles: { planner: { model: "openai/project-planner", variant: "high" } },
+    })}\n`);
+
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    expect(lines.join("\n")).toContain(
+      "WARNING: Project-local aria.json overrides planner, so this global change does not "
+      + "affect its currently resolved route. Run `aria routes` for the authoritative result.",
+    );
+  });
+
+  it("emits plain text without ANSI escapes when NO_COLOR is set", async () => {
+    process.env.NO_COLOR = "1";
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    await writeGlobalConfig(home, { planner: { model: "openai/gpt-5.4-mini" } });
+    await writeFile(resolve(worktree, "aria.json"), `${JSON.stringify({
+      roles: { planner: { model: "openai/project-planner" } },
+    })}\n`);
+
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    const text = lines.join("\n");
+    expect(text).not.toContain("\x1b[");
+    // Content is still present, just unstyled.
+    expect(text).toContain("WARNING: Project-local aria.json pins the model field for planner");
+    expect(text).toContain("resolved:  opencode-go/deepseek-v4-pro");
+  });
+
+  it("emits plain text without ANSI escapes when NO_COLOR is an empty string", async () => {
+    process.env.NO_COLOR = "";
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    await writeGlobalConfig(home, { planner: { model: "openai/gpt-5.4-mini" } });
+    await writeFile(resolve(worktree, "aria.json"), `${JSON.stringify({
+      roles: { planner: { model: "openai/project-planner" } },
+    })}\n`);
+
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output, lines } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    const text = lines.join("\n");
+    expect(text).not.toContain("\x1b[");
+    // Content is still present, just unstyled.
+    expect(text).toContain("WARNING: Project-local aria.json pins the model field for planner");
+    expect(text).toContain("resolved:  opencode-go/deepseek-v4-pro");
   });
 });

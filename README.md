@@ -226,15 +226,14 @@ Setup never creates or overwrites project `aria.json`, commits, pushes, or intro
 
 ### `aria setup --configure`
 
-`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models and providers OpenCode reports for the current worktree and shows the nine configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `archivist`, `writer`) with each role's resolved current route and the packaged recommended route, annotated from discovery as available or unavailable. Availability is purely diagnostic — no fallback routing or automatic replacement is added.
+`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the nine configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `archivist`, `writer`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
 
-For each phase you may:
+From the top-level menu you may:
 
-- **Keep ARIA recommended defaults** — removes any global overrides that diverge from the packaged defaults.
-- **Keep current assignments** — writes nothing; existing overrides are preserved exactly.
-- **Configure specific roles** — pick roles from a comma-separated list, then choose a discovered enabled model and, where reported, one of its enabled variants.
+- **Keep current configuration** — writes nothing; existing overrides are preserved exactly.
+- **Configure roles** — pick roles from a comma-separated list, then for each role keep the current assignment (Enter), reset to the ARIA default (`0`), type an exact model identifier, or search discovered models by case-insensitive substring. A search listing at most ten models offers numbered selection; larger result sets ask you to refine the search.
 
-Choosing a role's recommended default removes that role's global `model` and `variant` fields rather than writing sentinel or copied values. Choosing a model replaces the `model` field and replaces or removes any previous global variant, so a stale variant cannot survive a model change. Only the canonical global `~/.config/opencode/aria.json` is written, atomically, after creating its parent directory. When the canonical file is absent, existing legacy-global choices seed the result only if you make an explicit edit, and no canonical file is created for an unchanged or default-only result when none existed. Project-local `aria.json` files are never written; when a project override masks a global edit, the result reports it and points to `aria routes` as the authoritative resolved-routing view. When stdin is not a terminal, the phase is skipped without failing setup.
+Choosing a model replaces the role's global `model` field, then a compact variant prompt offers the model's reported variants (`Enter` for no variant, a number to select one), so a stale variant cannot survive a model change. Resetting a role to the ARIA default removes that role's global `model` and `variant` fields rather than writing sentinel or copied values. Only the canonical global `~/.config/opencode/aria.json` is written, atomically, after creating its parent directory. When the canonical file is absent, existing legacy-global choices seed the result only if you make an explicit edit, and no canonical file is created for an unchanged or default-only result when none existed. Project-local `aria.json` files are never written; when a project override masks a global edit, the result reports it and points to `aria routes` as the authoritative resolved-routing view. When stdin is not a terminal, the phase is skipped without failing setup.
 
 ### `aria update`
 

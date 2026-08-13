@@ -1,5 +1,4 @@
-import { createOpencodeServer } from "@opencode-ai/sdk/v2";
-import { createOpencodeClient } from "@opencode-ai/sdk/v2/client";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
@@ -30,84 +29,134 @@ function describeDiscoveryError(error) {
         return String(error);
     }
 }
-function ariaModelIdentifier(providerID, reportedID) {
-    return reportedID.startsWith(`${providerID}/`) ? reportedID : `${providerID}/${reportedID}`;
+// `opencode models` prints one usable model identifier per line; `opencode
+// models --verbose` follows each identifier with its pretty-printed JSON
+// metadata block (indented, so identifier lines start at column 0).
+const MODEL_ID_PATTERN = /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/;
+function splitModelIdentifier(id) {
+    const separator = id.indexOf("/");
+    return { providerID: id.slice(0, separator), modelID: id.slice(separator + 1) };
 }
-function ariaModelID(providerID, reportedID) {
-    return reportedID.startsWith(`${providerID}/`) ? reportedID.slice(providerID.length + 1) : reportedID;
-}
-function enabledVariantIds(variants) {
-    return variants
-        .filter((variant) => variant.disabled !== true && variant.id.trim().length > 0)
-        .map((variant) => variant.id);
+/** Run an `opencode` CLI subcommand in the worktree, capturing stdout. */
+function runOpencode(args, worktree) {
+    return new Promise((resolveResult, rejectResult) => {
+        execFile("opencode", args, { cwd: worktree, timeout: 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+            if (error) {
+                rejectResult(error);
+                return;
+            }
+            resolveResult({ stdout, stderr });
+        });
+    });
 }
 /**
- * Retain only enabled models whose provider is returned as active (not
- * disabled), normalizing each choice to ARIA's providerID/modelID identifier.
+ * Parse `opencode models` output: one usable model identifier per line,
+ * without variant metadata.
  */
-export function normalizeAvailableModels(models, providers) {
-    const activeProviderIDs = new Set(providers.filter((provider) => provider.disabled !== true).map((provider) => provider.id));
-    return models
-        .filter((model) => model.enabled && activeProviderIDs.has(model.providerID))
-        .map((model) => ({
-        id: ariaModelIdentifier(model.providerID, model.id),
-        providerID: model.providerID,
-        modelID: ariaModelID(model.providerID, model.id),
-        name: model.name,
-        variants: enabledVariantIds(model.variants),
-    }));
+export function parseModelList(stdout) {
+    const models = [];
+    for (const rawLine of stdout.split("\n")) {
+        const id = rawLine.trim();
+        if (id.length === 0 || !MODEL_ID_PATTERN.test(id))
+            continue;
+        const { providerID, modelID } = splitModelIdentifier(id);
+        models.push({ id, providerID, modelID, name: modelID, variants: [] });
+    }
+    return models;
+}
+function verboseModelFromBlock(id, jsonText) {
+    let info;
+    try {
+        info = JSON.parse(jsonText);
+    }
+    catch {
+        return undefined;
+    }
+    const { providerID, modelID } = splitModelIdentifier(id);
+    const variants = info.variants && typeof info.variants === "object" && !Array.isArray(info.variants)
+        ? Object.keys(info.variants).filter((variant) => variant.trim().length > 0)
+        : [];
+    return {
+        id,
+        providerID,
+        modelID,
+        name: typeof info.name === "string" && info.name.trim().length > 0 ? info.name : modelID,
+        variants,
+    };
 }
 /**
- * Retain only providers returned as active (not disabled).
+ * Parse `opencode models --verbose` output: each model identifier line is
+ * followed by its JSON metadata block, whose `variants` object keys are the
+ * reported variant IDs.
  */
-export function normalizeAvailableProviders(providers) {
-    return providers
-        .filter((provider) => provider.disabled !== true)
-        .map((provider) => ({ id: provider.id, name: provider.name }));
+export function parseModelVerbose(stdout) {
+    const lines = stdout.split("\n");
+    const models = [];
+    let index = 0;
+    while (index < lines.length) {
+        const rawLine = lines[index];
+        index++;
+        // JSON content lines are indented; identifier lines start at column 0.
+        if (rawLine.length === 0 || rawLine[0] === " " || rawLine[0] === "\t")
+            continue;
+        const id = rawLine.trim();
+        if (!MODEL_ID_PATTERN.test(id))
+            continue;
+        let jsonText = "";
+        let model;
+        while (index < lines.length) {
+            const candidate = lines[index];
+            // The next identifier line starts a new block; stop before consuming it.
+            if (jsonText.length > 0
+                && candidate.length > 0
+                && candidate[0] !== " "
+                && candidate[0] !== "\t"
+                && MODEL_ID_PATTERN.test(candidate.trim())) {
+                break;
+            }
+            jsonText = jsonText.length === 0 ? candidate : `${jsonText}\n${candidate}`;
+            index++;
+            model = verboseModelFromBlock(id, jsonText);
+            if (model)
+                break;
+        }
+        if (model)
+            models.push(model);
+    }
+    return models;
 }
 /**
- * Discover available models and providers for a worktree.
+ * Discover the models the installed `opencode` CLI reports as usable for a
+ * worktree.
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
- * starts an ephemeral loopback OpenCode server through the SDK's server
- * bootstrap, creates the generated V2 directory-scoped client for the server
- * URL and worktree, and reads Model.list({ location }) and
- * Provider2.list({ location }).
+ * shells out to `opencode models` for the usable identifier list and to
+ * `opencode models --verbose` for metadata (names and reported variants),
+ * merging the two by identifier.
  *
- * Server-startup, API-incompatibility, and discovery-response errors fail
- * discovery cleanly and leave configuration untouched.
+ * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
+ * configuration untouched.
  */
 export async function discoverAvailableModels(worktree) {
-    let server;
-    try {
-        server = await createOpencodeServer();
+    const [listResult, verboseResult] = await Promise.all([
+        runOpencode(["models"], worktree).catch((error) => {
+            throw new ModelDiscoveryError(`opencode models failed: ${describeDiscoveryError(error)}`, { cause: error });
+        }),
+        runOpencode(["models", "--verbose"], worktree).catch((error) => {
+            throw new ModelDiscoveryError(`opencode models --verbose failed: ${describeDiscoveryError(error)}`, { cause: error });
+        }),
+    ]);
+    const models = parseModelList(listResult.stdout);
+    if (models.length === 0) {
+        throw new ModelDiscoveryError("opencode models returned no usable models");
     }
-    catch (error) {
-        throw new ModelDiscoveryError(`OpenCode server failed to start: ${describeDiscoveryError(error)}`, { cause: error });
+    if (verboseResult.stdout.trim().length === 0) {
+        throw new ModelDiscoveryError("opencode models --verbose returned no output");
     }
-    try {
-        const client = createOpencodeClient({ baseUrl: server.url, directory: worktree });
-        const location = { directory: worktree };
-        const modelsResult = await client.v2.model.list({ location }).catch((error) => {
-            throw new ModelDiscoveryError(`model discovery failed: ${describeDiscoveryError(error)}`, { cause: error });
-        });
-        if (modelsResult.error) {
-            throw new ModelDiscoveryError(`model discovery failed: ${describeDiscoveryError(modelsResult.error)}`, { cause: modelsResult.error });
-        }
-        const providersResult = await client.v2.provider.list({ location }).catch((error) => {
-            throw new ModelDiscoveryError(`provider discovery failed: ${describeDiscoveryError(error)}`, { cause: error });
-        });
-        if (providersResult.error) {
-            throw new ModelDiscoveryError(`provider discovery failed: ${describeDiscoveryError(providersResult.error)}`, { cause: providersResult.error });
-        }
-        return {
-            models: normalizeAvailableModels(modelsResult.data.data, providersResult.data.data),
-            providers: normalizeAvailableProviders(providersResult.data.data),
-        };
-    }
-    finally {
-        server.close();
-    }
+    const verboseModels = new Map(parseModelVerbose(verboseResult.stdout).map((model) => [model.id, model]));
+    return {
+        models: models.map((model) => verboseModels.get(model.id) ?? model),
+    };
 }
 // The nine configurable roles are fixed; discovery reports which models are
 // available, never which roles exist.
@@ -175,12 +224,6 @@ function isDefaultOnly(roles, defaults) {
 function routeText(model, variant) {
     return variant ? `${model} (${variant})` : model;
 }
-function routeAvailability(modelId, variant, models) {
-    const model = models.find((candidate) => candidate.id === modelId);
-    if (!model)
-        return false;
-    return variant === undefined || model.variants.includes(variant);
-}
 /**
  * Report which project-local override fields pin a role, masking global edits.
  * Presence is authoritative: a project field masks the role even when its
@@ -194,22 +237,65 @@ function projectMasksFor(projectOverrides, role) {
         variant: entry?.variant !== undefined,
     };
 }
-function renderRoleSummary(resolved, defaults, models, projectOverrides) {
+const ABSENT_LAYER = "-";
+/** Route text for an override layer; `-` when the layer is absent. */
+function layerRouteText(entry) {
+    if (!entry || (entry.model === undefined && entry.variant === undefined))
+        return ABSENT_LAYER;
+    const model = entry.model ?? ABSENT_LAYER;
+    return entry.variant !== undefined ? `${model} (${entry.variant})` : model;
+}
+// ---------------------------------------------------------------------------
+// ANSI styling (rendering-only; never written into config or result objects)
+// ---------------------------------------------------------------------------
+const ANSI_BOLD = "\x1b[1m";
+const ANSI_RED = "\x1b[31m";
+const ANSI_RESET = "\x1b[0m";
+/**
+ * ANSI styling applies only when the output is a terminal and NO_COLOR is
+ * absent or empty (no-color.org convention).
+ */
+function ansiEnabled(tty) {
+    if (!tty)
+        return false;
+    const noColor = process.env.NO_COLOR;
+    return noColor === undefined;
+}
+/** Wrap `text` in ANSI bold when styling is enabled, otherwise return it plain. */
+function ansiBold(text, tty) {
+    return ansiEnabled(tty) ? `${ANSI_BOLD}${text}${ANSI_RESET}` : text;
+}
+/** Wrap `text` in ANSI red when styling is enabled, otherwise return it plain. */
+function ansiRed(text, tty) {
+    return ansiEnabled(tty) ? `${ANSI_RED}${text}${ANSI_RESET}` : text;
+}
+/** Fixed-width rule separating role blocks in the nine-role overview. */
+const ROLE_SEPARATOR = `  ${"-".repeat(60)}`;
+/** Four-layer precedence display for one role. */
+function renderRoleLayers(role, resolved, defaults, models, globalOverrides, projectOverrides, tty) {
+    const resolvedRoute = resolved.roles[role];
+    const defaultRoute = defaults.roles[role];
+    const listed = models.some((model) => model.id === resolvedRoute.model);
+    const resolvedNote = listed ? "" : " [not listed by OpenCode]";
+    return [
+        `  ${role}`,
+        `    default:   ${routeText(defaultRoute.model, defaultRoute.variant)}`,
+        `    global:    ${layerRouteText(globalOverrides.roles?.[role])}`,
+        `    project:   ${layerRouteText(projectOverrides.roles?.[role])}`,
+        `    resolved:  ${ansiBold(routeText(resolvedRoute.model, resolvedRoute.variant), tty)}${resolvedNote}`,
+    ];
+}
+/**
+ * Nine-role overview: one four-layer block per role, separated by a fixed
+ * 60-hyphen rule between blocks (never after the final role).
+ */
+function renderRoleSummary(resolved, defaults, models, globalOverrides, projectOverrides, tty) {
     const lines = ["ARIA model configuration", ""];
-    for (const role of ROLES) {
-        const current = resolved.roles[role];
-        const recommended = defaults.roles[role];
-        const mask = projectMasksFor(projectOverrides, role);
-        const maskSuffix = mask.model || mask.variant ? " [project override]" : "";
-        const currentAvailability = routeAvailability(current.model, current.variant, models)
-            ? "available"
-            : "unavailable";
-        const recommendedAvailability = routeAvailability(recommended.model, recommended.variant, models)
-            ? "available"
-            : "unavailable";
-        lines.push(`  ${role.padEnd(11)} current:     ${routeText(current.model, current.variant)} [${currentAvailability}]${maskSuffix}`);
-        lines.push(`  ${" ".repeat(11)} recommended: ${routeText(recommended.model, recommended.variant)} [${recommendedAvailability}]`);
-    }
+    ROLES.forEach((role, index) => {
+        if (index > 0)
+            lines.push(ROLE_SEPARATOR);
+        lines.push(...renderRoleLayers(role, resolved, defaults, models, globalOverrides, projectOverrides, tty));
+    });
     return lines.join("\n");
 }
 function defaultInput(prompt) {
@@ -225,17 +311,26 @@ function defaultInput(prompt) {
 function defaultOutput(text) {
     process.stdout.write(`${text}\n`);
 }
+/** Top-level menu: exit without changes or configure roles. */
 function parseTopChoice(answer) {
     const text = answer.trim().toLowerCase();
-    if (text === "1" || text === "defaults" || text === "recommended" || text === "recommended defaults") {
-        return "recommended";
-    }
-    if (text === "2" || text === "current" || text === "current assignments" || text === "keep current") {
+    if (text === "1" || text === "current")
         return "current";
-    }
-    if (text === "3" || text === "configure" || text === "config")
+    if (text === "2" || text === "configure")
         return "configure";
     return undefined;
+}
+async function askTopChoice(input, output) {
+    for (let attempt = 0; attempt < MAX_PROMPT_ATTEMPTS; attempt++) {
+        const answer = await input("Choice [1-2]: ");
+        if (answer.trim() === "")
+            return { value: "current" };
+        const value = parseTopChoice(answer);
+        if (value !== undefined)
+            return { value };
+        output("  Not recognized. Please try again.");
+    }
+    return { failed: true };
 }
 function parseRoleSelection(answer) {
     const tokens = answer.split(",").map((token) => token.trim().toLowerCase()).filter((token) => token.length > 0);
@@ -253,12 +348,13 @@ function parseRoleSelection(answer) {
     }
     return roles;
 }
-function parseIndex(answer, max) {
+/** Parse a 1-based selection index in [1, max]. */
+function parseListIndex(answer, max) {
     const text = answer.trim();
     if (!/^\d+$/.test(text))
         return undefined;
     const value = Number.parseInt(text, 10);
-    if (!Number.isInteger(value) || value < 0 || value > max)
+    if (!Number.isInteger(value) || value < 1 || value > max)
         return undefined;
     return value;
 }
@@ -275,61 +371,111 @@ async function ask(input, output, prompt, parse) {
     return { failed: true };
 }
 /**
- * Present the numbered model choices for one role and apply the user's
- * selection to the pending global roles:
- * - recommended default removes the role's global model and variant fields;
- * - a model choice replaces the model field and replaces or removes the old
- *   global variant according to the user's variant/no-variant choice.
+ * Compact variant selection after a model is chosen: Enter keeps the model
+ * with no variant (clearing any previous one), a number selects a reported
+ * variant.
  */
-async function configureRole(role, pending, input, output, defaults, resolved, models) {
-    const recommended = defaults.roles[role];
-    const current = resolved.roles[role];
-    output("");
-    output(`Role ${role} — current: ${routeText(current.model, current.variant)}`);
-    output(`  [0] ARIA recommended default (packaged: ${routeText(recommended.model, recommended.variant)})`);
-    models.forEach((model, index) => {
-        const variantText = model.variants.length > 0 ? ` (variants: ${model.variants.join(", ")})` : "";
-        output(`  [${index + 1}] ${model.id}${variantText}`);
-    });
-    const modelResult = await ask(input, output, `Choose a model for ${role} (0 for recommended default): `, (answer) => parseIndex(answer, models.length));
-    if ("cancelled" in modelResult)
-        return "cancelled";
-    if ("failed" in modelResult)
-        return "failed";
-    if (modelResult.value === 0) {
-        // Recommended default: remove the role's fields rather than copying them.
-        delete pending[role];
-        return "done";
-    }
-    const model = models[modelResult.value - 1];
-    if (!model)
-        return "failed";
+async function chooseVariant(model, role, pending, input, output) {
     if (model.variants.length === 0) {
         const entry = { ...pending[role], model: model.id };
         delete entry.variant;
         pending[role] = entry;
         return "done";
     }
-    output(`Variants for ${model.id}:`);
-    output("  [0] No variant");
-    model.variants.forEach((variant, index) => output(`  [${index + 1}] ${variant}`));
-    const variantResult = await ask(input, output, `Choose a variant for ${model.id} (0 for no variant): `, (answer) => parseIndex(answer, model.variants.length));
-    if ("cancelled" in variantResult)
-        return "cancelled";
-    if ("failed" in variantResult)
-        return "failed";
-    const entry = { ...pending[role], model: model.id };
-    if (variantResult.value === 0) {
-        delete entry.variant;
-    }
-    else {
-        const variant = model.variants[variantResult.value - 1];
+    output("");
+    output("Variant:");
+    output("  Enter   no variant override");
+    model.variants.forEach((variant, index) => output(`  ${index + 1}) ${variant}`));
+    for (let attempt = 0; attempt < MAX_PROMPT_ATTEMPTS; attempt++) {
+        const answer = await input("> ");
+        const text = answer.trim();
+        if (text === "") {
+            const entry = { ...pending[role], model: model.id };
+            delete entry.variant;
+            pending[role] = entry;
+            return "done";
+        }
+        const index = parseListIndex(text, model.variants.length);
+        if (index === undefined) {
+            output("  Not recognized. Please try again.");
+            continue;
+        }
+        const variant = model.variants[index - 1];
         if (!variant)
             return "failed";
-        entry.variant = variant;
+        pending[role] = { ...pending[role], model: model.id, variant };
+        return "done";
     }
-    pending[role] = entry;
-    return "done";
+    return "failed";
+}
+/**
+ * Search-driven model selection for one role. Shows the four-layer
+ * precedence, then accepts:
+ * - Enter: keep the current assignment (no change);
+ * - 0: use the ARIA default (remove the role's global override);
+ * - an exact discovered model identifier: accept immediately;
+ * - other text: case-insensitive substring search over discovered model IDs,
+ *   with numbered selection when at most ten models match. A chosen model
+ *   replaces the model field and its variant is set through the compact
+ *   variant prompt.
+ */
+async function configureRole(role, pending, input, output, defaults, resolved, models, globalOverrides, projectOverrides, tty) {
+    output("");
+    output(renderRoleLayers(role, resolved, defaults, models, globalOverrides, projectOverrides, tty).join("\n"));
+    output("");
+    const mask = projectMasksFor(projectOverrides, role);
+    if (mask.model || mask.variant) {
+        output(ansiRed(roleMaskWarning(role, mask), tty));
+        output("");
+    }
+    output("Model:");
+    output("  Enter      keep current");
+    output("  0          use ARIA default");
+    output("  <text>     search OpenCode models");
+    let listed;
+    let unproductiveAttempts = 0;
+    for (;;) {
+        const answer = await input("> ");
+        const text = answer.trim();
+        if (text === "")
+            return "done"; // keep current: no change
+        if (text === "0") {
+            // ARIA default: remove the role's global model and variant fields.
+            delete pending[role];
+            return "done";
+        }
+        if (listed) {
+            const index = parseListIndex(text, listed.length);
+            if (index !== undefined) {
+                const model = listed[index - 1];
+                if (!model)
+                    return "failed";
+                return chooseVariant(model, role, pending, input, output);
+            }
+            listed = undefined; // fall through to a fresh search
+        }
+        const exact = models.find((model) => model.id.toLowerCase() === text.toLowerCase());
+        if (exact)
+            return chooseVariant(exact, role, pending, input, output);
+        const matches = models.filter((model) => model.id.toLowerCase().includes(text.toLowerCase()));
+        if (matches.length === 0) {
+            output("  No matches. Please try again.");
+            unproductiveAttempts++;
+            if (unproductiveAttempts >= MAX_PROMPT_ATTEMPTS)
+                return "failed";
+            continue;
+        }
+        if (matches.length > 10) {
+            output(`  ${matches.length} matches — please refine your search.`);
+            unproductiveAttempts++;
+            if (unproductiveAttempts >= MAX_PROMPT_ATTEMPTS)
+                return "failed";
+            continue;
+        }
+        unproductiveAttempts = 0;
+        listed = matches;
+        matches.forEach((model, index) => output(`  [${index + 1}] ${model.id}`));
+    }
 }
 /** Atomic write: temp file in the same directory, then rename into place. */
 async function writeGlobalConfigAtomic(filePath, overrides) {
@@ -345,13 +491,25 @@ async function writeGlobalConfigAtomic(filePath, overrides) {
     }
 }
 /**
- * Field-precise masking note: only the project-pinned fields are reported as
+ * Pre-prompt warning for one role whose project-local config masks global
+ * fields: field-precise, so a model-only or variant-only override never
+ * claims the entire resolved route is frozen.
+ */
+function roleMaskWarning(role, mask) {
+    if (mask.model && mask.variant) {
+        return `WARNING: Project-local aria.json overrides ${role}, so this global change does not affect its currently resolved route. Run \`aria routes\` for the authoritative result.`;
+    }
+    if (mask.model) {
+        return `WARNING: Project-local aria.json pins the model field for ${role}, so this global change cannot alter its resolved model. Run \`aria routes\` for the authoritative result.`;
+    }
+    return `WARNING: Project-local aria.json pins the variant field for ${role}, so this global change cannot alter its resolved variant. Run \`aria routes\` for the authoritative result.`;
+}
+/**
+ * Post-write masking warning: only the project-pinned fields are reported as
  * unchangeable, so a model-only or variant-only override never claims the
  * entire resolved route is frozen.
  */
-function maskedFieldsNote(masks) {
-    if (masks.length === 0)
-        return "";
+function maskingWarning(masks) {
     const rolesOf = (entries) => entries.map((entry) => entry.role).join(", ");
     const clauses = [];
     const fullyMasked = masks.filter((mask) => mask.model && mask.variant);
@@ -366,7 +524,7 @@ function maskedFieldsNote(masks) {
     if (variantOnly.length > 0) {
         clauses.push(`pins the variant field for ${rolesOf(variantOnly)}; global configuration cannot change those roles' variant`);
     }
-    return `\nNote: project-local aria.json ${clauses.join("; ")}. Run \`aria routes\` for the authoritative resolved result.`;
+    return `WARNING: Project-local aria.json ${clauses.join("; ")}. Run \`aria routes\` for the authoritative result.`;
 }
 /**
  * Compare the edited global roles against the seeded ones and write the
@@ -378,15 +536,14 @@ async function finalizeGlobalConfiguration(params) {
     const finalRoles = cleanGlobalRoles(params.pending);
     const seedRoles = cleanGlobalRoles(params.seeded);
     const changedRoles = changedRolesBetween(seedRoles, finalRoles);
-    const maskNote = maskedFieldsNote(params.masks);
     const maskedRoles = params.masks.length > 0 ? params.masks.map((mask) => mask.role) : undefined;
     if (changedRoles.length === 0) {
-        return { status: "unchanged", message: `${params.noChangeMessage}${maskNote}`, maskedRoles };
+        return { status: "unchanged", message: params.noChangeMessage, maskedRoles };
     }
     if (!params.canonicalExisted && !params.legacyExisted && isDefaultOnly(finalRoles, params.defaults)) {
         return {
             status: "unchanged",
-            message: `Your selections match the ARIA packaged defaults, so no global configuration file was created.${maskNote}`,
+            message: "Your selections match the ARIA packaged defaults, so no global configuration file was created.",
             maskedRoles,
         };
     }
@@ -406,18 +563,19 @@ async function finalizeGlobalConfiguration(params) {
         wrotePath: params.canonicalPath,
         changedRoles,
         maskedRoles,
-        message: `Wrote global model configuration to ${params.canonicalPath} (changed: ${changedRoles.join(", ")}).${maskNote}`,
+        message: `Wrote global model configuration to ${params.canonicalPath} (changed: ${changedRoles.join(", ")}).`,
     };
 }
 /**
  * Lightweight interactive model configuration for `aria setup --configure`.
  *
- * Displays the nine configurable roles with their resolved current route and
- * the packaged recommended route, annotating each from discovery as available
- * or unavailable (purely diagnostic — no fallback routing is added). The user
- * may keep ARIA recommended defaults (removing any diverging global
- * overrides), keep current assignments (never writes), or configure specific
- * roles by selecting discovered models and their reported enabled variants.
+ * Discovers the models the installed `opencode` CLI reports once per run and
+ * shows the nine configurable roles with their four-layer precedence
+ * (packaged default, global override, project override, resolved route),
+ * annotating resolved models the CLI did not list (purely diagnostic — no
+ * fallback routing is added). The user may keep the current configuration
+ * (never writes) or configure specific roles through a search-driven model
+ * prompt and compact variant selection.
  *
  * Only the canonical global config `~/.config/opencode/aria.json` is written
  * (atomically); project-local `aria.json` files and untouched global role
@@ -453,12 +611,14 @@ export async function configureModels(worktree, options = {}) {
     let defaults;
     let resolved;
     let seeded;
+    let globalOverrides;
     let projectOverrides;
     try {
         defaults = loadDefaultConfig();
         resolved = resolveAriaConfig(worktree);
+        globalOverrides = readGlobalAriaOverrides();
         projectOverrides = readProjectAriaOverrides(worktree);
-        seeded = cleanGlobalRoles(readGlobalAriaOverrides().roles ?? {});
+        seeded = cleanGlobalRoles(globalOverrides.roles ?? {});
     }
     catch (error) {
         return {
@@ -475,13 +635,13 @@ export async function configureModels(worktree, options = {}) {
     const roleMasks = (roles) => roles
         .filter(hasProjectOverride)
         .map((role) => ({ role, ...projectMasksFor(projectOverrides, role) }));
-    output(renderRoleSummary(resolved, defaults, discovered.models, projectOverrides));
+    output(renderRoleSummary(resolved, defaults, discovered.models, globalOverrides, projectOverrides, tty));
     output("");
     output("What would you like to do?");
-    output("  1) Keep ARIA recommended defaults");
-    output("  2) Keep current assignments");
-    output("  3) Configure specific roles");
-    const topResult = await ask(input, output, "Choice [1-3]: ", parseTopChoice);
+    output("");
+    output("  1) Exit without changes");
+    output("  2) Configure roles");
+    const topResult = await askTopChoice(input, output);
     if ("cancelled" in topResult) {
         return { status: "unchanged", message: "Model configuration cancelled; nothing was written." };
     }
@@ -493,24 +653,7 @@ export async function configureModels(worktree, options = {}) {
         };
     }
     if (topResult.value === "current") {
-        return { status: "unchanged", message: "Keeping current assignments; existing global overrides are preserved." };
-    }
-    if (topResult.value === "recommended") {
-        for (const role of ROLES) {
-            if (roleDivergesFromDefaults(pending[role], defaults.roles[role])) {
-                delete pending[role];
-            }
-        }
-        return finalizeGlobalConfiguration({
-            seeded,
-            pending,
-            canonicalPath,
-            canonicalExisted,
-            legacyExisted,
-            defaults,
-            masks: roleMasks(ROLES),
-            noChangeMessage: "Global assignments already match the ARIA recommended defaults; nothing was written.",
-        });
+        return { status: "unchanged", message: "Keeping current configuration; existing global overrides are preserved." };
     }
     output("");
     output("Roles available: coder, explorer, visualizer, planner, architect, implementer, reviewer, archivist, writer");
@@ -527,7 +670,7 @@ export async function configureModels(worktree, options = {}) {
     }
     const editedRoles = [];
     for (const role of rolesResult.value) {
-        const outcome = await configureRole(role, pending, input, output, defaults, resolved, discovered.models);
+        const outcome = await configureRole(role, pending, input, output, defaults, resolved, discovered.models, globalOverrides, projectOverrides, tty);
         if (outcome === "cancelled") {
             return { status: "unchanged", message: "Model configuration cancelled; nothing was written." };
         }
@@ -540,15 +683,22 @@ export async function configureModels(worktree, options = {}) {
         }
         editedRoles.push(role);
     }
-    return finalizeGlobalConfiguration({
+    const masks = roleMasks(editedRoles);
+    const result = await finalizeGlobalConfiguration({
         seeded,
         pending,
         canonicalPath,
         canonicalExisted,
         legacyExisted,
         defaults,
-        masks: roleMasks(editedRoles),
+        masks,
         noChangeMessage: "Your selections match the current global assignments; nothing was written.",
     });
+    // Post-write masking warning rendered through the terminal seam (red when
+    // ANSI styling is enabled); the result object itself stays unstyled.
+    if (result.maskedRoles && result.maskedRoles.length > 0) {
+        output(ansiRed(maskingWarning(masks), tty));
+    }
+    return result;
 }
 //# sourceMappingURL=model-config.js.map

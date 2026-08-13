@@ -1,4 +1,3 @@
-import type { ModelV2Info, ProviderV2Info } from "@opencode-ai/sdk/v2/types";
 import type { RoleName } from "./types.js";
 /**
  * An available model, normalized to ARIA's providerID/modelID identifier.
@@ -9,22 +8,14 @@ export interface AvailableModel {
     providerID: string;
     modelID: string;
     name: string;
-    /** Model-reported variant IDs that are not disabled. */
+    /** Model-reported variant IDs. */
     variants: string[];
 }
 /**
- * An active AI provider.
- */
-export interface AvailableProvider {
-    id: string;
-    name: string;
-}
-/**
- * Available enabled models and active providers discovered for a worktree.
+ * Available models discovered for a worktree.
  */
 export interface ModelDiscovery {
     models: AvailableModel[];
-    providers: AvailableProvider[];
 }
 /**
  * Discovery failed; no configuration has been written or changed.
@@ -35,25 +26,27 @@ export declare class ModelDiscoveryError extends Error {
     });
 }
 /**
- * Retain only enabled models whose provider is returned as active (not
- * disabled), normalizing each choice to ARIA's providerID/modelID identifier.
+ * Parse `opencode models` output: one usable model identifier per line,
+ * without variant metadata.
  */
-export declare function normalizeAvailableModels(models: ModelV2Info[], providers: ProviderV2Info[]): AvailableModel[];
+export declare function parseModelList(stdout: string): AvailableModel[];
 /**
- * Retain only providers returned as active (not disabled).
+ * Parse `opencode models --verbose` output: each model identifier line is
+ * followed by its JSON metadata block, whose `variants` object keys are the
+ * reported variant IDs.
  */
-export declare function normalizeAvailableProviders(providers: ProviderV2Info[]): AvailableProvider[];
+export declare function parseModelVerbose(stdout: string): AvailableModel[];
 /**
- * Discover available models and providers for a worktree.
+ * Discover the models the installed `opencode` CLI reports as usable for a
+ * worktree.
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
- * starts an ephemeral loopback OpenCode server through the SDK's server
- * bootstrap, creates the generated V2 directory-scoped client for the server
- * URL and worktree, and reads Model.list({ location }) and
- * Provider2.list({ location }).
+ * shells out to `opencode models` for the usable identifier list and to
+ * `opencode models --verbose` for metadata (names and reported variants),
+ * merging the two by identifier.
  *
- * Server-startup, API-incompatibility, and discovery-response errors fail
- * discovery cleanly and leave configuration untouched.
+ * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
+ * configuration untouched.
  */
 export declare function discoverAvailableModels(worktree: string): Promise<ModelDiscovery>;
 /**
@@ -70,7 +63,7 @@ export type ModelConfigureInput = (prompt: string) => Promise<string>;
 export type ModelConfigureOutput = (text: string) => void;
 /**
  * Injectable options for `configureModels`; every seam defaults to the real
- * implementation (SDK discovery, readline over stdin, stdout).
+ * implementation (CLI discovery, readline over stdin, stdout).
  */
 export interface ModelConfigureOptions {
     /** Discovery override (defaults to `discoverAvailableModels`). */
@@ -103,12 +96,13 @@ export interface ModelConfigurationResult {
 /**
  * Lightweight interactive model configuration for `aria setup --configure`.
  *
- * Displays the nine configurable roles with their resolved current route and
- * the packaged recommended route, annotating each from discovery as available
- * or unavailable (purely diagnostic — no fallback routing is added). The user
- * may keep ARIA recommended defaults (removing any diverging global
- * overrides), keep current assignments (never writes), or configure specific
- * roles by selecting discovered models and their reported enabled variants.
+ * Discovers the models the installed `opencode` CLI reports once per run and
+ * shows the nine configurable roles with their four-layer precedence
+ * (packaged default, global override, project override, resolved route),
+ * annotating resolved models the CLI did not list (purely diagnostic — no
+ * fallback routing is added). The user may keep the current configuration
+ * (never writes) or configure specific roles through a search-driven model
+ * prompt and compact variant selection.
  *
  * Only the canonical global config `~/.config/opencode/aria.json` is written
  * (atomically); project-local `aria.json` files and untouched global role
