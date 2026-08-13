@@ -1,6 +1,6 @@
 {
   "name": "aria",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": false,
   "description": "ARIA (Archival, Research, Implementation, and Authoring): a multi-role OpenCode workstation with Review-Driven Coding, scientific/professional writing, curated knowledge archival, and planned research support.",
   "license": "MIT",
