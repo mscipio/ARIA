@@ -9,6 +9,7 @@ const ROLES: RoleName[] = [
   "architect",
   "implementer",
   "reviewer",
+  "researcher",
   "archivist",
   "writer",
 ];

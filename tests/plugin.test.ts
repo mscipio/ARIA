@@ -75,7 +75,7 @@ describe("ariaPlugin", () => {
     expect(typeof server).toBe("function");
   });
 
-  it("registers exactly nine agents and the plan tool", async () => {
+  it("registers exactly ten agents and the plan tool", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const config: Config = {};
@@ -89,6 +89,7 @@ describe("ariaPlugin", () => {
       "architect",
       "implementer",
       "reviewer",
+      "researcher",
       "writer",
       "archivist",
     ]);
@@ -96,11 +97,16 @@ describe("ariaPlugin", () => {
     expect(config.agent?.planner?.model).toBe("openai/gpt-5.6-terra");
     expect(config.agent?.planner?.mode).toBe("subagent");
     expect(config.agent?.architect?.mode).toBe("subagent");
+    expect(config.agent?.researcher?.mode).toBe("all");
+    expect(config.agent?.researcher?.model).toBe("openai/gpt-5.6-sol");
+    expect(config.agent?.researcher?.variant).toBe("medium");
     expect(config.agent?.["archivist"]?.mode).toBe("all");
     expect(config.agent?.writer?.mode).toBe("primary");
+    expect(config.agent?.researcher?.description).toBe(
+      "Direct or delegated specialist for external literature and evidence research.",
+    );
     const extendedConfig = config as Config & { skills?: { paths?: string[] } };
     expect(extendedConfig.skills?.paths).toContain(join(getPackageRoot(), "skills"));
-    expect(config.agent?.researcher).toBeUndefined();
     expect(config.agent?.tester).toBeUndefined();
     expect(config.command).toBeUndefined();
     expect(Object.keys(plugin.tool ?? {})).toEqual(["plan"]);
@@ -143,6 +149,7 @@ describe("ariaPlugin", () => {
         architect: "allow",
         implementer: "allow",
         reviewer: "allow",
+        researcher: "allow",
         "archivist": "allow",
       },
     });
@@ -155,7 +162,8 @@ describe("ariaPlugin", () => {
       plan: "deny",
     });
     expect(permission("reviewer")).toMatchObject({ edit: "deny", bash: "allow", plan: "allow" });
-    // writer is writing-only with read access and narrow Wiki delegation
+    // writer is writing-only with read access, narrow Wiki delegation, and
+    // evidence-only researcher delegation
     expect(permission("writer")).toMatchObject({
       edit: "deny",
       bash: "deny",
@@ -165,6 +173,7 @@ describe("ariaPlugin", () => {
       task: {
         "*": "deny",
         "archivist": "allow",
+        "researcher": "allow",
       },
       plan: "deny",
       read: { "*": "allow", "*.env": "deny" },
@@ -324,6 +333,98 @@ describe("ariaPlugin", () => {
     }
   });
 
+  it("registers researcher with research-only ZotPilot MCP access and approval-gated mutations", async () => {
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
+    const config: Config = {};
+    await plugin.config?.(config);
+    const permission = (role: string) => config.agent?.[role]?.permission as unknown as Record<string, unknown>;
+    const researcher = permission("researcher");
+
+    // Research-only base: read/navigation and web evidence allowed; every
+    // mutation, delegation, plan, and external-directory surface denied.
+    expect(researcher.edit).toBe("deny");
+    expect(researcher.task).toBe("deny");
+    expect(researcher.plan).toBe("deny");
+    expect(researcher.external_directory).toBe("deny");
+    expect(researcher.todowrite).toBe("deny");
+    expect(researcher.webfetch).toBe("allow");
+    expect(researcher.websearch).toBe("allow");
+    expect(researcher.glob).toBe("allow");
+    expect(researcher.grep).toBe("allow");
+    expect(researcher.list).toBe("allow");
+    expect(researcher.lsp).toBe("deny");
+    expect(researcher.read).toMatchObject({ "*": "allow", "*.env": "deny", "*.env.example": "allow" });
+    expect(researcher.skill).toEqual({ "*": "deny", "aria-research-evidence": "allow" });
+
+    // Context7 only; no Engram, CodeGraph, Wiki, or wildcard MCP authority.
+    expect(researcher["context7_*"]).toBe("allow");
+    expect(researcher).not.toHaveProperty("engram_*");
+    expect(researcher).not.toHaveProperty("codegraph_*");
+    expect(researcher).not.toHaveProperty("engram_mem_search");
+    expect(researcher).not.toHaveProperty("engram_mem_save");
+    expect(researcher).not.toHaveProperty("engram_mem_context");
+    expect(researcher).not.toHaveProperty("codegraph_codegraph_explore");
+
+    // Verified ZotPilot research/read MCP tools (zotpilot 0.5.3 live
+    // tools/list inventory): allowed directly.
+    for (const tool of [
+      "search_papers",
+      "search_topic",
+      "search_boolean",
+      "search_formulas",
+      "advanced_search",
+      "search_academic_databases",
+      "browse_library",
+      "get_paper_details",
+      "get_notes",
+      "get_annotations",
+      "get_citations",
+      "get_passage_context",
+      "get_index_stats",
+      "get_paper_for_tutor",
+    ]) {
+      expect(researcher[`zotpilot_${tool}`]).toBe("allow");
+    }
+
+    // Verified ZotPilot mutation tools: approval-gated, never allowed.
+    for (const tool of [
+      "index_library",
+      "index_formulas",
+      "ingest_by_identifiers",
+      "create_note",
+      "manage_tags",
+      "manage_collections",
+      "annotate_pdf",
+      "save_reading_persona",
+    ]) {
+      expect(researcher[`zotpilot_${tool}`]).toBe("ask");
+    }
+
+    // No broad or wildcard ZotPilot grant; tools outside the verified
+    // inventory fall back to the base `*` deny.
+    expect(researcher).not.toHaveProperty("zotpilot_*");
+    expect(researcher).not.toHaveProperty("zotpilot_search_tables");
+    expect(researcher).not.toHaveProperty("zotpilot_search_figures");
+    expect(researcher).not.toHaveProperty("zotpilot_manage_library");
+
+    // Bash deny-by-default: only the zotpilot executable family is
+    // approval-gated as a fallback path; nothing is allowed and unrelated
+    // shell commands stay denied.
+    expect(researcher.bash).toMatchObject({
+      "*": "deny",
+      "zotpilot": "ask",
+      "zotpilot *": "ask",
+    });
+    const researcherBash = researcher.bash as Record<string, unknown>;
+    expect(Object.keys(researcherBash).sort()).toEqual(["*", "zotpilot", "zotpilot *"]);
+    expect(researcherBash).not.toHaveProperty("zotpilot **");
+    expect(researcherBash).not.toHaveProperty("zotpilot*");
+    expect(researcherBash).not.toHaveProperty("python *");
+    expect(researcherBash).not.toHaveProperty("npm *");
+    expect(researcherBash).not.toHaveProperty("ls");
+  });
+
   it("enforces the runtime plan ACL per role and action", async () => {
     const plugin = await load({ directory: await project() } as never);
     const plan = plugin.tool!.plan!;
@@ -418,6 +519,9 @@ describe("ariaPlugin", () => {
       { action: "close", expectedPlanID: planID, expectedRevision: revision },
       reviewer("reviewer-close"),
     ))).toMatch(/may not close/);
+
+    // researcher has no plan access at all
+    expect(outputOf(await plan.execute({ action: "get" }, toolContext("researcher", "researcher-get")))).toMatch(/may not get/);
 
     expect(outputOf(await plan.execute({ action: "get" }, toolContext("coder", "")))).toMatch(/sessionID is required/);
   });

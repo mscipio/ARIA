@@ -1,4 +1,4 @@
-export type RoleName = "coder" | "explorer" | "visualizer" | "planner" | "architect" | "implementer" | "reviewer" | "archivist" | "writer";
+export type RoleName = "coder" | "explorer" | "visualizer" | "planner" | "architect" | "implementer" | "reviewer" | "researcher" | "archivist" | "writer";
 export interface RoleDefaults {
     model: string;
     variant?: string;

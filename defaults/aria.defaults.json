@@ -38,6 +38,12 @@
       "mode": "subagent",
       "promptFile": "prompts/reviewer.md"
     },
+    "researcher": {
+      "model": "openai/gpt-5.6-sol",
+      "variant": "medium",
+      "mode": "all",
+      "promptFile": "prompts/researcher.md"
+    },
     "archivist": {
       "model": "opencode-go/deepseek-v4-pro",
       "mode": "all",

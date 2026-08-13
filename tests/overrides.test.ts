@@ -248,6 +248,7 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).toContain("architect: `architect` → openai/gpt-5.6-sol [xhigh]");
       expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2");
       expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro");
+      expect(config.roles.coder.promptText).toContain("researcher: `researcher` → openai/gpt-5.6-sol [medium]");
       expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code");
       expect(config.roles.coder.promptText).toContain("writer: `writer`");
       expect(config.roles.coder.promptText).toContain("openai/gpt-5.6-sol [medium]");
@@ -275,11 +276,24 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).toContain("explorer: `explorer` → opencode-go/deepseek-v4-flash [xhigh]");
     });
 
+    it("researcher model override resolves and clears the inherited variant", async () => {
+      const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
+      tempDirs.push(root);
+      await writeFile(resolve(root, "aria.json"), JSON.stringify({
+        roles: { researcher: { model: "openai/gpt-5.6-terra" } },
+      }));
+      const config = resolveAriaConfig(root);
+      expect(config.roles.researcher.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.researcher.variant).toBeUndefined();
+      expect(config.roles.coder.promptText).toContain("researcher: `researcher` → openai/gpt-5.6-terra");
+      expect(config.roles.coder.promptText).not.toContain("researcher: `researcher` → openai/gpt-5.6-terra [medium]");
+    });
+
     it("roles without variants render cleanly without fake variant text", () => {
       const config = resolveAriaConfig(tmpdir());
       expect(config.roles.coder.promptText).toContain("coder: `coder` → opencode-go/deepseek-v4-pro\n");
       expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2\n");
-      expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro\n");
+      expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro\n- researcher:");
       expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code\n");
       expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/deepseek-v4-pro\n");
     });

@@ -10,6 +10,7 @@ const ROLES = [
     "architect",
     "implementer",
     "reviewer",
+    "researcher",
     "archivist",
     "writer",
 ];
@@ -206,7 +207,7 @@ export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.
                 ...roleDefaults,
                 model,
                 variant,
-                promptText: role === "archivist" || role === "writer"
+                promptText: role === "archivist" || role === "writer" || role === "researcher"
                     ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
                     : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
             }];

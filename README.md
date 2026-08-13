@@ -1,6 +1,6 @@
 # ARIA
 
-**ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `writer` and `archivist` own writing and knowledge workflows; `researcher` is the next planned role.
+**ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `writer`, `archivist`, and `researcher` own writing, knowledge, and evidence-research workflows.
 
 ## Features
 
@@ -12,6 +12,7 @@
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
 - **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
 - **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki and writer remain intentionally isolated
+- **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, and explicit evidence-level/uncertainty reporting
 
 ## Workflow
 
@@ -40,6 +41,7 @@ The tasklist is scoped to the worktree, not to one OpenCode conversation. A new 
 | architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-5.6-sol` |
 | implementer | Edits code and runs relevant checks | `opencode-go/glm-5.2` |
 | reviewer | Finds regressions, risks, and missing verification | `opencode-go/deepseek-v4-pro` |
+| researcher (`all`) | Direct or delegated external literature and evidence research | `openai/gpt-5.6-sol` |
 | archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/deepseek-v4-pro` |
 | writer (`primary`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-5.6-sol` |
 
@@ -47,7 +49,7 @@ Only implementer can use OpenCode's edit tool for application code. Implementer 
 
 Coding specialists run through OpenCode's native `task` tool. `writer` is selected directly as a primary agent, while `archivist` can be selected directly or delegated through `task`.
 
-`coder` and `writer` are primary agents. `archivist` uses OpenCode `mode: all`, so it is available both directly (for Wiki queries/maintenance) and as a delegated specialist. The future `researcher` role is intended to use the same `all` pattern.
+`coder` and `writer` are primary agents. `archivist` and `researcher` use OpenCode `mode: all`, so each is available both directly and as a delegated specialist. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose).
 
 ## Agent and Skill Architecture
 
@@ -67,6 +69,7 @@ Examples:
 - reviewer → `rdc-implementation-review` + proportional testing guidance
 - archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
 - writer → `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
+- researcher → `aria-research-evidence`
 
 ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers its packaged `skills/` directory through OpenCode's native `skills.paths` configuration, so skills stay version-locked to the loaded ARIA package without copying files into the user's global skill directory or depending on myopencode/another registry.
 
@@ -121,6 +124,7 @@ Only the `coder`, planning specialists, and reviewer can call `plan`; every othe
 | planner | `get`, `create` |
 | architect | `get`, `replace` |
 | reviewer | `get` |
+| researcher | none |
 | explorer | none |
 | visualizer | none |
 | implementer | none |
@@ -226,7 +230,7 @@ Setup never creates or overwrites project `aria.json`, commits, pushes, or intro
 
 ### `aria setup --configure`
 
-`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the nine configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `archivist`, `writer`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
+`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the ten configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
 
 From the top-level menu you may:
 
@@ -278,6 +282,7 @@ planner  openai/gpt-5.6-terra (xhigh)
 architect  openai/gpt-5.6-sol (xhigh)
 implementer  opencode-go/glm-5.2
 reviewer  opencode-go/deepseek-v4-pro
+researcher  openai/gpt-5.6-sol (medium)
 ```
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
@@ -291,7 +296,32 @@ MCPs are preferred evidence sources, not mandatory routes for every task. Engram
 - `aria-review-response` — reviewer-response/rebuttal strategy, evidence anchoring, and tone
 - `aria-paper-self-review` — structure, overclaim, claim-evidence, reproducibility, and submission-readiness audit
 
-The writer may task `archivist` only for explicitly read-only project/internal evidence. It does not query Zotero or the literature itself. A future `researcher` role will own those capabilities; the writer prompt already defines the handoff contract and marks unresolved external evidence as `[RESEARCH NEEDED]` or `[CITATION NEEDED]` until that role exists.
+The writer may task `archivist` only for explicitly read-only project/internal evidence. For external literature, Zotero, citation-verification, and claim-support evidence it tasks `researcher` with a focused evidence request (evidence, not manuscript prose). The writer does not query Zotero or the literature itself; it marks external evidence the researcher could not resolve as `[RESEARCH NEEDED]` or `[CITATION NEEDED]`.
+
+## Researcher
+
+`researcher` is the evidence specialist with `mode: all`: you can invoke it directly for literature and citation questions, and the `coder` or `writer` may delegate focused evidence requests to it. It is read/research-only for the project (protected read plus navigation), with no edit, shell, plan, or Wiki authority.
+
+ARIA owns the research workflow; **ZotPilot remains the Zotero backend/capability provider**. The researcher uses the available ZotPilot MCP research/read tools directly for library search, metadata/content retrieval, and evidence inspection, plus `websearch`/`webfetch` for external authoritative sources and Context7 for library/API documentation. ARIA does not install a second Zotero backend or MCP, and no user-level ZotPilot skill installation is introduced by this role. Zotero mutation is approval-gated: ingest, note/tag/collection management, PDF annotation, and indexing tools require an explicit per-operation user approval, as does any `zotpilot` CLI fallback; the researcher never mutates the library on its own authority.
+
+The packaged `aria-research-evidence` skill defines the repeatable evidence procedure:
+
+- **Evidence ladder** — inspected full text, passage with expanded context, abstract/snippet, secondary mention; claims are labeled with the level actually used.
+- **Library-vs-external provenance** — every finding states whether its source is a library item (Zotero identity) or an external source (DOI/URL/identifier).
+- **Primary/authoritative-source preference** — original studies, official documentation, standards, and registry records over reviews and summaries.
+- **Passage-context expansion** — surrounding context is retrieved before passage-specific claims.
+- **Disagreement, uncertainty, and evidence-gap reporting** — conflicts across sources and missing evidence are reported explicitly, never smoothed over.
+- **Structured evidence handoffs** — findings with provenance and level, an itemized disagreements/uncertainties/gaps list, and cited sources.
+
+Hard boundaries: the researcher never edits project files, performs software/shell work, maintains the Wiki, drafts manuscript or rebuttal prose, persists to Engram automatically, spawns nested researcher subagents, or mutates Zotero without explicit per-operation approval. It has no Engram, CodeGraph, Wiki, broad MCP, or wildcard ZotPilot authority; its Bash access is deny-by-default with only `zotpilot`/`zotpilot *` approval-gated as a fallback path.
+
+### Dogfood scenario
+
+A realistic literature task to try once ZotPilot is configured with a library and the MCP server is running:
+
+> Ask `researcher` to investigate susceptibility-distortion correction in diffusion MRI. It should search the Zotero library and external authoritative sources (e.g., primary journal studies) through ZotPilot plus web evidence; compare the primary studies it finds; label each supporting passage as abstract/snippet versus inspected full text; expand passage context before making passage-specific claims; report disagreements between sources and any evidence gaps; and request explicit approval before ingesting selected DOI records into the library.
+
+The scenario is a request template, not a claim that it has already run.
 
 ## Wiki Compiler
 

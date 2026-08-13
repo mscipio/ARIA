@@ -44,6 +44,7 @@ const requiredPaths = [
   "defaults/prompts/visualizer.md",
   "defaults/prompts/archivist.md",
   "defaults/prompts/writer.md",
+  "defaults/prompts/researcher.md",
   "skills/rdc-code-exploration/SKILL.md",
   "skills/rdc-visual-analysis/SKILL.md",
   "skills/rdc-implementation-planning/SKILL.md",
@@ -59,6 +60,7 @@ const requiredPaths = [
   "skills/aria-writing-anti-ai/SKILL.md",
   "skills/aria-review-response/SKILL.md",
   "skills/aria-paper-self-review/SKILL.md",
+  "skills/aria-research-evidence/SKILL.md",
   "dist/lifecycle.js",
   "dist/lifecycle.d.ts",
   "dist/model-config.js",
@@ -144,13 +146,21 @@ if (config.agent?.["archivist"]?.mode !== "all") {
   console.error("smoke-package: archivist.mode is not all");
   process.exit(1);
 }
+if (config.agent?.researcher?.mode !== "all") {
+  console.error("smoke-package: researcher.mode is not all");
+  process.exit(1);
+}
+if (config.agent?.researcher?.prompt?.includes("aria-research-evidence") !== true) {
+  console.error("smoke-package: researcher prompt does not reference its research skill");
+  process.exit(1);
+}
 if (!(config.skills?.paths ?? []).some((value) => value.endsWith("/aria/skills") || value.endsWith("\\aria\\skills"))) {
   console.error("smoke-package: package skill path is not registered", config.skills?.paths);
   process.exit(1);
 }
 
 const agents = Object.keys(config.agent ?? {});
-const expected = ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "writer", "archivist"];
+const expected = ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "writer", "archivist"];
 if (expected.some((name) => !agents.includes(name))) {
   console.error("smoke-package: missing agents", expected.filter((name) => !agents.includes(name)));
   process.exit(1);
@@ -183,6 +193,9 @@ console.log("smoke-package: ok", {
   }
   if (!routesOutput.includes("coder  opencode-go/deepseek-v4-pro")) {
     fail("aria routes did not include coder role");
+  }
+  if (!routesOutput.includes("researcher  openai/gpt-5.6-sol (medium)")) {
+    fail("aria routes did not include researcher role");
   }
 
   // Verify aria routes honors project-local aria.json from CWD
