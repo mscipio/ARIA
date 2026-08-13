@@ -44,6 +44,17 @@ export declare function resolveCommand(cmd: string, pathEnv?: string, pathExt?: 
  */
 export declare function buildComSpecArgs(command: string, args: string[]): string[];
 declare const defaultExecutor: Executor;
+/**
+ * Optional ZotPilot MCP server presence observed by a fresh `opencode mcp
+ * list` CLI run. ZotPilot is optional at runtime but expected for the
+ * advertised researcher capability.
+ */
+export interface ZotPilotMcpPresence {
+    /** Server appears in `opencode mcp list` output. */
+    listed: boolean;
+    /** Listed status is "connected". */
+    connected: boolean;
+}
 export interface DepsStatus {
     opencode: {
         version: string | null;
@@ -63,6 +74,10 @@ export interface DepsStatus {
         found: boolean;
         connected: boolean;
     };
+    /** Optional ZotPilot MCP presence/connectivity; absent when not listed. */
+    zotpilot?: ZotPilotMcpPresence;
+    /** True when `opencode mcp list` itself failed (no MCP status known). */
+    mcpListFailed?: boolean;
 }
 export interface SyncResult {
     ok: boolean;
@@ -86,6 +101,7 @@ declare function discoverConfigPath(configDir?: string): string | null;
 export declare function opencodeConfigPath(configDir?: string): string;
 /** Normalize JSONC comments and trailing commas without changing quoted strings. */
 declare function stripJsoncComments(raw: string): string;
+declare function extractVersion(output: string): string | null;
 declare function isCoreSemverTag(tag: string): boolean;
 type EngramSource = "homebrew" | "unknown" | "missing";
 declare function detectEngramSource(executor: Executor, fileOps?: DependencyFileOps): Promise<EngramSource>;
@@ -107,6 +123,10 @@ export interface McpStatus {
     engram: boolean;
     context7: boolean;
     codegraph: boolean;
+    /** Optional ZotPilot presence/connectivity; absent when not listed. */
+    zotpilot?: ZotPilotMcpPresence;
+    /** True when `opencode mcp list` failed (no list output was available). */
+    listFailed?: boolean;
 }
 export declare function parseMcpList(output: string): McpStatus;
 declare function detectMcpConnectivity(executor: Executor): Promise<McpStatus>;
@@ -119,5 +139,5 @@ export declare function formatDoctor(version: string, status: DepsStatus): strin
 export declare function doctorExitCode(status: DepsStatus): number;
 export declare function depsSync(executor?: Executor, configDir?: string, fileOps?: DependencyFileOps): Promise<SyncResult>;
 export declare function formatSyncResult(result: SyncResult): string;
-export { defaultExecutor, detectEngram, detectEngramSource, detectCodeGraph, detectContext7, detectMcpConnectivity, detectOpenCode, syncEngramGitHub, syncEngramHomebrew, isCoreSemverTag, discoverConfigPath, stripJsoncComments, };
+export { defaultExecutor, detectEngram, detectEngramSource, detectCodeGraph, detectContext7, detectMcpConnectivity, detectOpenCode, syncEngramGitHub, syncEngramHomebrew, isCoreSemverTag, discoverConfigPath, stripJsoncComments, extractVersion, };
 //# sourceMappingURL=deps.d.ts.map

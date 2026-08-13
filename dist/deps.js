@@ -646,8 +646,11 @@ export function parseMcpList(output) {
         if (match?.[1] && match[2]) {
             const name = match[1];
             const status = match[2];
-            if (name in result) {
+            if (name === "engram" || name === "context7" || name === "codegraph") {
                 result[name] = status === "connected";
+            }
+            if (name === "zotpilot") {
+                result.zotpilot = { listed: true, connected: status === "connected" };
             }
         }
     }
@@ -656,7 +659,7 @@ export function parseMcpList(output) {
 async function detectMcpConnectivity(executor) {
     const result = await run(executor, "opencode", "mcp", "list");
     if (!result.ok) {
-        return { engram: false, context7: false, codegraph: false };
+        return { engram: false, context7: false, codegraph: false, listFailed: true };
     }
     return parseMcpList(result.stdout);
 }
@@ -677,12 +680,19 @@ export async function doctor(executor = defaultExecutor, configDir) {
         detectCodeGraph(executor),
         detectMcpConnectivity(executor),
     ]);
-    return {
+    // Legacy shape is preserved when ZotPilot is absent: the optional fields
+    // are only added when a ZotPilot entry or a failed list run is observed.
+    const status = {
         opencode,
         engram: { ...engram, connected: mcp.engram },
         context7: { ...context7, connected: context7.configured && mcp.context7 },
         codegraph: { ...codegraph, connected: mcp.codegraph },
     };
+    if (mcp.zotpilot)
+        status.zotpilot = mcp.zotpilot;
+    if (mcp.listFailed)
+        status.mcpListFailed = true;
+    return status;
 }
 export function formatDoctor(version, status) {
     const lines = [
@@ -760,5 +770,5 @@ export function formatSyncResult(result) {
     return lines.join("\n");
 }
 // Expose for testing
-export { defaultExecutor, detectEngram, detectEngramSource, detectCodeGraph, detectContext7, detectMcpConnectivity, detectOpenCode, syncEngramGitHub, syncEngramHomebrew, isCoreSemverTag, discoverConfigPath, stripJsoncComments, };
+export { defaultExecutor, detectEngram, detectEngramSource, detectCodeGraph, detectContext7, detectMcpConnectivity, detectOpenCode, syncEngramGitHub, syncEngramHomebrew, isCoreSemverTag, discoverConfigPath, stripJsoncComments, extractVersion, };
 //# sourceMappingURL=deps.js.map

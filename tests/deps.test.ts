@@ -419,6 +419,29 @@ describe("parseMcpList", () => {
     expect(result.context7).toBe(false);
     expect(result.codegraph).toBe(false);
   });
+
+  it("exposes optional ZotPilot presence without changing the legacy shape", () => {
+    const withZot = parseMcpList(allHealthyMcpList());
+    expect(withZot.zotpilot).toEqual({ listed: true, connected: true });
+    expect(withZot.engram).toBe(true);
+
+    const withoutZot = parseMcpList("engram connected\nengram mcp --tools=agent\n");
+    expect(withoutZot.zotpilot).toBeUndefined();
+    expect(withoutZot.listFailed).toBeUndefined();
+  });
+
+  it("reports ZotPilot listed but disconnected", () => {
+    const output = [
+      "MCP Servers",
+      "",
+      "zotpilot disconnected",
+      "zotpilot mcp serve",
+      "",
+      "1 server(s)",
+    ].join("\n");
+    const result = parseMcpList(output);
+    expect(result.zotpilot).toEqual({ listed: true, connected: false });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -615,6 +638,39 @@ describe("doctor", () => {
       expect(call).not.toContain("setup");
       expect(call).not.toContain("mcp add");
     }
+  });
+
+  it("exposes optional ZotPilot presence and mcp-list failure without disturbing the legacy shape", async () => {
+    const configDir = await makeConfigDirWith({
+      context7: { type: "remote", url: "https://mcp.context7.com/mcp", enabled: true },
+    });
+    const base = {
+      "opencode --version": { stdout: "1.18.15" },
+      "engram version": { stdout: "engram 1.20.0" },
+      "codegraph --version": { stdout: "1.3.1" },
+    };
+
+    const withZot = await doctor(mockExecutor({
+      ...base,
+      "opencode mcp list": { stdout: allHealthyMcpList() },
+    }), configDir);
+    expect(withZot.zotpilot).toEqual({ listed: true, connected: true });
+    expect(withZot.mcpListFailed).toBeUndefined();
+    expect(withZot.engram.connected).toBe(true);
+
+    const withoutZot = await doctor(mockExecutor({
+      ...base,
+      "opencode mcp list": { stdout: "engram connected\nengram mcp --tools=agent\n" },
+    }), configDir);
+    expect(withoutZot.zotpilot).toBeUndefined();
+    expect(withoutZot.mcpListFailed).toBeUndefined();
+
+    const failed = await doctor(mockExecutor({
+      ...base,
+      "opencode mcp list": { error: "cannot connect" },
+    }), configDir);
+    expect(failed.zotpilot).toBeUndefined();
+    expect(failed.mcpListFailed).toBe(true);
   });
 });
 

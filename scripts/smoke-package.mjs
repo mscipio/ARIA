@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import process from "node:process";
 
 import { normalizePackEntry } from "../dist/pack.js";
@@ -34,6 +34,8 @@ const requiredPaths = [
   "dist/register.js",
   "dist/deps.js",
   "dist/routes.js",
+  "dist/doctor.js",
+  "dist/doctor.d.ts",
   "defaults/aria.defaults.json",
   "defaults/prompts/coder.md",
   "defaults/prompts/planner.md",
@@ -227,6 +229,198 @@ console.log("smoke-package: ok", {
   if (!helpOutput.includes("--configure")) {
     fail("aria --help does not advertise setup --configure");
   }
+
+  // -------------------------------------------------------------------------
+  // Hermetic `aria doctor` smoke: the installed package's real CLI must
+  // produce a read-only, plain, exit-0 report using only the read-only
+  // probes below, with no access to user binaries, HOME config, Wiki, Zotero,
+  // the network, or a live OpenCode session.
+  // -------------------------------------------------------------------------
+
+  // The override check above left a project-local aria.json; remove it so the
+  // doctor observes the pure packaged defaults.
+  rmSync(join(installRoot, "aria.json"), { force: true });
+
+  // Model metadata derived from the packaged defaults: every defaults-
+  // referenced model is listed, and its verbose block reports exactly the
+  // variants the packaged defaults configure for it.
+  const installedDefaults = JSON.parse(
+    readFileSync(join(installRoot, "node_modules", "aria", "defaults", "aria.defaults.json"), "utf8"),
+  );
+  const modelIds = [];
+  const variantsByModel = new Map();
+  for (const role of Object.values(installedDefaults.roles ?? {})) {
+    if (!modelIds.includes(role.model)) modelIds.push(role.model);
+    if (role.variant) {
+      const seen = variantsByModel.get(role.model) ?? [];
+      if (!seen.includes(role.variant)) variantsByModel.set(role.model, [...seen, role.variant]);
+    }
+  }
+
+  // Temporary fake executables shadowing the real tools on PATH. Each accepts
+  // only the exact read-only argv doctor needs and rejects everything else,
+  // logging every invocation so the probe allowlist can be asserted.
+  const fakeBin = join(installRoot, "fake-bin");
+  mkdirSync(fakeBin, { recursive: true });
+  const invocationLog = join(fakeBin, "invocations.log");
+
+  writeFileSync(join(fakeBin, "models.txt"), `${modelIds.join("\n")}\n`);
+  const verboseLines = [];
+  for (const id of modelIds) {
+    verboseLines.push(
+      id,
+      JSON.stringify({
+        name: id.slice(id.indexOf("/") + 1),
+        variants: Object.fromEntries((variantsByModel.get(id) ?? []).map((variant) => [variant, {}])),
+      }),
+    );
+  }
+  writeFileSync(join(fakeBin, "models-verbose.txt"), `${verboseLines.join("\n")}\n`);
+  // ZotPilot is included as an MCP server-status line but disconnected, so
+  // the smoke covers the separate non-fatal MCP connectivity WARN alongside
+  // the ZotPilot CLI PASS.
+  writeFileSync(
+    join(fakeBin, "mcp-list.txt"),
+    ["engram connected", "context7 connected", "codegraph connected", "zotpilot disconnected", ""].join("\n"),
+  );
+
+  const fakeScript = (name, approved) => {
+    const body = approved
+      .map(({ match, out, file }) => {
+        const emit = file ? `/bin/cat "${join(fakeBin, file)}"` : `echo "${out}"`;
+        return `if ${match}; then\n  ${emit}\n  exit 0\nfi`;
+      })
+      .join("\n");
+    return `#!/bin/sh
+echo "${name} $*" >> "${invocationLog}"
+${body}
+echo "refused: ${name} $*" >&2
+exit 2
+`;
+  };
+  writeFileSync(
+    join(fakeBin, "opencode"),
+    fakeScript("opencode", [
+      { match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "opencode 1.0.0" },
+      { match: '[ "$#" -eq 1 ] && [ "$1" = "models" ]', file: "models.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "models" ] && [ "$2" = "--verbose" ]', file: "models-verbose.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "mcp" ] && [ "$2" = "list" ]', file: "mcp-list.txt" },
+    ]),
+  );
+  writeFileSync(
+    join(fakeBin, "engram"),
+    fakeScript("engram", [{ match: '[ "$#" -eq 1 ] && [ "$1" = "version" ]', out: "engram 1.0.0" }]),
+  );
+  writeFileSync(
+    join(fakeBin, "codegraph"),
+    fakeScript("codegraph", [{ match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "codegraph 1.0.0" }]),
+  );
+  // The fake zotpilot accepts only the verified version probe (T002 verified
+  // `zotpilot --version` -> "zotpilot 0.5.3") and rejects every other argv.
+  writeFileSync(
+    join(fakeBin, "zotpilot"),
+    fakeScript("zotpilot", [{ match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "zotpilot 0.5.3" }]),
+  );
+  for (const name of ["opencode", "engram", "codegraph", "zotpilot"]) {
+    chmodSync(join(fakeBin, name), 0o755);
+  }
+
+  // Temporary Context7 configuration in the isolated HOME, matching the
+  // canonical remote MCP server doctor expects.
+  mkdirSync(join(installRoot, ".config", "opencode"), { recursive: true });
+  writeFileSync(
+    join(installRoot, ".config", "opencode", "opencode.json"),
+    `${JSON.stringify({ mcp: { context7: { type: "remote", url: "https://mcp.context7.com/mcp" } } }, null, 2)}\n`,
+  );
+
+  const doctorEnv = {
+    ...smokeEnv,
+    NO_COLOR: "1",
+    PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+  };
+  delete doctorEnv.WIKI_DIR;
+
+  let doctorOutput;
+  try {
+    doctorOutput = execFileSync(process.execPath, [ariaBin, "doctor"], {
+      cwd: installRoot,
+      encoding: "utf8",
+      env: doctorEnv,
+    });
+  } catch (error) {
+    fail(`installed aria doctor exited nonzero:\n${error.stdout || error.stderr || error}`);
+  }
+
+  if (!doctorOutput.includes("ARIA doctor")) fail("doctor output missing report header");
+  if (!doctorOutput.includes("[PASS]")) fail("doctor output has no PASS finding");
+  if (!doctorOutput.includes("[WARN]")) fail("doctor output has no WARN finding");
+  if (!doctorOutput.includes("[SKIP]")) fail("doctor output has no SKIP finding");
+  if (doctorOutput.includes("[FAIL]")) fail("doctor output unexpectedly contains FAIL");
+  // eslint-disable-next-line no-control-regex
+  if (/\x1b\[/.test(doctorOutput)) fail("doctor output contains ANSI escapes");
+
+  const roleNames = [
+    "coder", "explorer", "visualizer", "planner", "architect",
+    "implementer", "reviewer", "researcher", "archivist", "writer",
+  ];
+  for (const role of roleNames) {
+    if (!doctorOutput.includes(`[PASS] ${role}:`)) {
+      fail(`doctor output missing PASS route finding for ${role}`);
+    }
+  }
+  if (!doctorOutput.includes(`model discovery: ${modelIds.length} models reported`)) {
+    fail("doctor output missing model discovery finding");
+  }
+
+  const packageVersion = entry.version
+    ?? JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).version;
+  if (!doctorOutput.includes(`package.json version: ${packageVersion}`)) {
+    fail("doctor did not read the installed package.json version");
+  }
+  if (!doctorOutput.includes("[PASS] Context7")) fail("doctor output missing Context7 PASS");
+  if (!doctorOutput.includes("WIKI_DIR")) fail("doctor output missing WIKI_DIR SKIP finding");
+
+  if (!doctorOutput.includes("ZotPilot CLI")) fail("doctor output missing separate ZotPilot CLI finding");
+  if (!doctorOutput.includes("available (0.5.3) via zotpilot --version")) {
+    fail("doctor ZotPilot CLI finding missing the verified version");
+  }
+  if (!doctorOutput.includes("ZotPilot MCP")) fail("doctor output missing separate ZotPilot MCP finding");
+  if (!doctorOutput.includes("listed by opencode mcp list but not connected")) {
+    fail("doctor ZotPilot MCP finding missing disconnected detail");
+  }
+  if (!doctorOutput.includes("live tool inventory")) {
+    fail("doctor output missing live-tool-inventory limitation");
+  }
+  if (!doctorOutput.includes("cannot compare expected/present/missing/unexpected live ZotPilot tool IDs")) {
+    fail("doctor live-tool-inventory limitation no longer states the unsupported ID comparison");
+  }
+  if (!doctorOutput.includes("tools/list")) {
+    fail("doctor live-tool-inventory limitation missing tools/list wording");
+  }
+
+  // Probe allowlist: the doctor must have invoked exactly the read-only
+  // probes the fakes accept — nothing else (no tools/list, add, install,
+  // setup, serve, upgrade, index, or any other argument).
+  const expectedInvocations = [
+    "opencode --version",
+    "opencode models",
+    "opencode models --verbose",
+    "opencode mcp list",
+    "engram version",
+    "codegraph --version",
+    "zotpilot --version",
+  ].sort();
+  const invocations = readFileSync(invocationLog, "utf8")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .sort();
+  if (JSON.stringify(invocations) !== JSON.stringify(expectedInvocations)) {
+    fail(`doctor probe allowlist mismatch:\n  expected: ${expectedInvocations.join(", ")}\n  actual:   ${invocations.join(", ")}`);
+  }
+
+  const findingCount = (doctorOutput.match(/\[(?:PASS|WARN|FAIL|SKIP)\]/g) ?? []).length;
+  console.log(`smoke-package: doctor ok (exit 0, ${findingCount} findings, plain output, separate ZotPilot CLI/MCP findings)`);
 } finally {
   rmSync(tarball, { force: true });
   rmSync(installRoot, { recursive: true, force: true });

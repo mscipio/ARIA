@@ -176,11 +176,27 @@ const defaultExecutor: Executor = async (command, args, options) => {
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Optional ZotPilot MCP server presence observed by a fresh `opencode mcp
+ * list` CLI run. ZotPilot is optional at runtime but expected for the
+ * advertised researcher capability.
+ */
+export interface ZotPilotMcpPresence {
+  /** Server appears in `opencode mcp list` output. */
+  listed: boolean;
+  /** Listed status is "connected". */
+  connected: boolean;
+}
+
 export interface DepsStatus {
   opencode: { version: string | null; found: boolean };
   engram: { version: string | null; found: boolean; connected: boolean };
   context7: { configured: boolean; connected: boolean };
   codegraph: { version: string | null; found: boolean; connected: boolean };
+  /** Optional ZotPilot MCP presence/connectivity; absent when not listed. */
+  zotpilot?: ZotPilotMcpPresence;
+  /** True when `opencode mcp list` itself failed (no MCP status known). */
+  mcpListFailed?: boolean;
 }
 
 export interface SyncResult {
@@ -755,6 +771,10 @@ export interface McpStatus {
   engram: boolean;
   context7: boolean;
   codegraph: boolean;
+  /** Optional ZotPilot presence/connectivity; absent when not listed. */
+  zotpilot?: ZotPilotMcpPresence;
+  /** True when `opencode mcp list` failed (no list output was available). */
+  listFailed?: boolean;
 }
 
 export function parseMcpList(output: string): McpStatus {
@@ -767,8 +787,11 @@ export function parseMcpList(output: string): McpStatus {
     if (match?.[1] && match[2]) {
       const name = match[1];
       const status = match[2];
-      if (name in result) {
-        result[name as keyof McpStatus] = status === "connected";
+      if (name === "engram" || name === "context7" || name === "codegraph") {
+        result[name] = status === "connected";
+      }
+      if (name === "zotpilot") {
+        result.zotpilot = { listed: true, connected: status === "connected" };
       }
     }
   }
@@ -779,7 +802,7 @@ export function parseMcpList(output: string): McpStatus {
 async function detectMcpConnectivity(executor: Executor): Promise<McpStatus> {
   const result = await run(executor, "opencode", "mcp", "list");
   if (!result.ok) {
-    return { engram: false, context7: false, codegraph: false };
+    return { engram: false, context7: false, codegraph: false, listFailed: true };
   }
   return parseMcpList(result.stdout);
 }
@@ -803,12 +826,17 @@ export async function doctor(executor: Executor = defaultExecutor, configDir?: s
     detectMcpConnectivity(executor),
   ]);
 
-  return {
+  // Legacy shape is preserved when ZotPilot is absent: the optional fields
+  // are only added when a ZotPilot entry or a failed list run is observed.
+  const status: DepsStatus = {
     opencode,
     engram: { ...engram, connected: mcp.engram },
     context7: { ...context7, connected: context7.configured && mcp.context7 },
     codegraph: { ...codegraph, connected: mcp.codegraph },
   };
+  if (mcp.zotpilot) status.zotpilot = mcp.zotpilot;
+  if (mcp.listFailed) status.mcpListFailed = true;
+  return status;
 }
 
 export function formatDoctor(version: string, status: DepsStatus): string {
@@ -905,4 +933,5 @@ export {
   isCoreSemverTag,
   discoverConfigPath,
   stripJsoncComments,
+  extractVersion,
 };

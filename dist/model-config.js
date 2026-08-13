@@ -73,6 +73,9 @@ function verboseModelFromBlock(id, jsonText) {
         return undefined;
     }
     const { providerID, modelID } = splitModelIdentifier(id);
+    // A `variants` key (even `{}`) means the model reported variant metadata;
+    // its absence means variant metadata is not observable.
+    const variantsObservable = Object.prototype.hasOwnProperty.call(info, "variants");
     const variants = info.variants && typeof info.variants === "object" && !Array.isArray(info.variants)
         ? Object.keys(info.variants).filter((variant) => variant.trim().length > 0)
         : [];
@@ -82,6 +85,7 @@ function verboseModelFromBlock(id, jsonText) {
         modelID,
         name: typeof info.name === "string" && info.name.trim().length > 0 ? info.name : modelID,
         variants,
+        variantsObservable,
     };
 }
 /**

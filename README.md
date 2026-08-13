@@ -212,7 +212,7 @@ aria setup             # Register ARIA plugin with OpenCode and synchronize depe
 aria setup --configure # Register ARIA, sync dependencies, then interactively configure role models
 aria update            # Pull latest changes, reinstall, and re-sync dependencies
 aria deps sync         # Synchronize required integrations (Engram, Context7, CodeGraph)
-aria doctor            # Report status of required integrations (read-only)
+aria doctor            # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
 aria routes            # Print resolved model routes for each ARIA role
 ```
 
@@ -267,7 +267,25 @@ Synchronizes each integration using its upstream-supported mechanism, then recon
 
 ### `aria doctor`
 
-Read-only status report. Checks that OpenCode, Engram, Context7, and CodeGraph are present and their MCP connections are active. Returns non-zero if any required integration is missing or disconnected.
+Read-only health check. It inspects — and never writes, installs, or repairs — the packaged assets, configuration, resolved role routes, model discovery, required integrations, packaged skills, and the optional ZotPilot and Wiki capabilities. Every finding is labeled with one of four literal severities:
+
+- **PASS** — the check succeeded.
+- **FAIL** — a required item is missing, invalid, or disconnected. Any FAIL makes `aria doctor` exit **1**.
+- **WARN** — a non-fatal degradation of an optional capability (ZotPilot CLI or MCP, unverifiable variant metadata). WARN never changes the exit code.
+- **SKIP** — a check that does not apply to the current environment (for example, `WIKI_DIR` unset, or the standalone live-tool-inventory comparison).
+
+Exit code is **0 if and only if no finding is FAIL**, otherwise **1**.
+
+Required checks (FAIL when broken): package `package.json` version, packaged defaults and each defaults-referenced prompt, role route resolution (invalid global or project config), model discovery, every resolved role route against the models `opencode models` lists (with configured variants verified only against observable variant metadata — a variant whose metadata is not observable is WARN, never guessed), the OpenCode/Engram/Context7/CodeGraph integrations, packaged skills (matching `name` and `metadata.owner: aria`), canonical role requirements, and the packaged Wiki pipeline assets. A configured `WIKI_DIR` that does not exist, is not a directory, or lacks read/write accessibility is FAIL; an unset `WIKI_DIR` is SKIP.
+
+ZotPilot is reported as two clearly separate findings:
+
+- **ZotPilot CLI** — availability and version from the smallest read-only probe (`zotpilot --version`). PASS when identified; WARN when the executable is missing or the probe is nonzero or unparseable, because ZotPilot MCP may still work.
+- **ZotPilot MCP** — server presence/connectivity from a fresh standalone `opencode mcp list` CLI observation (not live-session inventory). Connected is PASS; absent, disconnected, or unknown is WARN.
+
+A dedicated SKIP finding states the standalone limitation: `aria doctor` cannot compare expected/present/missing/unexpected live ZotPilot tool IDs or OpenCode session permissions, because no safe supported `tools/list` mechanism exists — it validates the packaged ZotPilot policy, not a live tool inventory.
+
+`aria doctor` emits plain text only: no ANSI escapes (regardless of `NO_COLOR`), no JSON mode or payload, no prompts, and no repair/install hints. It runs no mutations and touches neither Zotero nor configuration.
 
 ### `aria routes`
 
