@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -650,6 +650,140 @@ describe("setup return values for CLI formatting", () => {
     expect(result.ok).toBe(false);
     expect(result.setup!.registration.action).toBe("already registered");
     expect(result.setup!.sync.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setup optional model configuration phase
+// ---------------------------------------------------------------------------
+
+describe("setup optional model configuration phase", () => {
+  const okSync = async () => ({ ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
+
+  it("default setup makes no discovery or prompt call", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+
+    const configureModelsFn = vi.fn(async () => {
+      throw new Error("model configuration must not run");
+    });
+    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configureModelsFn });
+
+    expect(result.ok).toBe(true);
+    expect(result.stage).toBe("complete");
+    expect(result.setup!.model).toBeUndefined();
+    expect(configureModelsFn).not.toHaveBeenCalled();
+  });
+
+  it("does not run the optional phase when registration or sync fails", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+    const configureModelsFn = vi.fn(async () => ({ status: "configured" as const, message: "done" }));
+
+    // Registration failure short-circuits before sync and configuration.
+    const failingRegistration = mockExecutor({
+      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
+      [`opencode plugin ${uri} --global`]: { error: "permission denied" },
+    });
+    const registrationResult = await setup(binaryUrl(checkout), failingRegistration, okSync, {
+      configure: true,
+      configureModelsFn,
+    });
+    expect(registrationResult.stage).toBe("registration");
+
+    // Sync failure short-circuits before configuration.
+    const failingSync = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const syncResult = await setup(binaryUrl(checkout), failingSync, async () => ({
+      ok: false,
+      engram: { action: "install-failed", error: "download failed" },
+      context7: { action: "ok" },
+      codegraph: { action: "ok" },
+    }), { configure: true, configureModelsFn });
+    expect(syncResult.stage).toBe("sync");
+
+    expect(configureModelsFn).not.toHaveBeenCalled();
+  });
+
+  it("runs the optional phase only after successful registration and sync", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+    const worktree = "/tmp/example-worktree";
+
+    const configureModelsFn = vi.fn(async () => ({ status: "configured" as const, message: "done" }));
+    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, {
+      configure: true,
+      worktree,
+      configureModelsFn,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.stage).toBe("complete");
+    expect(result.setup!.registration.action).toBe("already registered");
+    expect(result.setup!.sync.ok).toBe(true);
+    expect(configureModelsFn).toHaveBeenCalledTimes(1);
+    expect(configureModelsFn).toHaveBeenCalledWith(worktree, {});
+    expect(result.setup!.model).toEqual({ status: "configured", message: "done" });
+  });
+
+  it("reports a failed model phase without regressing registration or sync invariants", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+
+    const configureModelsFn = vi.fn(async () => ({
+      status: "failed" as const,
+      message: "Model configuration could not be written; no changes were persisted.",
+      error: "discovery down",
+    }));
+    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
+
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("model_configuration");
+    expect(result.setup!.registration.action).toBe("already registered");
+    expect(result.setup!.sync.ok).toBe(true);
+    expect(result.setup!.model?.status).toBe("failed");
+    expect(result.setup!.model?.error).toBe("discovery down");
+  });
+
+  it("reports a thrown model-phase error as a distinct stage without regressing setup", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+
+    const configureModelsFn = vi.fn(async () => {
+      throw new Error("unexpected crash");
+    });
+    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
+
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("model_configuration");
+    expect(result.setup!.registration.action).toBe("already registered");
+    expect(result.setup!.sync.ok).toBe(true);
+    expect(result.setup!.model?.status).toBe("failed");
+    expect(result.setup!.model?.error).toContain("unexpected crash");
+  });
+
+  it("treats a non-TTY skipped model phase as successful setup", async () => {
+    const checkout = await makeFixtureCheckout();
+    const uri = pathToFileURL(checkout).href;
+
+    const configureModelsFn = vi.fn(async () => ({
+      status: "skipped" as const,
+      message: "stdin is not a terminal",
+    }));
+    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
+
+    expect(result.ok).toBe(true);
+    expect(result.stage).toBe("complete");
+    expect(result.setup!.model?.status).toBe("skipped");
   });
 });
 

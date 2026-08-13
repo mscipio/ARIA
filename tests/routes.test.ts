@@ -28,14 +28,15 @@ archivist  opencode-go/deepseek-v4-pro
 writer  openai/gpt-5.6-sol (medium)`);
   });
 
-  it("reflects model override while inheriting variant from defaults", async () => {
+  it("reflects model override and clears the inherited default variant", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
     tempDirs.push(root);
     await writeFile(resolve(root, "aria.json"), JSON.stringify({
       roles: { planner: { model: "openai/gpt-5.4-mini" } },
     }));
     const output = formatRoutes(root);
-    expect(output).toContain("planner  openai/gpt-5.4-mini (xhigh)");
+    expect(output).toContain("planner  openai/gpt-5.4-mini");
+    expect(output).not.toContain("planner  openai/gpt-5.4-mini (xhigh)");
     expect(output).toContain("architect  openai/gpt-5.6-sol (xhigh)");
   });
 

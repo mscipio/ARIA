@@ -125,19 +125,36 @@ function generateRouting(resolved) {
         return `- ${role}: \`${role}\` → ${config.model}${formatRoutingVariant(config.variant)}`;
     }).join("\n");
 }
-export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.url) {
-    const defaults = loadDefaultConfig(metaUrl);
-    const packageRoot = getPackageRoot(metaUrl);
-    // Global config: ARIA is canonical; the pre-ARIA filename remains a read-only fallback.
-    const globalAriaPath = resolve(homedir(), ".config", "opencode", "aria.json");
-    const globalLegacyPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
-    const globalPath = existsSync(globalAriaPath)
-        ? globalAriaPath
-        : (existsSync(globalLegacyPath) ? globalLegacyPath : undefined);
-    const globalOverrides = globalPath
+/**
+ * Canonical global config path: ~/.config/opencode/aria.json first, with the
+ * pre-ARIA legacy filename as a read-only fallback. Returns undefined when
+ * neither file exists.
+ */
+export function globalAriaConfigPath() {
+    const ariaPath = resolve(homedir(), ".config", "opencode", "aria.json");
+    if (existsSync(ariaPath))
+        return ariaPath;
+    const legacyPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
+    return existsSync(legacyPath) ? legacyPath : undefined;
+}
+/**
+ * Validated read of the global overrides, or {} when no global config exists.
+ */
+export function readGlobalAriaOverrides() {
+    const globalPath = globalAriaConfigPath();
+    return globalPath
         ? parseOverrides(parseJSON(readFileSync(globalPath, "utf8"), globalPath), globalPath)
         : {};
-    // Project config: explicit path wins; otherwise prefer aria.json and fall back to the legacy filename.
+}
+/**
+ * Validated read of the project-local overrides, or {} when no project config
+ * exists. Shared by `resolveAriaConfig` and model configuration so both agree
+ * on which project fields are pinned.
+ *
+ * Path discovery: an explicit `options.configPath` wins; otherwise prefer
+ * `aria.json` and fall back to the legacy filename.
+ */
+export function readProjectAriaOverrides(worktree, options = {}) {
     const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
     const discoveredAriaPath = resolve(worktree, "aria.json");
     const discoveredLegacyPath = resolve(worktree, "review-driven-code.json");
@@ -145,17 +162,50 @@ export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.
         ?? (existsSync(discoveredAriaPath)
             ? discoveredAriaPath
             : (existsSync(discoveredLegacyPath) ? discoveredLegacyPath : undefined));
-    const overrides = overridePath && existsSync(overridePath)
+    return overridePath && existsSync(overridePath)
         ? parseOverrides(parseJSON(readFileSync(overridePath, "utf8"), overridePath), overridePath)
         : {};
+}
+/**
+ * Model-aware resolution of the model/variant pair across override layers
+ * (lowest to highest). The pair is owned by the highest layer that specifies
+ * `model`: that layer's variant is used when supplied, otherwise the inherited
+ * variant is cleared, so a model-only override never keeps a stale variant.
+ * A layer that specifies only `variant` inherits the lower model and replaces
+ * just the variant.
+ */
+function resolveRoleRoute(defaults, ...layers) {
+    let model = defaults.model;
+    let variant = defaults.variant;
+    for (const layer of layers) {
+        if (!layer)
+            continue;
+        if (layer.model !== undefined) {
+            model = layer.model;
+            variant = layer.variant;
+        }
+        else if (layer.variant !== undefined) {
+            variant = layer.variant;
+        }
+    }
+    return { model, variant };
+}
+export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.url) {
+    const defaults = loadDefaultConfig(metaUrl);
+    const packageRoot = getPackageRoot(metaUrl);
+    // Global config: ARIA is canonical; the pre-ARIA filename remains a read-only fallback.
+    const globalOverrides = readGlobalAriaOverrides();
+    // Project config: explicit path wins; otherwise prefer aria.json and fall back to the legacy filename.
+    const overrides = readProjectAriaOverrides(worktree, options);
     const roles = Object.fromEntries(ROLES.map((role) => {
         const roleDefaults = defaults.roles[role];
         const globalOverride = globalOverrides.roles?.[role];
         const projectOverride = overrides.roles?.[role];
+        const { model, variant } = resolveRoleRoute(roleDefaults, globalOverride, projectOverride);
         return [role, {
                 ...roleDefaults,
-                model: projectOverride?.model ?? globalOverride?.model ?? roleDefaults.model,
-                variant: projectOverride?.variant ?? globalOverride?.variant ?? roleDefaults.variant,
+                model,
+                variant,
                 promptText: role === "archivist" || role === "writer"
                     ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
                     : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),

@@ -1,7 +1,9 @@
 import { realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { depsSync, defaultExecutor } from "./deps.js";
+import { configureModels, } from "./model-config.js";
 // ---------------------------------------------------------------------------
 // Checkout resolution (pure function, independent of process.cwd())
 // ---------------------------------------------------------------------------
@@ -86,9 +88,29 @@ function parsePluginSpecifiers(output) {
     return { recognized, specifiers };
 }
 // ---------------------------------------------------------------------------
-// setup — registration + dependency sync
+// Terminal seam helpers for the optional model-configuration phase
 // ---------------------------------------------------------------------------
-export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = depsSync) {
+/** Build a `ModelConfigureInput` seam reading one trimmed line from a stream. */
+function terminalInput(inputStream, outputStream) {
+    return (prompt) => new Promise((resolveInput, rejectInput) => {
+        const terminal = createInterface({ input: inputStream, output: outputStream });
+        terminal.question(prompt, (answer) => {
+            terminal.close();
+            resolveInput(answer.trim());
+        });
+        terminal.on("error", rejectInput);
+    });
+}
+/** Build a `ModelConfigureOutput` seam emitting one line to a stream. */
+function terminalOutput(stream) {
+    return (text) => {
+        stream.write(`${text}\n`);
+    };
+}
+// ---------------------------------------------------------------------------
+// setup — registration + dependency sync (+ optional model configuration)
+// ---------------------------------------------------------------------------
+export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = depsSync, options = {}) {
     const checkout = await resolveCheckout(binaryUrl);
     const pluginUri = pathToFileURL(checkout).href;
     let registrationAction = "failed";
@@ -176,6 +198,64 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
         };
     }
     const syncOk = syncResult.ok;
+    // -----------------------------------------------------------------------
+    // Phase 3 — optional interactive model configuration. Runs only when
+    // `--configure` was requested and both registration and sync succeeded;
+    // registration/sync failure short-circuiting and ordering are unchanged.
+    // -----------------------------------------------------------------------
+    if (syncOk && options.configure) {
+        const configureModelsFn = options.configureModelsFn ?? configureModels;
+        const worktree = options.worktree ?? process.cwd();
+        const modelOptions = {};
+        if (options.input)
+            modelOptions.input = terminalInput(options.input, options.output ?? process.stdout);
+        if (options.output)
+            modelOptions.output = terminalOutput(options.output);
+        if (options.tty !== undefined)
+            modelOptions.tty = options.tty;
+        let modelResult;
+        try {
+            modelResult = await configureModelsFn(worktree, modelOptions);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+                ok: false,
+                stage: "model_configuration",
+                setup: {
+                    registration: { action: registrationAction, detail: registrationDetail },
+                    sync: { ok: true, output: "all dependencies synchronized" },
+                    model: {
+                        status: "failed",
+                        message: "Model configuration failed; no changes were persisted.",
+                        error: `configureModels threw: ${message}`,
+                    },
+                },
+            };
+        }
+        // "configured", "unchanged", and non-TTY "skipped" all leave setup
+        // healthy; only an explicit discovery/write failure fails the phase.
+        if (modelResult.status === "failed") {
+            return {
+                ok: false,
+                stage: "model_configuration",
+                setup: {
+                    registration: { action: registrationAction, detail: registrationDetail },
+                    sync: { ok: true, output: "all dependencies synchronized" },
+                    model: modelResult,
+                },
+            };
+        }
+        return {
+            ok: true,
+            stage: "complete",
+            setup: {
+                registration: { action: registrationAction, detail: registrationDetail },
+                sync: { ok: true, output: "all dependencies synchronized" },
+                model: modelResult,
+            },
+        };
+    }
     return {
         ok: syncOk,
         stage: syncOk ? "complete" : "sync",
