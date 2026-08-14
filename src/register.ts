@@ -262,6 +262,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
       "aria-writing-anti-ai",
       "aria-review-response",
       "aria-paper-self-review",
+      "aria-document-design",
     ),
     task: {
       "*": "deny",

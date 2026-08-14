@@ -221,8 +221,13 @@ describe("ariaPlugin", () => {
         "aria-writing-anti-ai": "allow",
         "aria-review-response": "allow",
         "aria-paper-self-review": "allow",
+        "aria-document-design": "allow",
       },
     });
+    // aria-document-design stays writer-only: no other role grants it.
+    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "scientist"]) {
+      expect(permission(role)?.skill ?? {}).not.toHaveProperty("aria-document-design");
+    }
     for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"]) {
       expect(permission(role)).toMatchObject({
         "engram_*": "allow",

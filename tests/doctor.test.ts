@@ -470,7 +470,7 @@ describe("runDoctor subagent depth findings", () => {
 // ---------------------------------------------------------------------------
 
 describe("package capability inventory (derived from canonical permission tables)", () => {
-  it("derives the exact 18 packaged skills from the canonical role permissions", () => {
+  it("derives the exact 19 packaged skills from the canonical role permissions", () => {
     expect([...PACKAGE_SKILL_NAMES]).toEqual([
       "rdc-code-exploration",
       "rdc-visual-analysis",
@@ -488,6 +488,7 @@ describe("package capability inventory (derived from canonical permission tables
       "aria-writing-anti-ai",
       "aria-review-response",
       "aria-paper-self-review",
+      "aria-document-design",
       "aria-research-planning",
       "aria-results-analysis",
     ]);
@@ -714,7 +715,7 @@ describe("runDoctor skills findings", () => {
 
     const skills = skillFinding(report, "packaged skills");
     expect(skills?.severity).toBe("PASS");
-    expect(skills?.detail).toContain("18 of 18");
+    expect(skills?.detail).toContain("19 of 19");
     expect(skills?.detail).toContain("metadata.owner: aria");
     // Only the exact derived skill paths are read — the skills directory is
     // never scanned, so user skills are never touched.
