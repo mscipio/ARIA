@@ -12,7 +12,7 @@
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
 - **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
 - **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki, writer, and scientist remain intentionally isolated
-- **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, and explicit evidence-level/uncertainty reporting
+- **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, explicit evidence-level/uncertainty reporting, and claim-level citation verification of source identity and claim-source support
 - **Bounded scientist authority** — `mode: all` scientific authority for question specification, methodology, and result interpretation, with deny-by-default code/shell/MCP/evidence/persistence authority; delegates evidence to `researcher`, prose to `writer`, and computation to `coder`
 
 ## Workflow
@@ -318,11 +318,11 @@ MCPs are preferred evidence sources, not mandatory routes for every task. Engram
 
 - `aria-academic-writing` — evidence-bounded peer-reviewed scientific prose and section-aware journal style
 - `aria-writing-anti-ai` — removes formulaic LLM prose while preserving technical meaning and appropriate formality
-- `aria-review-response` — reviewer-response/rebuttal strategy, evidence anchoring, and tone
-- `aria-paper-self-review` — structure, overclaim, claim-evidence, reproducibility, and submission-readiness audit
+- `aria-review-response` — reviewer-response/rebuttal strategy, evidence anchoring, and tone; consumes verified researcher evidence but owns rebuttal strategy
+- `aria-paper-self-review` — structure, overclaim, claim-evidence, reproducibility, and submission-readiness audit; may flag citations needing verification but does not perform external verification
 - `aria-document-design` — document information architecture, hierarchy/navigation, progressive disclosure, and representation choices, deferring prose/claims to `aria-academic-writing` and audits to `aria-paper-self-review`
 
-The writer may task `archivist` only for explicitly read-only project/internal evidence. For external literature, Zotero, citation-verification, and claim-support evidence it tasks `researcher` with a focused evidence request (evidence, not manuscript prose). The writer does not query Zotero or the literature itself; it marks external evidence the researcher could not resolve as `[RESEARCH NEEDED]` or `[CITATION NEEDED]`.
+The writer owns final prose and citation placement. It may task `archivist` only for explicitly read-only project/internal evidence. For external literature, Zotero, citation-verification, and claim-support evidence it tasks `researcher` with a focused evidence request (evidence, not manuscript prose). The writer does not query Zotero or the literature itself; it marks external evidence the researcher could not resolve as `[RESEARCH NEEDED]` or `[CITATION NEEDED]`.
 
 ## Researcher
 
@@ -338,8 +338,9 @@ The packaged `aria-research-evidence` skill defines the repeatable evidence proc
 - **Passage-context expansion** — surrounding context is retrieved before passage-specific claims.
 - **Disagreement, uncertainty, and evidence-gap reporting** — conflicts across sources and missing evidence are reported explicitly, never smoothed over.
 - **Structured evidence handoffs** — findings with provenance and level, an itemized disagreements/uncertainties/gaps list, and cited sources.
+- **Claim-level citation verification** — source identity/existence is checked separately from claim-source support, so a citation is confirmed to exist and its support for the specific claim is classified, never inferred from topical similarity.
 
-Hard boundaries: the researcher never edits project files, performs software/shell work, maintains the Wiki, drafts manuscript or rebuttal prose, persists to Engram automatically, spawns nested researcher subagents, or mutates Zotero without explicit per-operation approval. It has no Engram, CodeGraph, Wiki, broad MCP, or wildcard ZotPilot authority; its Bash access is deny-by-default with only `zotpilot`/`zotpilot *` approval-gated as a fallback path.
+Hard boundaries: the researcher verifies source identity and claim-source support, not scientific meaning — interpretation, hypotheses, mechanisms, and nontrivial scientific judgment belong to the `scientist`, whom the researcher may task when claim-to-source alignment exceeds straightforward comparison. The researcher never edits project files, performs software/shell work, maintains the Wiki, drafts manuscript or rebuttal prose, persists to Engram automatically, spawns nested researcher subagents, or mutates Zotero without explicit per-operation approval. It has no Engram, CodeGraph, Wiki, broad MCP, or wildcard ZotPilot authority; its Bash access is deny-by-default with only `zotpilot`/`zotpilot *` approval-gated as a fallback path.
 
 ### Dogfood scenario
 
@@ -351,7 +352,7 @@ The scenario is a request template, not a claim that it has already run.
 
 ## Scientist
 
-`scientist` is the scientific authority with `mode: all`: you can invoke it directly, and `coder`, `researcher`, or `writer` may task it. It owns scientific specification and interpretation — what is being asked, what would count as evidence, methodology and design, and what results mean — and it is not an evidence researcher, a prose writer, or a software engineer.
+`scientist` is the scientific authority with `mode: all`: you can invoke it directly, and `coder`, `researcher`, or `writer` may task it. It owns scientific specification and interpretation — what is being asked, what would count as evidence, methodology and design, what results mean, hypotheses, mechanisms, and nontrivial scientific judgment — and it is not an evidence researcher, a prose writer, or a software engineer.
 
 ### Cooperation graph
 
