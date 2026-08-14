@@ -11,7 +11,7 @@ export interface ResolvedRoute {
     variant?: string;
 }
 /**
- * Defaults-ordered ten-role route derivation. The layer precedence and
+ * Defaults-ordered eleven-role route derivation. The layer precedence and
  * model/variant pair resolution live in `resolveAriaConfig`; this helper is
  * the single canonical derivation shared by `aria routes` and doctor.
  */

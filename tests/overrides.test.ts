@@ -137,6 +137,19 @@ describe("ARIA overrides", () => {
       expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
     });
 
+    it("resolves scientist overrides like the other durable roles", async () => {
+      const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
+      tempDirs.push(root);
+      await writeFile(resolve(root, "aria.json"), JSON.stringify({
+        roles: { scientist: { model: "openai/gpt-5.6-terra" } },
+      }));
+      const config = resolveAriaConfig(root);
+      expect(config.roles.scientist.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.scientist.variant).toBeUndefined();
+      expect(config.roles.scientist.mode).toBe("all");
+      expect(config.roles.scientist.promptText).toContain("scientific authority");
+    });
+
     it("overrides model only and clears the inherited default variant", async () => {
       const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
       tempDirs.push(root);

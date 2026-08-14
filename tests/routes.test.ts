@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("formatRoutes", () => {
-  it("includes all ten roles with their built-in defaults when no override file exists", async () => {
+  it("includes all eleven roles with their built-in defaults when no override file exists", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
     tempDirs.push(root);
     const output = formatRoutes(root);
@@ -26,7 +26,20 @@ implementer  opencode-go/glm-5.2
 reviewer  opencode-go/deepseek-v4-pro
 researcher  openai/gpt-5.6-sol (medium)
 archivist  opencode-go/deepseek-v4-pro
-writer  openai/gpt-5.6-sol (medium)`);
+writer  openai/gpt-5.6-sol (medium)
+scientist  openai/gpt-5.6-sol (medium)`);
+  });
+
+  it("reflects scientist model override and clears the inherited default variant", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
+    tempDirs.push(root);
+    await writeFile(resolve(root, "aria.json"), JSON.stringify({
+      roles: { scientist: { model: "openai/gpt-5.6-terra" } },
+    }));
+    const output = formatRoutes(root);
+    expect(output).toContain("scientist  openai/gpt-5.6-terra");
+    expect(output).not.toContain("scientist  openai/gpt-5.6-terra (medium)");
+    expect(output).not.toContain("scientist  openai/gpt-5.6-sol");
   });
 
   it("reflects researcher model override and clears the inherited default variant", async () => {

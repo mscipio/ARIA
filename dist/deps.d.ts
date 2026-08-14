@@ -130,6 +130,37 @@ export interface McpStatus {
 }
 export declare function parseMcpList(output: string): McpStatus;
 declare function detectMcpConnectivity(executor: Executor): Promise<McpStatus>;
+/**
+ * Result of inspecting only the own top-level `subagent_depth` field of the
+ * fully merged configuration printed by the read-only `opencode debug
+ * config` CLI. Nested lookalike fields are never considered and no
+ * configuration is mutated by this probe.
+ *
+ * - `value`: the merged config reports a finite numeric subagent_depth.
+ * - `absent`: the merged config has no top-level subagent_depth field.
+ * - `unavailable`: the probe or its output could not be evaluated;
+ *   `reason` explains why.
+ */
+export type SubagentDepthProbe = {
+    status: "value";
+    depth: number;
+} | {
+    status: "absent";
+} | {
+    status: "unavailable";
+    reason: string;
+};
+/**
+ * Defensively parse the fully merged JSON printed by `opencode debug config`
+ * and inspect only its own top-level `subagent_depth` field.
+ */
+export declare function parseSubagentDepth(output: string): SubagentDepthProbe;
+/**
+ * Read-only probe: run `opencode debug config` in the inspected worktree and
+ * inspect the effective merged top-level `subagent_depth`. Never mutates
+ * configuration.
+ */
+export declare function probeSubagentDepth(executor: Executor, worktree?: string): Promise<SubagentDepthProbe>;
 declare function detectOpenCode(executor: Executor): Promise<{
     found: boolean;
     version: string | null;

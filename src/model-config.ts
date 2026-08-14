@@ -275,7 +275,7 @@ export interface ModelConfigurationResult {
   error?: string;
 }
 
-// The ten configurable roles are fixed; discovery reports which models are
+// The eleven configurable roles are fixed; discovery reports which models are
 // available, never which roles exist.
 const ROLES: RoleName[] = [
   "coder",
@@ -288,6 +288,7 @@ const ROLES: RoleName[] = [
   "researcher",
   "archivist",
   "writer",
+  "scientist",
 ];
 const ROLE_SET = new Set<string>(ROLES);
 
@@ -413,7 +414,7 @@ function ansiRed(text: string, tty: boolean): string {
   return ansiEnabled(tty) ? `${ANSI_RED}${text}${ANSI_RESET}` : text;
 }
 
-/** Fixed-width rule separating role blocks in the ten-role overview. */
+/** Fixed-width rule separating role blocks in the eleven-role overview. */
 const ROLE_SEPARATOR = `  ${"-".repeat(60)}`;
 
 /** Four-layer precedence display for one role. */
@@ -440,7 +441,7 @@ function renderRoleLayers(
 }
 
 /**
- * Ten-role overview: one four-layer block per role, separated by a fixed
+ * Eleven-role overview: one four-layer block per role, separated by a fixed
  * 60-hyphen rule between blocks (never after the final role).
  */
 function renderRoleSummary(
@@ -781,7 +782,7 @@ async function finalizeGlobalConfiguration(params: FinalizeParameters): Promise<
  * Lightweight interactive model configuration for `aria setup --configure`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
- * shows the ten configurable roles with their four-layer precedence
+ * shows the eleven configurable roles with their four-layer precedence
  * (packaged default, global override, project override, resolved route),
  * annotating resolved models the CLI did not list (purely diagnostic — no
  * fallback routing is added). The user may keep the current configuration

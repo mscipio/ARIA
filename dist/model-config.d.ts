@@ -103,7 +103,7 @@ export interface ModelConfigurationResult {
  * Lightweight interactive model configuration for `aria setup --configure`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
- * shows the ten configurable roles with their four-layer precedence
+ * shows the eleven configurable roles with their four-layer precedence
  * (packaged default, global override, project override, resolved route),
  * annotating resolved models the CLI did not list (purely diagnostic — no
  * fallback routing is added). The user may keep the current configuration

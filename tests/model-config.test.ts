@@ -369,7 +369,7 @@ describe("discoverAvailableModels", () => {
 // ---------------------------------------------------------------------------
 
 describe("configureModels", () => {
-  it("shows the four-layer precedence for all ten roles and the simplified menu", async () => {
+  it("shows the four-layer precedence for all eleven roles and the simplified menu", async () => {
     await makeHome(); // isolate from the real user global config
     const worktree = await makeWorktree();
     const { input } = scriptedInput([""]); // Enter at the top menu keeps current
@@ -392,14 +392,18 @@ describe("configureModels", () => {
     for (const role of ROLES) {
       expect(text).toContain(`  ${role}\n    default:`);
     }
-    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(10);
-    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(10);
-    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(10);
-    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(11);
+    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(11);
+    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(11);
+    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(11);
     // researcher appears between reviewer and archivist with its packaged
     // sol/medium default (absent global/project layers render as dashes).
     expect(text).toContain(
       "  researcher\n    default:   openai/gpt-5.6-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-5.6-sol (medium)\x1b[0m [not listed by OpenCode]",
+    );
+    // scientist closes the overview with the same sol/medium default.
+    expect(text).toContain(
+      "  scientist\n    default:   openai/gpt-5.6-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-5.6-sol (medium)\x1b[0m [not listed by OpenCode]",
     );
     // Absent layers render as plain hyphens; coder resolves to its ARIA
     // default, whose value is bolded in TTY output.
@@ -989,9 +993,9 @@ describe("configureModels", () => {
     expect(result.status).toBe("unchanged");
     const text = lines.join("\n");
     const rule = `  ${"-".repeat(60)}`;
-    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(9); // between the ten roles
+    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(10); // between the eleven roles
     expect(text).toContain(`${rule}\n  explorer`); // after coder's block
-    expect(text).not.toContain(`${rule}\n\nWhat would you like to do?`); // never after writer
+    expect(text).not.toContain(`${rule}\n\nWhat would you like to do?`); // never after scientist
     // The single-role configuration view starts after the roles prompt line.
     const singleRoleView = text.slice(text.indexOf("Roles available:"));
     expect(singleRoleView).toContain("  planner\n    default:");
@@ -1015,7 +1019,7 @@ describe("configureModels", () => {
     expect(text).toContain("resolved:  \x1b[1mopencode-go/deepseek-v4-pro\x1b[0m");
     // Exactly one bold segment per role (the resolved value); labels and other
     // layers stay unbolded, and no warnings render here.
-    expect(text.split("\x1b[1m").length - 1).toBe(10);
+    expect(text.split("\x1b[1m").length - 1).toBe(11);
     expect(text.split("\x1b[31m").length - 1).toBe(0);
   });
 

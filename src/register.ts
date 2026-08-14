@@ -228,6 +228,12 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     ...ZOTPILOT_MCP_READ,
     ...ZOTPILOT_MCP_MUTATION,
     skill: skillAccess("aria-research-evidence"),
+    // Deny-by-default delegation: scientist is the researcher's only
+    // downstream role.
+    task: {
+      "*": "deny",
+      "scientist": "allow",
+    },
     // Deny-by-default shell access: only the zotpilot executable family is
     // approval-gated as a fallback/administrative path, never allowed and
     // never the primary ZotPilot interface (the MCP tools are).
@@ -236,6 +242,17 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
       "zotpilot": "ask",
       "zotpilot *": "ask",
     },
+  },
+  "archivist": {
+    ...BASE_PERMISSION,
+    read: { "*": "deny" },
+    edit: { "*": "deny" },
+    glob: "deny",
+    grep: "deny",
+    list: "deny",
+    bash: { "*": "deny" },
+    skill: skillAccess("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
+    external_directory: "deny",
   },
   writer: {
     ...BASE_PERMISSION,
@@ -250,18 +267,22 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
       "*": "deny",
       "archivist": "allow",
       "researcher": "allow",
+      "scientist": "allow",
     },
   },
-  "archivist": {
+  scientist: {
     ...BASE_PERMISSION,
-    read: { "*": "deny" },
-    edit: { "*": "deny" },
-    glob: "deny",
-    grep: "deny",
-    list: "deny",
-    bash: { "*": "deny" },
-    skill: skillAccess("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
-    external_directory: "deny",
+    read: PROTECTED_READ,
+    glob: "allow",
+    grep: "allow",
+    list: "allow",
+    skill: skillAccess("aria-research-planning", "aria-results-analysis"),
+    task: {
+      "*": "deny",
+      researcher: "allow",
+      writer: "allow",
+      coder: "allow",
+    },
   },
 };
 
@@ -328,7 +349,8 @@ const NON_CODER_ROLES = Object.keys(ROLE_PERMISSIONS) as NonCoderRole[];
 
 /**
  * Coder task permissions: the coder coordinates the other roles via the task
- * tool, which is denied by default and allowed for every packaged role.
+ * tool, which is denied by default and allowed for the six RDC specialists
+ * plus researcher, archivist, and scientist.
  */
 const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
   "*": "deny",
@@ -340,6 +362,7 @@ const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
   reviewer: "allow",
   researcher: "allow",
   "archivist": "allow",
+  scientist: "allow",
 };
 
 /**
@@ -392,7 +415,7 @@ function hasRequiredMcp(permission: AgentPermission): boolean {
  * Roles that carry every canonical required MCP grant (Engram/Context7/
  * CodeGraph): the coder plus the six RDC coding roles. Derived from the
  * coder permission construction and `ROLE_PERMISSIONS`; researcher, writer,
- * and archivist are intentionally not included.
+ * archivist, and scientist are intentionally not included.
  */
 export const CODING_ROLES: readonly RoleName[] = [
   ...(hasRequiredMcp(coderPermission()) ? (["coder"] as const) : []),
@@ -415,8 +438,8 @@ function isGrant(action: unknown): boolean {
 /**
  * Validate effective role requirements against the canonical contract:
  * coding roles carry every `REQUIRED_MCP_PERMISSION` grant, the researcher
- * carries Context7 plus the exact ZotPilot policy, and writer/archivist are
- * not treated as coding roles (no required-MCP grants).
+ * carries Context7 plus the exact ZotPilot policy, and writer/archivist/
+ * scientist are not treated as coding roles (no required-MCP grants).
  *
  * Returns a human-readable issue per violation; empty when canonical.
  */
@@ -425,10 +448,10 @@ export function roleRequirementIssues(
 ): string[] {
   const issues: string[] = [];
   const codingNames = CODING_ROLES;
-  // Coding roles are every packaged role except the three non-coding roles
-  // (researcher/writer/archivist); derived from NON_CODER_ROLES.
+  // Coding roles are every packaged role except the four non-coding roles
+  // (researcher/writer/archivist/scientist); derived from NON_CODER_ROLES.
   const expectedCoding = NON_CODER_ROLES.filter(
-    (role) => role !== "researcher" && role !== "writer" && role !== "archivist",
+    (role) => role !== "researcher" && role !== "writer" && role !== "archivist" && role !== "scientist",
   );
 
   for (const role of expectedCoding) {
@@ -448,11 +471,12 @@ export function roleRequirementIssues(
     }
   }
 
-  // Non-coding roles: researcher has Context7 only; writer/archivist none.
+  // Non-coding roles: researcher has Context7 only; writer/archivist/scientist none.
   const nonCoding: Array<{ role: RoleName; allowed: string[] }> = [
     { role: "researcher", allowed: ["context7_*"] },
     { role: "writer", allowed: [] },
     { role: "archivist", allowed: [] },
+    { role: "scientist", allowed: [] },
   ];
   for (const { role, allowed } of nonCoding) {
     if (codingNames.includes(role)) {
@@ -579,7 +603,9 @@ function agentDefinitions(
           ? "Direct or delegated specialist for external literature and evidence research."
           : role === "archivist"
             ? "Direct or delegated specialist for curated Wiki lookup and maintenance."
-            : `${role} coding specialist for ARIA Review-Driven Coding.`,
+            : role === "scientist"
+              ? "Scientific authority for question specification and result interpretation; delegates evidence to researcher, prose to writer, and computation to coder."
+              : `${role} coding specialist for ARIA Review-Driven Coding.`,
       mode: roleConfig.mode,
       model: roleConfig.model,
       ...(roleConfig.variant ? { variant: roleConfig.variant } : {}),
@@ -606,6 +632,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
       // @opencode-ai/plugin SDK version currently used for ARIA's compile-time types.
       const extendedConfig = runtimeConfig as typeof runtimeConfig & {
         skills?: { paths?: string[] };
+        subagent_depth?: number | null;
       };
 
       // Package-owned skills stay version-locked to the loaded ARIA package.
@@ -614,6 +641,15 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
       extendedConfig.skills.paths ??= [];
       if (!extendedConfig.skills.paths.includes(PACKAGE_SKILLS_ROOT)) {
         extendedConfig.skills.paths.push(PACKAGE_SKILLS_ROOT);
+      }
+
+      // ARIA's nested-role cooperation (e.g. scientist -> coder -> implementer)
+      // needs at least three subagent levels. Apply 3 only as a runtime
+      // default: every explicit value — including 0, 1, 2, and values >= 3 —
+      // is preserved untouched, and no user OpenCode config file is read or
+      // written for this mutation.
+      if (extendedConfig.subagent_depth === undefined || extendedConfig.subagent_depth === null) {
+        extendedConfig.subagent_depth = 3;
       }
 
     },

@@ -8,7 +8,8 @@ export type RoleName =
   | "reviewer"
   | "researcher"
   | "archivist"
-  | "writer";
+  | "writer"
+  | "scientist";
 
 export interface RoleDefaults {
   model: string;

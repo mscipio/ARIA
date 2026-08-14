@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("ARIA defaults", () => {
-  it("contains exactly the ten supported agents", () => {
+  it("contains exactly the eleven supported agents in stable order", () => {
     const defaults = loadDefaultConfig();
     expect(Object.keys(defaults.roles)).toEqual([
       "coder",
@@ -28,6 +28,7 @@ describe("ARIA defaults", () => {
       "researcher",
       "archivist",
       "writer",
+      "scientist",
     ]);
     expect(defaults.roles.planner).not.toHaveProperty("fallbacks");
     expect(defaults.roles.architect).not.toHaveProperty("fallbacks");
@@ -36,6 +37,48 @@ describe("ARIA defaults", () => {
       variant: "medium",
       mode: "all",
       promptFile: "prompts/researcher.md",
+    });
+    expect(defaults.roles.scientist).toEqual({
+      model: "openai/gpt-5.6-sol",
+      variant: "medium",
+      mode: "all",
+      promptFile: "prompts/scientist.md",
+    });
+  });
+
+  it("keeps exactly five durable `all` modes and six specialist `subagent` modes", () => {
+    const defaults = loadDefaultConfig();
+    const byMode = Object.fromEntries(
+      Object.entries(defaults.roles).map(([role, entry]) => [role, entry.mode]),
+    );
+    expect(byMode).toEqual({
+      coder: "all",
+      explorer: "subagent",
+      visualizer: "subagent",
+      planner: "subagent",
+      architect: "subagent",
+      implementer: "subagent",
+      reviewer: "subagent",
+      researcher: "all",
+      archivist: "all",
+      writer: "all",
+      scientist: "all",
+    });
+  });
+
+  it("keeps every pre-existing model and variant pair unchanged", () => {
+    const defaults = loadDefaultConfig();
+    expect(defaults.roles).toMatchObject({
+      coder: { model: "opencode-go/deepseek-v4-pro" },
+      explorer: { model: "opencode-go/deepseek-v4-flash", variant: "high" },
+      visualizer: { model: "opencode-go/kimi-k2.7-code" },
+      planner: { model: "openai/gpt-5.6-terra", variant: "xhigh" },
+      architect: { model: "openai/gpt-5.6-sol", variant: "xhigh" },
+      implementer: { model: "opencode-go/glm-5.2" },
+      reviewer: { model: "opencode-go/deepseek-v4-pro" },
+      researcher: { model: "openai/gpt-5.6-sol", variant: "medium" },
+      archivist: { model: "opencode-go/deepseek-v4-pro" },
+      writer: { model: "openai/gpt-5.6-sol", variant: "medium" },
     });
   });
 
@@ -72,10 +115,12 @@ describe("ARIA defaults", () => {
     expect(config.roles).toBeDefined();
     expect(config.roles.coder).toBeDefined();
     expect(config.roles.writer).toBeDefined();
-    expect(config.roles.coder.mode).toBe("primary");
-    expect(config.roles.writer.mode).toBe("primary");
+    expect(config.roles.scientist).toBeDefined();
+    expect(config.roles.coder.mode).toBe("all");
+    expect(config.roles.writer.mode).toBe("all");
     expect(config.roles["archivist"].mode).toBe("all");
     expect(config.roles.researcher.mode).toBe("all");
+    expect(config.roles.scientist.mode).toBe("all");
   });
 
   it("coder preserves the human approval gate", () => {
@@ -170,6 +215,10 @@ describe("ARIA defaults", () => {
     expect(config.roles.researcher.promptText).not.toContain("CodeGraph provides codebase intelligence");
     expect(config.roles["archivist"].promptText).not.toContain("## MCP Guidance");
     expect(config.roles.writer.promptText).not.toContain("## MCP Guidance");
+    // scientist has no shared MCP access and no generic coding MCP guidance.
+    expect(config.roles.scientist.promptText).not.toContain("## MCP Guidance");
+    expect(config.roles.scientist.promptText).not.toContain("CodeGraph provides codebase intelligence");
+    expect(config.roles.scientist.promptText).not.toContain("Context7 provides current, version-specific");
   });
 
   it("archivist prompt is a small mode router over package skills", () => {
@@ -234,5 +283,47 @@ describe("ARIA defaults", () => {
     for (const role of Object.keys(config.roles) as Array<keyof typeof config.roles>) {
       expect(config.roles[role].promptText).not.toContain("retrieval-only");
     }
+  });
+
+  it("scientist prompt owns scientific specification/interpretation and delegates narrowly", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles.scientist.promptText;
+    expect(prompt).toContain("scientific authority");
+    // High-level authority before and after data, without skill checklists.
+    expect(prompt).toContain("Own scientific methodology and design before data are collected or computation is run");
+    expect(prompt).toContain("own the interpretation of artifacts and reported results after");
+    expect(prompt).not.toContain("falsification");
+    expect(prompt).not.toContain("confounder");
+    expect(prompt).not.toContain("calibrated claims");
+    expect(prompt).not.toContain("underdetermination");
+    expect(prompt).toContain("load `aria-research-planning`");
+    expect(prompt).toContain("load `aria-results-analysis`");
+    expect(prompt).toContain("task `researcher`");
+    expect(prompt).toContain("task `writer`");
+    expect(prompt).toContain("task `coder`");
+    expect(prompt).toContain("You retain ownership of the scientific specification");
+    expect(prompt).toContain("Never perform literature/search/Zotero retrieval yourself");
+    expect(prompt).toContain("no persistence authority");
+    expect(prompt).toContain("Never delegate to any role that is already an active ancestor");
+    expect(prompt).not.toContain("## MCP Guidance");
+  });
+
+  it("adds only narrow scientist handoffs with the active-ancestor rule", () => {
+    const config = resolveAriaConfig(tmpdir());
+
+    const coder = config.roles.coder.promptText;
+    expect(coder).toContain("task `scientist`");
+    expect(coder).toContain("Scientist owns the scientific specification");
+    expect(coder).toContain("Never delegate to any role that is already an active ancestor");
+
+    const researcher = config.roles.researcher.promptText;
+    expect(researcher).toContain("the `scientist` task you for focused evidence questions");
+    expect(researcher).toContain("do not task `scientist` back when `scientist` tasked you");
+
+    const writer = config.roles.writer.promptText;
+    expect(writer).toContain("When `scientist` tasks you");
+    expect(writer).toContain("do not task `scientist` back when `scientist` tasked you");
+
+    // No archivist coupling to the scientist.
+    expect(config.roles["archivist"].promptText).not.toContain("scientist");
   });
 });

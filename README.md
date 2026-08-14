@@ -1,18 +1,19 @@
 # ARIA
 
-**ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `writer`, `archivist`, and `researcher` own writing, knowledge, and evidence-research workflows.
+**ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
 ## Features
 
 - **Conversational coder** — answers questions directly; creates plans only for non-trivial implementation requests
-- **Specialized roles** — coding specialists plus opt-in Wiki and scientific/professional writing specialists, each with focused authority
+- **Specialized roles** — coding specialists plus opt-in Wiki, scientific/professional writing, and scientific-authority specialists, each with focused authority
 - **Architect plan review** — QA before implementation: `READY` or `REVISED` with the smallest corrections needed
 - **Explicit human approval** — the coder summarizes the plan and **stops and waits** for the user to approve before any code is written
 - **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
 - **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
-- **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki and writer remain intentionally isolated
+- **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki, writer, and scientist remain intentionally isolated
 - **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, and explicit evidence-level/uncertainty reporting
+- **Bounded scientist authority** — `mode: all` scientific authority for question specification, methodology, and result interpretation, with deny-by-default code/shell/MCP/evidence/persistence authority; delegates evidence to `researcher`, prose to `writer`, and computation to `coder`
 
 ## Workflow
 
@@ -34,7 +35,7 @@ The tasklist is scoped to the worktree, not to one OpenCode conversation. A new 
 
 | Agent | Responsibility | Default model |
 |---|---|---|
-| coder | Coordinates work and maintains the shared plan | `opencode-go/deepseek-v4-pro` |
+| coder (`all`) | Coordinates work and maintains the shared plan | `opencode-go/deepseek-v4-pro` |
 | explorer | Maps code, tests, and dependencies | `opencode-go/deepseek-v4-flash` |
 | visualizer | Interprets screenshots and diagrams | `opencode-go/kimi-k2.7-code` |
 | planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-5.6-terra` |
@@ -43,13 +44,12 @@ The tasklist is scoped to the worktree, not to one OpenCode conversation. A new 
 | reviewer | Finds regressions, risks, and missing verification | `opencode-go/deepseek-v4-pro` |
 | researcher (`all`) | Direct or delegated external literature and evidence research | `openai/gpt-5.6-sol` |
 | archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/deepseek-v4-pro` |
-| writer (`primary`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-5.6-sol` |
+| writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-5.6-sol` |
+| scientist (`all`) | Scientific authority: question specification, methodology design, and result interpretation | `openai/gpt-5.6-sol` |
 
 Only implementer can use OpenCode's edit tool for application code. Implementer shell commands run without permission prompts, except destructive removal and package publishing commands, which remain blocked. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
 
-Coding specialists run through OpenCode's native `task` tool. `writer` is selected directly as a primary agent, while `archivist` can be selected directly or delegated through `task`.
-
-`coder` and `writer` are primary agents. `archivist` and `researcher` use OpenCode `mode: all`, so each is available both directly and as a delegated specialist. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose).
+The six RDC coding specialists — explorer, visualizer, planner, architect, implementer, reviewer — run through OpenCode's native `task` tool. The five durable roles — `coder`, `researcher`, `archivist`, `writer`, and `scientist` — run with OpenCode `mode: all` and are available both directly and through `task`. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose). Mode availability is not authority: every role's tools are deny-by-default except what is explicitly granted, and `scientist` in particular has no unrestricted code, shell, MCP, evidence, or persistence authority.
 
 ## Agent and Skill Architecture
 
@@ -70,8 +70,9 @@ Examples:
 - archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
 - writer → `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
 - researcher → `aria-research-evidence`
+- scientist → `aria-research-planning` or `aria-results-analysis`
 
-ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers its packaged `skills/` directory through OpenCode's native `skills.paths` configuration, so skills stay version-locked to the loaded ARIA package without copying files into the user's global skill directory or depending on myopencode/another registry.
+ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers its packaged `skills/` directory through OpenCode's native `skills.paths` configuration, appending it to any pre-existing paths (append-and-preserve), so skills stay version-locked to the loaded ARIA package without copying files into the user's global skill directory or depending on myopencode/another registry.
 
 ## Shared Plan
 
@@ -128,6 +129,7 @@ Only the `coder`, planning specialists, and reviewer can call `plan`; every othe
 | explorer | none |
 | visualizer | none |
 | implementer | none |
+| scientist | none |
 
 - `get` returns the active plan (or `No active plan.`).
 - `create` writes a new plan with `approval: pending` and returns the initial `revision` (`1`); rejected when an active plan already exists.
@@ -230,7 +232,7 @@ Setup never creates or overwrites project `aria.json`, commits, pushes, or intro
 
 ### `aria setup --configure`
 
-`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the ten configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
+`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the eleven configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`, `scientist`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
 
 From the top-level menu you may:
 
@@ -271,12 +273,14 @@ Read-only health check. It inspects — and never writes, installs, or repairs �
 
 - **PASS** — the check succeeded.
 - **FAIL** — a required item is missing, invalid, or disconnected. Any FAIL makes `aria doctor` exit **1**.
-- **WARN** — a non-fatal degradation of an optional capability (ZotPilot CLI or MCP, unverifiable variant metadata). WARN never changes the exit code.
+- **WARN** — a non-fatal degradation of an optional capability (ZotPilot CLI or MCP, unverifiable variant metadata, or a shallow effective `subagent_depth`). WARN never changes the exit code.
 - **SKIP** — a check that does not apply to the current environment (for example, `WIKI_DIR` unset, or the standalone live-tool-inventory comparison).
 
 Exit code is **0 if and only if no finding is FAIL**, otherwise **1**.
 
 Required checks (FAIL when broken): package `package.json` version, packaged defaults and each defaults-referenced prompt, role route resolution (invalid global or project config), model discovery, every resolved role route against the models `opencode models` lists (with configured variants verified only against observable variant metadata — a variant whose metadata is not observable is WARN, never guessed), the OpenCode/Engram/Context7/CodeGraph integrations, packaged skills (matching `name` and `metadata.owner: aria`), canonical role requirements, and the packaged Wiki pipeline assets. A configured `WIKI_DIR` that does not exist, is not a directory, or lacks read/write accessibility is FAIL; an unset `WIKI_DIR` is SKIP.
+
+One config-area finding evaluates the effective cooperation surface, provenance-neutrally: `aria doctor` reads the effective merged top-level `subagent_depth` reported by a read-only `opencode debug config` probe. An absent field is PASS, stating that ARIA supplies the runtime default/recommendation 3; a finite numeric value >= 3 is PASS, reporting the effective value as sufficient for nested ARIA cooperation; a finite numeric value < 3 is a nonfatal WARN, reporting the effective value and that nested ARIA cooperation may be degraded. Unavailable command/output or malformed JSON/value is handled as a nonfatal WARN. This advisory never FAILs, never writes configuration, and never attributes the value to user configuration or ARIA.
 
 ZotPilot is reported as two clearly separate findings:
 
@@ -301,13 +305,16 @@ architect  openai/gpt-5.6-sol (xhigh)
 implementer  opencode-go/glm-5.2
 reviewer  opencode-go/deepseek-v4-pro
 researcher  openai/gpt-5.6-sol (medium)
+archivist  opencode-go/deepseek-v4-pro
+writer  openai/gpt-5.6-sol (medium)
+scientist  openai/gpt-5.6-sol (medium)
 ```
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
 
 ## Writer
 
-`writer` is a primary agent for writing objectives rather than a general researcher. Invoke it directly for writing work; its small role prompt selects package-owned writing skills on demand:
+`writer` is a `mode: all` agent for writing objectives rather than a general researcher. Invoke it directly for writing work; its small role prompt selects package-owned writing skills on demand:
 
 - `aria-academic-writing` — evidence-bounded peer-reviewed scientific prose and section-aware journal style
 - `aria-writing-anti-ai` — removes formulaic LLM prose while preserving technical meaning and appropriate formality
@@ -318,7 +325,7 @@ The writer may task `archivist` only for explicitly read-only project/internal e
 
 ## Researcher
 
-`researcher` is the evidence specialist with `mode: all`: you can invoke it directly for literature and citation questions, and the `coder` or `writer` may delegate focused evidence requests to it. It is read/research-only for the project (protected read plus navigation), with no edit, shell, plan, or Wiki authority.
+`researcher` is the evidence specialist with `mode: all`: you can invoke it directly for literature and citation questions, and the `coder`, `writer`, or `scientist` may delegate focused evidence requests to it. It is read/research-only for the project (protected read plus navigation), with no edit, shell, plan, or Wiki authority.
 
 ARIA owns the research workflow; **ZotPilot remains the Zotero backend/capability provider**. The researcher uses the available ZotPilot MCP research/read tools directly for library search, metadata/content retrieval, and evidence inspection, plus `websearch`/`webfetch` for external authoritative sources and Context7 for library/API documentation. ARIA does not install a second Zotero backend or MCP, and no user-level ZotPilot skill installation is introduced by this role. Zotero mutation is approval-gated: ingest, note/tag/collection management, PDF annotation, and indexing tools require an explicit per-operation user approval, as does any `zotpilot` CLI fallback; the researcher never mutates the library on its own authority.
 
@@ -340,6 +347,37 @@ A realistic literature task to try once ZotPilot is configured with a library an
 > Ask `researcher` to investigate susceptibility-distortion correction in diffusion MRI. It should search the Zotero library and external authoritative sources (e.g., primary journal studies) through ZotPilot plus web evidence; compare the primary studies it finds; label each supporting passage as abstract/snippet versus inspected full text; expand passage context before making passage-specific claims; report disagreements between sources and any evidence gaps; and request explicit approval before ingesting selected DOI records into the library.
 
 The scenario is a request template, not a claim that it has already run.
+
+## Scientist
+
+`scientist` is the scientific authority with `mode: all`: you can invoke it directly, and `coder`, `researcher`, or `writer` may task it. It owns scientific specification and interpretation — what is being asked, what would count as evidence, methodology and design, and what results mean — and it is not an evidence researcher, a prose writer, or a software engineer.
+
+### Cooperation graph
+
+Scientist cooperation is explicit and narrow: exactly six scientist-related task edges, never an all-to-all role graph.
+
+- **Inbound** — `coder`, `researcher`, and `writer` may task `scientist` for scientific question framing, methodology design, or result interpretation.
+- **Outbound** — `scientist` tasks `researcher` for external evidence acquisition (evidence, not conclusions — the scientist interprets), `writer` for prose, manuscript, and report drafting (the scientist decides scientific meaning; the writer decides expression), and `coder` for computation, software, or RDC implementation of its specification. When `coder` computes, `scientist` retains ownership of the scientific specification and of the interpretation of what the computation means; the coder owns implementation correctness.
+- **Retained RDC delegation** — a coder delegated by `scientist` keeps its full RDC delegation authority: it still reaches all six RDC coding specialists.
+
+Reciprocal grants cannot bounce: a delegated role must not task any role that is already an active ancestor in the current delegation chain (`scientist` never tasks back whoever tasked it, directly or indirectly). Cycle protection comes from OpenCode's hard depth bound plus this active-ancestor prompt hygiene; ARIA adds no cycle-detection subsystem.
+
+### Prompt and skills
+
+`scientist`'s packaged prompt (`defaults/prompts/scientist.md`) is deliberately lean: it defines authority, ownership, delegation, boundaries, and the required output contract, and routes methodology to two package-owned skills instead of duplicating their checklists:
+
+- `aria-research-planning` — tractable question framing (optional 5W1H), cautious gap/novelty and importance/feasibility reasoning, competing hypotheses, evidence needs versus assumptions, falsification/discrimination criteria, measurement/method/control/confounder/information-value planning, and a minimal next decision.
+- `aria-results-analysis` — artifact/comparability and unit/dependence validation, explicit comparisons and metrics, descriptive counts, uncertainty/effect sizes/inference assumptions/multiple comparisons/missingness, practical versus statistical significance, figure/table interpretation, observation versus mechanism, calibrated claims, and explicit blockers/underdetermination.
+
+`scientist` runs on `openai/gpt-5.6-sol` (variant `medium`), the same reasoning-model family and variant as `researcher` and `writer`: interpretation-heavy scientific reasoning at a balanced reasoning budget, distinct from the `xhigh` variants reserved for `planner` and `architect` plan work.
+
+### Authority and permissions
+
+Availability is not authority: although `scientist` runs with `mode: all`, its tools are deny-by-default. It holds protected project read plus `glob`/`grep`/`list`, exactly two skills (`aria-research-planning`, `aria-results-analysis`), and exactly three task targets (`researcher`, `writer`, `coder`). It has no edit, bash, plan, external-directory, web, LSP, or MCP authority (no CodeGraph/Context7/Engram, no ZotPilot), and no persistence authority — it cannot write Engram observations, SDD documents, registries, or other durable state.
+
+### Cooperation depth
+
+ARIA's nested cooperation (e.g. `scientist → coder → implementer`) needs three subagent levels. The plugin sets `subagent_depth = 3` only as a runtime default when the merged runtime value is absent or nullish; every explicit value — including shallow values such as 0, 1, or 2 and values >= 3 — is preserved untouched, and no user OpenCode config file is read or written for this. Recursion is bounded by OpenCode's hard depth bound plus the active-ancestor prompt rule above. `aria doctor` reports the effective merged top-level `subagent_depth` read-only, and warns nonfatally when the effective value is below 3 (see `aria doctor`).
 
 ## Wiki Compiler
 

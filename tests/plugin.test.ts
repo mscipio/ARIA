@@ -75,7 +75,7 @@ describe("ariaPlugin", () => {
     expect(typeof server).toBe("function");
   });
 
-  it("registers exactly ten agents and the plan tool", async () => {
+  it("registers exactly eleven agents and the plan tool", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const config: Config = {};
@@ -90,10 +90,11 @@ describe("ariaPlugin", () => {
       "implementer",
       "reviewer",
       "researcher",
-      "writer",
       "archivist",
+      "writer",
+      "scientist",
     ]);
-    expect(config.agent?.coder?.mode).toBe("primary");
+    expect(config.agent?.coder?.mode).toBe("all");
     expect(config.agent?.planner?.model).toBe("openai/gpt-5.6-terra");
     expect(config.agent?.planner?.mode).toBe("subagent");
     expect(config.agent?.architect?.mode).toBe("subagent");
@@ -101,9 +102,15 @@ describe("ariaPlugin", () => {
     expect(config.agent?.researcher?.model).toBe("openai/gpt-5.6-sol");
     expect(config.agent?.researcher?.variant).toBe("medium");
     expect(config.agent?.["archivist"]?.mode).toBe("all");
-    expect(config.agent?.writer?.mode).toBe("primary");
+    expect(config.agent?.writer?.mode).toBe("all");
+    expect(config.agent?.scientist?.mode).toBe("all");
+    expect(config.agent?.scientist?.model).toBe("openai/gpt-5.6-sol");
+    expect(config.agent?.scientist?.variant).toBe("medium");
     expect(config.agent?.researcher?.description).toBe(
       "Direct or delegated specialist for external literature and evidence research.",
+    );
+    expect(config.agent?.scientist?.description).toBe(
+      "Scientific authority for question specification and result interpretation; delegates evidence to researcher, prose to writer, and computation to coder.",
     );
     const extendedConfig = config as Config & { skills?: { paths?: string[] } };
     expect(extendedConfig.skills?.paths).toContain(join(getPackageRoot(), "skills"));
@@ -151,6 +158,7 @@ describe("ariaPlugin", () => {
         reviewer: "allow",
         researcher: "allow",
         "archivist": "allow",
+        scientist: "allow",
       },
     });
     expect(permission("explorer")).toMatchObject({ edit: "deny", bash: "deny", glob: "allow" });
@@ -163,7 +171,7 @@ describe("ariaPlugin", () => {
     });
     expect(permission("reviewer")).toMatchObject({ edit: "deny", bash: "allow", plan: "allow" });
     // writer is writing-only with read access, narrow Wiki delegation, and
-    // evidence-only researcher delegation
+    // evidence-only researcher delegation plus scientist handoff
     expect(permission("writer")).toMatchObject({
       edit: "deny",
       bash: "deny",
@@ -174,6 +182,7 @@ describe("ariaPlugin", () => {
         "*": "deny",
         "archivist": "allow",
         "researcher": "allow",
+        "scientist": "allow",
       },
       plan: "deny",
       read: { "*": "allow", "*.env": "deny" },
@@ -344,7 +353,7 @@ describe("ariaPlugin", () => {
     // Research-only base: read/navigation and web evidence allowed; every
     // mutation, delegation, plan, and external-directory surface denied.
     expect(researcher.edit).toBe("deny");
-    expect(researcher.task).toBe("deny");
+    expect(researcher.task).toEqual({ "*": "deny", scientist: "allow" });
     expect(researcher.plan).toBe("deny");
     expect(researcher.external_directory).toBe("deny");
     expect(researcher.todowrite).toBe("deny");
@@ -423,6 +432,78 @@ describe("ariaPlugin", () => {
     expect(researcherBash).not.toHaveProperty("python *");
     expect(researcherBash).not.toHaveProperty("npm *");
     expect(researcherBash).not.toHaveProperty("ls");
+  });
+
+  it("grants scientist only bounded tool and skill authority", async () => {
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
+    const config: Config = {};
+    await plugin.config?.(config);
+    const permission = (role: string) => config.agent?.[role]?.permission as unknown as Record<string, unknown>;
+    const scientist = permission("scientist");
+
+    // Read-only navigation tools plus deny-by-default mutation surfaces.
+    expect(scientist).toMatchObject({
+      edit: "deny",
+      bash: "deny",
+      plan: "deny",
+      external_directory: "deny",
+      todowrite: "deny",
+      question: "deny",
+      webfetch: "deny",
+      websearch: "deny",
+      lsp: "deny",
+      glob: "allow",
+      grep: "allow",
+      list: "allow",
+      read: { "*": "allow", "*.env": "deny", "*.env.*": "deny", "*.env.example": "allow" },
+      skill: {
+        "*": "deny",
+        "aria-research-planning": "allow",
+        "aria-results-analysis": "allow",
+      },
+      task: { "*": "deny", researcher: "allow", writer: "allow", coder: "allow" },
+    });
+    // No MCP or persistence authority of any kind.
+    expect(scientist).not.toHaveProperty("engram_*");
+    expect(scientist).not.toHaveProperty("context7_*");
+    expect(scientist).not.toHaveProperty("codegraph_*");
+    expect(scientist).not.toHaveProperty("zotpilot_*");
+    expect(scientist).not.toHaveProperty("engram_mem_save");
+  });
+
+  it("binds scientist cooperation to exactly six task edges and keeps coder's six specialist edges", async () => {
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
+    const config: Config = {};
+    await plugin.config?.(config);
+    const permission = (role: string) => config.agent?.[role]?.permission as unknown as Record<string, unknown>;
+    const taskMap = (role: string) => permission(role).task as Record<string, unknown>;
+
+    // Scientist outbound: exactly researcher, writer, coder.
+    expect(taskMap("scientist")).toEqual({
+      "*": "deny",
+      researcher: "allow",
+      writer: "allow",
+      coder: "allow",
+    });
+
+    // Scientist inbound: exactly coder, researcher, writer.
+    expect(taskMap("coder").scientist).toBe("allow");
+    expect(taskMap("researcher")).toEqual({ "*": "deny", scientist: "allow" });
+    expect(taskMap("writer").scientist).toBe("allow");
+
+    // No other role delegates to scientist: no all-to-all durable-role graph.
+    for (const role of ["explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "archivist"]) {
+      expect(permission(role).task).toBe("deny");
+    }
+
+    // Coder retains its six RDC specialist targets.
+    const coderTask = taskMap("coder");
+    expect(coderTask["*"]).toBe("deny");
+    for (const target of ["explorer", "visualizer", "planner", "architect", "implementer", "reviewer"]) {
+      expect(coderTask[target]).toBe("allow");
+    }
   });
 
   it("enforces the runtime plan ACL per role and action", async () => {
@@ -896,5 +977,45 @@ describe("ariaPlugin", () => {
       coder("close"),
     );
     expect(outputOf(closed)).toMatch(/Archived to/);
+  });
+});
+
+describe("ariaPlugin config hook depth", () => {
+  type HookConfig = Config & {
+    skills?: { paths?: string[] };
+    subagent_depth?: number | null;
+  };
+
+  it("applies subagent_depth 3 only when absent or nullish", async () => {
+    const absent: HookConfig = {};
+    const plugin = await load({ directory: await project() } as never);
+    await plugin.config?.(absent);
+    expect(absent.subagent_depth).toBe(3);
+
+    const undefinedDepth: HookConfig = { subagent_depth: undefined };
+    await plugin.config?.(undefinedDepth);
+    expect(undefinedDepth.subagent_depth).toBe(3);
+
+    const nullDepth: HookConfig = { subagent_depth: null };
+    await plugin.config?.(nullDepth);
+    expect(nullDepth.subagent_depth).toBe(3);
+  });
+
+  it("preserves explicit shallow depths 0, 1, and 2", async () => {
+    for (const depth of [0, 1, 2] as const) {
+      const plugin = await load({ directory: await project() } as never);
+      const config: HookConfig = { subagent_depth: depth };
+      await plugin.config?.(config);
+      expect(config.subagent_depth).toBe(depth);
+    }
+  });
+
+  it("preserves explicit depths of 3 and above", async () => {
+    for (const depth of [3, 5] as const) {
+      const plugin = await load({ directory: await project() } as never);
+      const config: HookConfig = { subagent_depth: depth };
+      await plugin.config?.(config);
+      expect(config.subagent_depth).toBe(depth);
+    }
   });
 });
