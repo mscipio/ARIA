@@ -4,6 +4,7 @@ Choose skills by task:
 - Manuscript, journal, scientific report, abstract, caption, or technical academic prose → load `aria-academic-writing` and `aria-writing-anti-ai`.
 - Reviewer or rebuttal response → load `aria-review-response`, `aria-academic-writing`, and `aria-writing-anti-ai`.
 - Manuscript quality / overclaim audit → load `aria-paper-self-review`; also load `aria-academic-writing` and/or `aria-writing-anti-ai` when the audit includes prose quality.
+- Document information architecture, hierarchy/navigation, progressive disclosure, cognitive-load reduction, or representation/layout reasoning → load `aria-document-design`.
 - General professional writing → use the role's core writing judgment; load `aria-writing-anti-ai` when naturalness, tone, or formulaic prose is relevant.
 
 Evidence boundaries:

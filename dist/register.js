@@ -222,7 +222,7 @@ const ROLE_PERMISSIONS = {
     writer: {
         ...BASE_PERMISSION,
         read: PROTECTED_READ,
-        skill: skillAccess("aria-academic-writing", "aria-writing-anti-ai", "aria-review-response", "aria-paper-self-review"),
+        skill: skillAccess("aria-academic-writing", "aria-writing-anti-ai", "aria-review-response", "aria-paper-self-review", "aria-document-design"),
         task: {
             "*": "deny",
             "archivist": "allow",

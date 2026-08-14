@@ -63,6 +63,7 @@ const requiredPaths = [
   "skills/aria-writing-anti-ai/SKILL.md",
   "skills/aria-review-response/SKILL.md",
   "skills/aria-paper-self-review/SKILL.md",
+  "skills/aria-document-design/SKILL.md",
   "skills/aria-research-evidence/SKILL.md",
   "skills/aria-research-planning/SKILL.md",
   "skills/aria-results-analysis/SKILL.md",
@@ -247,16 +248,16 @@ const skillNames = readdirSync(skillsDir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
-if (skillNames.length !== 18) {
-  console.error("smoke-package: expected 18 packaged skills, got", skillNames.length);
+if (skillNames.length !== 19) {
+  console.error("smoke-package: expected 19 packaged skills, got", skillNames.length);
   process.exit(1);
 }
 if (skillNames.filter((name) => name.startsWith("rdc-")).length !== 8) {
   console.error("smoke-package: expected 8 rdc-* skills");
   process.exit(1);
 }
-if (skillNames.filter((name) => name.startsWith("aria-")).length !== 10) {
-  console.error("smoke-package: expected 10 aria-* skills");
+if (skillNames.filter((name) => name.startsWith("aria-")).length !== 11) {
+  console.error("smoke-package: expected 11 aria-* skills");
   process.exit(1);
 }
 for (const name of ["aria-research-planning", "aria-results-analysis"]) {
@@ -514,8 +515,8 @@ exit 2
   if (!doctorOutput.includes("tools/list")) {
     fail("doctor live-tool-inventory limitation missing tools/list wording");
   }
-  if (!doctorOutput.includes("18 of 18 validated")) {
-    fail("doctor packaged skills finding does not report the exact 18-skill inventory");
+  if (!doctorOutput.includes("19 of 19 validated")) {
+    fail("doctor packaged skills finding does not report the exact 19-skill inventory");
   }
   // The doctor consumes the merged debug config surface: the fake reports an
   // effective subagent_depth of 4, which is sufficient (PASS, effective value).

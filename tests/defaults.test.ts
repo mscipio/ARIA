@@ -241,6 +241,7 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("load `aria-writing-anti-ai`");
     expect(prompt).toContain("load `aria-review-response`");
     expect(prompt).toContain("load `aria-paper-self-review`");
+    expect(prompt).toContain("load `aria-document-design`");
     expect(prompt).toContain("task `archivist`");
     expect(prompt).toContain("read-only lookup");
     expect(prompt).toContain("task `researcher`");
@@ -252,6 +253,11 @@ describe("ARIA defaults", () => {
     expect(prompt).not.toContain("## Academic journal style");
     expect(prompt).not.toContain("## Anti-template prose discipline");
     expect(prompt).not.toContain("## MCP Guidance");
+    // Lean router: exactly one aria-document-design routing line, with no
+    // duplicated methodology from the skill.
+    expect(prompt.match(/aria-document-design/g)).toHaveLength(1);
+    expect(prompt).not.toContain("## Principles");
+    expect(prompt).not.toContain("Reader and task first");
   });
 
   it("researcher prompt defines direct/delegable evidence research with hard boundaries", () => {

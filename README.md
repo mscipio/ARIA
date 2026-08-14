@@ -68,7 +68,7 @@ Examples:
 - implementer → `rdc-code-implementation` + proportional testing guidance
 - reviewer → `rdc-implementation-review` + proportional testing guidance
 - archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
-- writer → `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
+- writer → `aria-document-design`, `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
 - researcher → `aria-research-evidence`
 - scientist → `aria-research-planning` or `aria-results-analysis`
 
@@ -320,6 +320,7 @@ MCPs are preferred evidence sources, not mandatory routes for every task. Engram
 - `aria-writing-anti-ai` — removes formulaic LLM prose while preserving technical meaning and appropriate formality
 - `aria-review-response` — reviewer-response/rebuttal strategy, evidence anchoring, and tone
 - `aria-paper-self-review` — structure, overclaim, claim-evidence, reproducibility, and submission-readiness audit
+- `aria-document-design` — document information architecture, hierarchy/navigation, progressive disclosure, and representation choices, deferring prose/claims to `aria-academic-writing` and audits to `aria-paper-self-review`
 
 The writer may task `archivist` only for explicitly read-only project/internal evidence. For external literature, Zotero, citation-verification, and claim-support evidence it tasks `researcher` with a focused evidence request (evidence, not manuscript prose). The writer does not query Zotero or the literature itself; it marks external evidence the researcher could not resolve as `[RESEARCH NEEDED]` or `[CITATION NEEDED]`.
 
