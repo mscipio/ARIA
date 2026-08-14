@@ -115,6 +115,50 @@ describe("package-owned ARIA skills", () => {
     expect(research).not.toContain("load `ztp-review`");
     expect(research).toContain("do not spawn nested researcher subagents");
     expect(research).toContain("do not install a second Zotero backend or MCP");
+    // Claim-level citation verification: source identity/existence is checked
+    // separately from substantive content support, with canonical identity and a
+    // preprint/published distinction.
+    expect(research).toContain("Citation verification mode");
+    expect(research).toContain("Decompose the exact claim");
+    expect(research).toContain("Check source identity/existence separately from claim support");
+    expect(research).toContain("canonical identity");
+    expect(research).toContain("Distinguish preprint from published");
+    // Substantive support is grounded in inspected content; metadata alone cannot
+    // support a substantive claim, and abstract-only support is explicitly limited.
+    expect(research).toContain("passage, result, table, figure, or section");
+    expect(research).toContain("metadata confirms identity, but never supports a substantive claim");
+    expect(research).toContain("assess only what the abstract supports, and state the abstract-only limitation");
+    // Uninspectable content gets the exact cannot-verify classification, never an
+    // inference, using the compact six-class vocabulary.
+    expect(research).toContain("never infer support");
+    for (const classification of [
+      "directly supports",
+      "partially supports",
+      "indirectly supports/inference required",
+      "does not support",
+      "contradicts",
+      "cannot verify from available evidence",
+    ]) {
+      expect(research).toContain(classification);
+    }
+    // Scope comparison, review-to-primary tracing, and per-citation cluster handling.
+    expect(research).toContain("Compare scope");
+    expect(research).toContain("population/sample");
+    expect(research).toContain("temporal scope");
+    expect(research).toContain("trace the claim to the primary source it cites");
+    expect(research).toContain("handle each citation source-by-source");
+    // No fabricated quotations or locations; unresolved sources are retried before
+    // the cannot-verify classification is returned, and unresolved identity or
+    // content keeps that exact classification, with a next evidence action;
+    // output stays concise.
+    expect(research).toContain("Never fabricate a quotation or location");
+    expect(research).toContain(
+      "keep the support classification exactly `cannot verify from available evidence`",
+    );
+    expect(research).toContain("`unresolved` is never a seventh support classification");
+    expect(research).toContain("next evidence action");
+    expect(research).toContain("concise per-claim verification result");
+    expect(research).toContain("Use a compact table only for batches");
     // No automatic Engram persistence.
     expect(research).toContain("Do not persist anything to Engram automatically");
   });

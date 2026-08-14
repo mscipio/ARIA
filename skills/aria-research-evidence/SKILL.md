@@ -37,6 +37,28 @@ Within the same level, prefer **primary/authoritative sources**: the original st
 5. **Report disagreement, uncertainty, and gaps** explicitly: conflicting findings across sources, weak or single-source support, and evidence gaps. Do not smooth over disagreement; state it with the sources on each side.
 6. **Deliver a structured evidence handoff**: findings with source, provenance, evidence level, and a short `Support`/`Disagreement`/`Gap` summary; then an itemized list of disagreements, uncertainties, and gaps; then a list of sources cited (library items by Zotero identity, external sources by identifier).
 
+## Citation verification mode
+
+For a citation-verification or claim-support question, apply this mode alongside the procedure above and return its result fields in the handoff.
+
+1. **Decompose the exact claim** into discrete factual components and verify each against evidence separately; note which component each citation is offered for.
+2. **Check source identity/existence separately from claim support**:
+   - **Identity/existence** — resolve the canonical identity (title, authors, venue, year, and DOI/PMID or other stable identifier where available). Confirm the source exists and matches the citation. Distinguish preprint from published and report which version you verified.
+   - **Content/claim support** — ground substantive support only in the strongest content actually inspectable:
+     - **Full text available**: inspect the relevant passage, result, table, figure, or section — not topical similarity to the paper.
+     - **Abstract only**: assess only what the abstract supports, and state the abstract-only limitation.
+     - **Metadata only**: metadata confirms identity, but never supports a substantive claim.
+     - **Content needed but not inspectable**: classify `cannot verify from available evidence` — never infer support. Universal full-text retrieval is not mandatory; use the strongest content available.
+3. **Classify support** with exactly one of: `directly supports`, `partially supports`, `indirectly supports/inference required`, `does not support`, `contradicts`, or `cannot verify from available evidence`.
+   Never upgrade: topical relevance into support, an abstract into substantive support, association into causation, model results into measured results, or a review's repeated claim into support by the underlying source.
+4. **Compare scope**: population/sample, intervention/exposure, comparator, endpoint/outcome, method/conditions, direction, magnitude, temporal scope, and limitations. Record mismatches as limitations.
+5. **Primary vs secondary**: when a specific reported result is at issue and the cited source is a review, trace the claim to the primary source it cites before classifying.
+6. **Multi-citation clusters**: handle each citation source-by-source; then note which components the cluster supports collectively.
+7. **Record evidence location when available** (passage, section, table, figure). Never fabricate a quotation or location.
+8. **Retry before cannot-verify**: retry identifiers, queries, or sources (alternate identifier lookup, corrected query, alternate source) before returning `cannot verify from available evidence`. If source identity or required content still cannot be resolved, keep the support classification exactly `cannot verify from available evidence`, explain what identity or content could not be resolved, and provide the next evidence action. The identity field may report unresolved identity, but `unresolved` is never a seventh support classification.
+
+**Result fields** (per claim): return a concise per-claim verification result with these fields — claim; source identity (canonical metadata and preprint/published); classification; rationale; evidence location when available; mismatch/limitation; next evidence action when unresolved. Use a compact table only for batches.
+
 ## Zotero mutation and ingest
 
 - Library search, metadata retrieval, and evidence inspection are read-only and may proceed directly.
