@@ -13,6 +13,7 @@ const ROLES = [
     "researcher",
     "archivist",
     "writer",
+    "scientist",
 ];
 const ROLE_SET = new Set(ROLES);
 const LEGACY_ROLE_ALIASES = {
@@ -207,7 +208,7 @@ export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.
                 ...roleDefaults,
                 model,
                 variant,
-                promptText: role === "archivist" || role === "writer" || role === "researcher"
+                promptText: role === "scientist" || role === "archivist" || role === "writer" || role === "researcher"
                     ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
                     : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
             }];

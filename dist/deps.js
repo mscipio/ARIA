@@ -663,6 +663,57 @@ async function detectMcpConnectivity(executor) {
     }
     return parseMcpList(result.stdout);
 }
+/**
+ * Defensively parse the fully merged JSON printed by `opencode debug config`
+ * and inspect only its own top-level `subagent_depth` field.
+ */
+export function parseSubagentDepth(output) {
+    const clean = stripAnsi(output).trim();
+    if (clean.length === 0) {
+        return { status: "unavailable", reason: "opencode debug config produced no output" };
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(clean);
+    }
+    catch (error) {
+        return {
+            status: "unavailable",
+            reason: `opencode debug config output is not valid JSON (${error instanceof Error ? error.message : String(error)})`,
+        };
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { status: "unavailable", reason: "opencode debug config output is not a JSON object" };
+    }
+    // Only the own top-level field is inspected; nested lookalikes are ignored.
+    const depth = parsed.subagent_depth;
+    if (depth === undefined || depth === null)
+        return { status: "absent" };
+    if (typeof depth !== "number" || !Number.isFinite(depth)) {
+        return {
+            status: "unavailable",
+            reason: `merged config subagent_depth is not a finite number (${typeof depth})`,
+        };
+    }
+    return { status: "value", depth };
+}
+/**
+ * Read-only probe: run `opencode debug config` in the inspected worktree and
+ * inspect the effective merged top-level `subagent_depth`. Never mutates
+ * configuration.
+ */
+export async function probeSubagentDepth(executor, worktree) {
+    try {
+        const result = await executor("opencode", ["debug", "config"], worktree ? { cwd: worktree } : undefined);
+        return parseSubagentDepth(result.stdout);
+    }
+    catch (error) {
+        return {
+            status: "unavailable",
+            reason: `opencode debug config failed: ${error instanceof Error ? error.message : String(error)}`,
+        };
+    }
+}
 // ---------------------------------------------------------------------------
 // Doctor
 // ---------------------------------------------------------------------------

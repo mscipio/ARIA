@@ -15,7 +15,7 @@ export declare const PACKAGE_SKILL_NAMES: readonly string[];
  * Roles that carry every canonical required MCP grant (Engram/Context7/
  * CodeGraph): the coder plus the six RDC coding roles. Derived from the
  * coder permission construction and `ROLE_PERMISSIONS`; researcher, writer,
- * and archivist are intentionally not included.
+ * archivist, and scientist are intentionally not included.
  */
 export declare const CODING_ROLES: readonly RoleName[];
 /** Effective permissions of every packaged role (coder + non-coder roles). */
@@ -23,8 +23,8 @@ export declare function effectiveRolePermissions(): Record<RoleName, AgentPermis
 /**
  * Validate effective role requirements against the canonical contract:
  * coding roles carry every `REQUIRED_MCP_PERMISSION` grant, the researcher
- * carries Context7 plus the exact ZotPilot policy, and writer/archivist are
- * not treated as coding roles (no required-MCP grants).
+ * carries Context7 plus the exact ZotPilot policy, and writer/archivist/
+ * scientist are not treated as coding roles (no required-MCP grants).
  *
  * Returns a human-readable issue per violation; empty when canonical.
  */

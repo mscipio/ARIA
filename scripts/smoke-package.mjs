@@ -47,6 +47,7 @@ const requiredPaths = [
   "defaults/prompts/archivist.md",
   "defaults/prompts/writer.md",
   "defaults/prompts/researcher.md",
+  "defaults/prompts/scientist.md",
   "skills/rdc-code-exploration/SKILL.md",
   "skills/rdc-visual-analysis/SKILL.md",
   "skills/rdc-implementation-planning/SKILL.md",
@@ -63,6 +64,8 @@ const requiredPaths = [
   "skills/aria-review-response/SKILL.md",
   "skills/aria-paper-self-review/SKILL.md",
   "skills/aria-research-evidence/SKILL.md",
+  "skills/aria-research-planning/SKILL.md",
+  "skills/aria-results-analysis/SKILL.md",
   "dist/lifecycle.js",
   "dist/lifecycle.d.ts",
   "dist/model-config.js",
@@ -107,7 +110,9 @@ try {
 
   writeFileSync(
     probePath,
-    `const pluginModule = await import("aria");
+    `const { readdirSync, readFileSync } = await import("node:fs");
+const { join } = await import("node:path");
+const pluginModule = await import("aria");
 const plugin = pluginModule.default;
 
 if (plugin?.id !== "aria") {
@@ -132,16 +137,16 @@ if (typeof hooks?.tool?.plan !== "object" && typeof hooks?.tool?.plan !== "funct
 const config = {};
 await hooks.config(config);
 const coder = config.agent?.coder;
-if (coder?.mode !== "primary") {
-  console.error("smoke-package: coder.mode is not primary");
+if (coder?.mode !== "all") {
+  console.error("smoke-package: coder.mode is not all");
   process.exit(1);
 }
 if (coder?.hidden === true) {
   console.error("smoke-package: coder must not be hidden");
   process.exit(1);
 }
-if (config.agent?.writer?.mode !== "primary") {
-  console.error("smoke-package: writer.mode is not primary");
+if (config.agent?.writer?.mode !== "all") {
+  console.error("smoke-package: writer.mode is not all");
   process.exit(1);
 }
 if (config.agent?.["archivist"]?.mode !== "all") {
@@ -161,10 +166,115 @@ if (!(config.skills?.paths ?? []).some((value) => value.endsWith("/aria/skills")
   process.exit(1);
 }
 
+// Scientist model/variant/mode and prompt contract from the packed install.
+const scientist = config.agent?.scientist;
+if (!scientist) {
+  console.error("smoke-package: scientist agent is missing");
+  process.exit(1);
+}
+if (scientist.mode !== "all" || scientist.model !== "openai/gpt-5.6-sol" || scientist.variant !== "medium") {
+  console.error("smoke-package: scientist model/variant/mode mismatch", scientist.model, scientist.variant, scientist.mode);
+  process.exit(1);
+}
+const scientistPrompt = scientist.prompt ?? "";
+if (
+  !scientistPrompt.includes("scientific authority")
+  || !scientistPrompt.includes("aria-research-planning")
+  || !scientistPrompt.includes("aria-results-analysis")
+  || !scientistPrompt.includes("researcher")
+  || !scientistPrompt.includes("writer")
+  || !scientistPrompt.includes("coder")
+  || !scientistPrompt.includes("active ancestor")
+) {
+  console.error("smoke-package: scientist prompt contract mismatch");
+  process.exit(1);
+}
+
+// Bounded scientist ACL: deny-by-default tools, no MCP/persistence authority.
+const scientistPermission = scientist.permission ?? {};
+if (
+  scientistPermission.edit !== "deny"
+  || scientistPermission.bash !== "deny"
+  || scientistPermission.plan !== "deny"
+  || scientistPermission["engram_*"] !== undefined
+  || scientistPermission["context7_*"] !== undefined
+  || scientistPermission["codegraph_*"] !== undefined
+) {
+  console.error("smoke-package: scientist ACL grants unexpected authority");
+  process.exit(1);
+}
+const expectedScientistTask = { "*": "deny", researcher: "allow", writer: "allow", coder: "allow" };
+const expectedScientistSkill = { "*": "deny", "aria-research-planning": "allow", "aria-results-analysis": "allow" };
+if (JSON.stringify(scientistPermission.task) !== JSON.stringify(expectedScientistTask)) {
+  console.error("smoke-package: scientist task ACL mismatch", JSON.stringify(scientistPermission.task));
+  process.exit(1);
+}
+if (JSON.stringify(scientistPermission.skill) !== JSON.stringify(expectedScientistSkill)) {
+  console.error("smoke-package: scientist skill ACL mismatch", JSON.stringify(scientistPermission.skill));
+  process.exit(1);
+}
+
+// Runtime depth default: absent becomes 3; an explicit depth stays unchanged.
+if (config.subagent_depth !== 3) {
+  console.error("smoke-package: absent subagent_depth did not default to 3");
+  process.exit(1);
+}
+const explicitConfig = { subagent_depth: 2, skills: { paths: ["/custom/skills"] } };
+await hooks.config(explicitConfig);
+if (explicitConfig.subagent_depth !== 2) {
+  console.error("smoke-package: explicit subagent_depth was not preserved");
+  process.exit(1);
+}
+const explicitPaths = explicitConfig.skills?.paths ?? [];
+if (
+  explicitPaths.length !== 2
+  || explicitPaths[0] !== "/custom/skills"
+  || !(String(explicitPaths[1]).endsWith("/aria/skills") || String(explicitPaths[1]).endsWith("\\aria\\skills"))
+) {
+  console.error("smoke-package: explicit skill path was not preserved/appended", explicitPaths);
+  process.exit(1);
+}
+
+// Packed scientist prompt and both scientist method skills exist with the
+// standard ARIA frontmatter.
+const packedPrompt = readFileSync(join(process.cwd(), "node_modules", "aria", "defaults", "prompts", "scientist.md"), "utf8");
+if (!packedPrompt.includes("scientific authority")) {
+  console.error("smoke-package: packed scientist prompt is missing or wrong");
+  process.exit(1);
+}
+const skillsDir = join(process.cwd(), "node_modules", "aria", "skills");
+const skillNames = readdirSync(skillsDir, { withFileTypes: true })
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort();
+if (skillNames.length !== 18) {
+  console.error("smoke-package: expected 18 packaged skills, got", skillNames.length);
+  process.exit(1);
+}
+if (skillNames.filter((name) => name.startsWith("rdc-")).length !== 8) {
+  console.error("smoke-package: expected 8 rdc-* skills");
+  process.exit(1);
+}
+if (skillNames.filter((name) => name.startsWith("aria-")).length !== 10) {
+  console.error("smoke-package: expected 10 aria-* skills");
+  process.exit(1);
+}
+for (const name of ["aria-research-planning", "aria-results-analysis"]) {
+  if (!skillNames.includes(name)) {
+    console.error("smoke-package: packed skills are missing " + name);
+    process.exit(1);
+  }
+  const skillText = readFileSync(join(skillsDir, name, "SKILL.md"), "utf8");
+  if (!skillText.includes("name: " + name) || !skillText.includes("owner: aria") || !skillText.includes("compatibility: opencode")) {
+    console.error("smoke-package: " + name + " frontmatter mismatch");
+    process.exit(1);
+  }
+}
+
 const agents = Object.keys(config.agent ?? {});
-const expected = ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "writer", "archivist"];
-if (expected.some((name) => !agents.includes(name))) {
-  console.error("smoke-package: missing agents", expected.filter((name) => !agents.includes(name)));
+const expectedAgents = ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"];
+if (JSON.stringify(agents) !== JSON.stringify(expectedAgents)) {
+  console.error("smoke-package: expected the 11 canonical agents in canonical order", agents);
   process.exit(1);
 }
 
@@ -198,6 +308,9 @@ console.log("smoke-package: ok", {
   }
   if (!routesOutput.includes("researcher  openai/gpt-5.6-sol (medium)")) {
     fail("aria routes did not include researcher role");
+  }
+  if (!routesOutput.includes("scientist  openai/gpt-5.6-sol (medium)")) {
+    fail("aria routes did not include scientist role");
   }
 
   // Verify aria routes honors project-local aria.json from CWD
@@ -283,6 +396,9 @@ console.log("smoke-package: ok", {
     join(fakeBin, "mcp-list.txt"),
     ["engram connected", "context7 connected", "codegraph connected", "zotpilot disconnected", ""].join("\n"),
   );
+  // Merged debug config surface the depth probe consumes: a sufficient
+  // effective subagent_depth for nested ARIA cooperation.
+  writeFileSync(join(fakeBin, "debug-config.txt"), '{"subagent_depth": 4}\n');
 
   const fakeScript = (name, approved) => {
     const body = approved
@@ -305,6 +421,7 @@ exit 2
       { match: '[ "$#" -eq 1 ] && [ "$1" = "models" ]', file: "models.txt" },
       { match: '[ "$#" -eq 2 ] && [ "$1" = "models" ] && [ "$2" = "--verbose" ]', file: "models-verbose.txt" },
       { match: '[ "$#" -eq 2 ] && [ "$1" = "mcp" ] && [ "$2" = "list" ]', file: "mcp-list.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "debug" ] && [ "$2" = "config" ]', file: "debug-config.txt" },
     ]),
   );
   writeFileSync(
@@ -361,7 +478,7 @@ exit 2
 
   const roleNames = [
     "coder", "explorer", "visualizer", "planner", "architect",
-    "implementer", "reviewer", "researcher", "archivist", "writer",
+    "implementer", "reviewer", "researcher", "archivist", "writer", "scientist",
   ];
   for (const role of roleNames) {
     if (!doctorOutput.includes(`[PASS] ${role}:`)) {
@@ -397,6 +514,14 @@ exit 2
   if (!doctorOutput.includes("tools/list")) {
     fail("doctor live-tool-inventory limitation missing tools/list wording");
   }
+  if (!doctorOutput.includes("18 of 18 validated")) {
+    fail("doctor packaged skills finding does not report the exact 18-skill inventory");
+  }
+  // The doctor consumes the merged debug config surface: the fake reports an
+  // effective subagent_depth of 4, which is sufficient (PASS, effective value).
+  if (!doctorOutput.includes("[PASS] subagent depth: effective value 4 is sufficient for nested ARIA cooperation")) {
+    fail("doctor did not consume the merged debug config subagent_depth");
+  }
 
   // Probe allowlist: the doctor must have invoked exactly the read-only
   // probes the fakes accept — nothing else (no tools/list, add, install,
@@ -406,6 +531,7 @@ exit 2
     "opencode models",
     "opencode models --verbose",
     "opencode mcp list",
+    "opencode debug config",
     "engram version",
     "codegraph --version",
     "zotpilot --version",

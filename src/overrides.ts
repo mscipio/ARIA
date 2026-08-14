@@ -23,6 +23,7 @@ const ROLES: RoleName[] = [
   "researcher",
   "archivist",
   "writer",
+  "scientist",
 ];
 const ROLE_SET = new Set<string>(ROLES);
 const LEGACY_ROLE_ALIASES: Record<string, RoleName> = {
@@ -241,7 +242,7 @@ export function resolveAriaConfig(
       ...roleDefaults,
       model,
       variant,
-      promptText: role === "archivist" || role === "writer" || role === "researcher"
+      promptText: role === "scientist" || role === "archivist" || role === "writer" || role === "researcher"
         ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
         : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
     }];

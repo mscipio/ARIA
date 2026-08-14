@@ -144,7 +144,7 @@ async function snapshotDir(root: string): Promise<Record<string, string>> {
 // ---------------------------------------------------------------------------
 
 describe("runDoctor", () => {
-  it("reports a defaults-ordered ten-role healthy report with exit 0", async () => {
+  it("reports a defaults-ordered eleven-role healthy report with exit 0", async () => {
     const options = await healthyOptions();
     const report = await runDoctor(options);
 
@@ -383,11 +383,94 @@ describe("runDoctor", () => {
 });
 
 // ---------------------------------------------------------------------------
+// T005: effective subagent-depth findings (merged `opencode debug config`
+// surface only; no provenance inference, never FAIL)
+// ---------------------------------------------------------------------------
+
+describe("runDoctor subagent depth findings", () => {
+  function depthFinding(report: { findings: Array<{ area: string; severity: string; title: string; detail?: string }> }) {
+    return report.findings.find((finding) => finding.area === "config" && finding.title === "subagent depth");
+  }
+
+  /** Executor whose `opencode debug config` probe returns the given output. */
+  function depthExecutor(debugConfigOutput: string): Executor {
+    return async (command, args) => {
+      if (command === "opencode" && args.join(" ") === "debug config") {
+        return { stdout: debugConfigOutput, stderr: "" };
+      }
+      return healthyExecutor()(command, args);
+    };
+  }
+
+  it("PASSes an absent depth with the runtime default/recommendation 3", async () => {
+    const options = await healthyOptions();
+    const report = await runDoctor({ ...options, executor: depthExecutor("{}") });
+
+    const finding = depthFinding(report);
+    expect(finding?.severity).toBe("PASS");
+    expect(finding?.detail).toContain("absent from merged debug config");
+    expect(finding?.detail).toContain("default/recommendation 3");
+    expect(finding?.detail).not.toContain("preserved");
+    expect(doctorExitCode(report.findings)).toBe(0);
+  });
+
+  it("PASSes a sufficient numeric depth reporting the effective value only", async () => {
+    const options = await healthyOptions();
+    const report = await runDoctor({ ...options, executor: depthExecutor('{"subagent_depth": 5}') });
+
+    const finding = depthFinding(report);
+    expect(finding?.severity).toBe("PASS");
+    expect(finding?.detail).toContain("effective value 5 is sufficient for nested ARIA cooperation");
+    // No provenance inference and no explicit-preservation claim.
+    expect(finding?.detail).not.toContain("user");
+    expect(finding?.detail).not.toContain("preserved");
+    expect(doctorExitCode(report.findings)).toBe(0);
+  });
+
+  it("WARNs nonfatally on a shallow numeric depth with possible degraded cooperation", async () => {
+    const options = await healthyOptions();
+    const report = await runDoctor({ ...options, executor: depthExecutor('{"subagent_depth": 2}') });
+
+    const finding = depthFinding(report);
+    expect(finding?.severity).toBe("WARN");
+    expect(finding?.detail).toContain("effective value 2");
+    expect(finding?.detail).toContain("may be degraded");
+    expect(finding?.detail).not.toContain("user");
+    expect(report.findings.filter((item) => item.severity === "FAIL")).toHaveLength(0);
+    expect(doctorExitCode(report.findings)).toBe(0);
+  });
+
+  it("handles malformed and unavailable merged config as a nonfatal WARN", async () => {
+    const options = await healthyOptions();
+
+    const malformed = depthFinding(await runDoctor({ ...options, executor: depthExecutor("{not json") }));
+    expect(malformed?.severity).toBe("WARN");
+    expect(malformed?.detail).toContain("effective value not identified");
+    expect(malformed?.detail).toContain("not valid JSON");
+    expect(doctorExitCode((await runDoctor({ ...options, executor: depthExecutor("{not json") })).findings)).toBe(0);
+
+    const unavailable: Executor = async (command, args) => {
+      if (command === "opencode" && args.join(" ") === "debug config") {
+        throw new Error("opencode debug config failed: spawn opencode ENOENT");
+      }
+      return healthyExecutor()(command, args);
+    };
+    const report = await runDoctor({ ...options, executor: unavailable });
+    const failed = depthFinding(report);
+    expect(failed?.severity).toBe("WARN");
+    expect(failed?.detail).toContain("effective value not identified");
+    expect(failed?.detail).toContain("ENOENT");
+    expect(report.findings.filter((item) => item.severity === "FAIL")).toHaveLength(0);
+    expect(doctorExitCode(report.findings)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T002: derived package inventory and canonical role policy (no user-skill scan)
 // ---------------------------------------------------------------------------
 
 describe("package capability inventory (derived from canonical permission tables)", () => {
-  it("derives the exact 16 packaged skills from the canonical role permissions", () => {
+  it("derives the exact 18 packaged skills from the canonical role permissions", () => {
     expect([...PACKAGE_SKILL_NAMES]).toEqual([
       "rdc-code-exploration",
       "rdc-visual-analysis",
@@ -398,13 +481,15 @@ describe("package capability inventory (derived from canonical permission tables
       "rdc-code-implementation",
       "rdc-implementation-review",
       "aria-research-evidence",
+      "aria-wiki-lookup",
+      "aria-wiki-archive",
+      "aria-wiki-compile",
       "aria-academic-writing",
       "aria-writing-anti-ai",
       "aria-review-response",
       "aria-paper-self-review",
-      "aria-wiki-lookup",
-      "aria-wiki-archive",
-      "aria-wiki-compile",
+      "aria-research-planning",
+      "aria-results-analysis",
     ]);
   });
 
@@ -595,7 +680,9 @@ describe("runDoctor ZotPilot findings", () => {
     const limitation = zotFinding(report, "live tool inventory");
     expect(limitation?.severity).toBe("SKIP");
     expect(limitation?.detail).toContain("tools/list");
-    const trace = calls.join("\n");
+    // The read-only `opencode debug config` depth probe is not a mutation, so
+    // exclude it from the mutating-command trace assertions.
+    const trace = calls.filter((call) => call !== "opencode debug config").join("\n");
     for (const forbidden of [
       "tools", "install", "add", "setup", "update", "upgrade", "index",
       "mcp serve", "archive", "compile", "lint", "write", "prompt",
@@ -627,7 +714,7 @@ describe("runDoctor skills findings", () => {
 
     const skills = skillFinding(report, "packaged skills");
     expect(skills?.severity).toBe("PASS");
-    expect(skills?.detail).toContain("16 of 16");
+    expect(skills?.detail).toContain("18 of 18");
     expect(skills?.detail).toContain("metadata.owner: aria");
     // Only the exact derived skill paths are read — the skills directory is
     // never scanned, so user skills are never touched.
@@ -797,7 +884,7 @@ describe("runDoctor severity separation", () => {
 });
 
 describe("formatDoctorReport", () => {
-  it("renders plain output with literal PASS labels and all ten roles", async () => {
+  it("renders plain output with literal PASS labels and all eleven roles", async () => {
     const options = await healthyOptions();
     const report = await runDoctor(options);
     const text = formatDoctorReport(report);

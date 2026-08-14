@@ -16,14 +16,44 @@ describe("package-owned ARIA skills", () => {
       .map((entry) => entry.name)
       .sort();
 
-    expect(names).toHaveLength(16);
+    expect(names).toHaveLength(18);
     expect(names.filter((name) => name.startsWith("rdc-"))).toHaveLength(8);
-    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(8);
+    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(10);
     for (const name of names) {
       expect(name).toMatch(/^(rdc|aria)-/);
       expect(skill(name)).toContain(`name: ${name}`);
       expect(skill(name)).toContain("owner: aria");
     }
+  });
+
+  it("keeps the scientist method skills bounded to generic planning and analysis", () => {
+    const planning = skill("aria-research-planning");
+    // Accepted generic planning concepts.
+    expect(planning).toContain("tractable");
+    expect(planning).toContain("5W1H");
+    expect(planning).toContain("falsification");
+    expect(planning).toContain("competing hypotheses");
+    expect(planning).toContain("evidence needs from assumptions");
+    expect(planning).toContain("minimal next decision");
+    expect(planning).toContain("information value");
+    // Rejected scope is stated, not supported: retrieval and bulk/template work.
+    expect(planning).toContain("Literature search, Zotero/PDF/BibTeX retrieval, and external evidence acquisition → task `researcher`");
+    expect(planning).toContain("Persistence: no SDD documents, Engram observations, global registries");
+    expect(planning).toContain("Fixed workflow chains, bulk reference-file catalogs");
+
+    const analysis = skill("aria-results-analysis");
+    // Accepted generic analysis concepts.
+    expect(analysis).toContain("unit of analysis");
+    expect(analysis).toContain("practical from statistical significance");
+    expect(analysis).toContain("explicit comparisons");
+    expect(analysis).toContain("uncertainty");
+    expect(analysis).toContain("calibrated claims");
+    expect(analysis).toContain("blockers");
+    expect(analysis).toContain("underdetermined");
+    // Rejected scope: computation, mandated outputs, prose.
+    expect(analysis).toContain("Running code, generating figures, or producing files");
+    expect(analysis).toContain("computation belongs to `coder`");
+    expect(analysis).toContain("Results-section prose, and publication tooling → `writer`");
   });
 
   it("preserves the core coding workflow disciplines in skills", () => {

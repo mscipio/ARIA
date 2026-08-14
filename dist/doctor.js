@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import { access as fsAccess, readFile, stat as fsStat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { getPackageRoot } from "./defaults.js";
-import { defaultExecutor, doctor as dependencyDoctor, extractVersion, } from "./deps.js";
+import { defaultExecutor, doctor as dependencyDoctor, extractVersion, probeSubagentDepth, } from "./deps.js";
 import { discoverAvailableModels } from "./model-config.js";
 import { CODING_ROLES, PACKAGE_SKILL_NAMES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
 import { deriveRoutes, ROLES } from "./routes.js";
@@ -195,6 +195,49 @@ function routeFinding(route, discovered) {
             title: route.role,
             detail: `${routeText}: configured variant not supported${reported}`,
         }];
+}
+// ---------------------------------------------------------------------------
+// Config: effective subagent depth (read-only `opencode debug config`)
+// ---------------------------------------------------------------------------
+/**
+ * Advisory finding for the effective merged top-level `subagent_depth`
+ * reported by the read-only `opencode debug config` probe. An absent field is
+ * PASS (ARIA supplies the runtime default/recommendation 3); a finite numeric
+ * value >= 3 is PASS with the effective value; a finite numeric value < 3 is
+ * a nonfatal WARN with the effective value and possible degraded nested
+ * cooperation; unavailable/malformed output is a nonfatal WARN. This finding
+ * never FAILs and never attributes the value to user configuration or ARIA.
+ */
+function subagentDepthFinding(probe) {
+    if (probe.status === "absent") {
+        return {
+            severity: "PASS",
+            area: "config",
+            title: "subagent depth",
+            detail: "absent from merged debug config; ARIA supplies runtime default/recommendation 3",
+        };
+    }
+    if (probe.status === "value") {
+        return probe.depth >= 3
+            ? {
+                severity: "PASS",
+                area: "config",
+                title: "subagent depth",
+                detail: `effective value ${probe.depth} is sufficient for nested ARIA cooperation`,
+            }
+            : {
+                severity: "WARN",
+                area: "config",
+                title: "subagent depth",
+                detail: `effective value ${probe.depth}; nested ARIA cooperation may be degraded`,
+            };
+    }
+    return {
+        severity: "WARN",
+        area: "config",
+        title: "subagent depth",
+        detail: `effective value not identified: ${probe.reason}`,
+    };
 }
 // ---------------------------------------------------------------------------
 // Composed dependency doctor (legacy deps.ts health probes)
@@ -566,6 +609,9 @@ export async function runDoctor(options = {}) {
             detail: describeError(error),
         });
     }
+    // Effective cooperation depth: read-only `opencode debug config` probe of
+    // the merged config's own top-level subagent_depth (advisory, never FAIL).
+    findings.push(subagentDepthFinding(await probeSubagentDepth(executor, worktree)));
     // Model discovery (failure is FAIL; nothing is guessed).
     let discovered;
     try {
