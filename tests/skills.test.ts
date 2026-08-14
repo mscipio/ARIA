@@ -16,9 +16,9 @@ describe("package-owned ARIA skills", () => {
       .map((entry) => entry.name)
       .sort();
 
-    expect(names).toHaveLength(19);
+    expect(names).toHaveLength(20);
     expect(names.filter((name) => name.startsWith("rdc-"))).toHaveLength(8);
-    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(11);
+    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(12);
     for (const name of names) {
       expect(name).toMatch(/^(rdc|aria)-/);
       expect(skill(name)).toContain(`name: ${name}`);
@@ -161,5 +161,72 @@ describe("package-owned ARIA skills", () => {
     expect(research).toContain("Use a compact table only for batches");
     // No automatic Engram persistence.
     expect(research).toContain("Do not persist anything to Engram automatically");
+  });
+
+  it("keeps the Zotero tutor bounded to chat-first source-grounded pedagogy", () => {
+    const tutor = skill("aria-zotero-tutor");
+    // Exact frontmatter contract, including OpenCode compatibility.
+    expect(tutor).toContain("name: aria-zotero-tutor");
+    expect(tutor).toContain("compatibility: opencode");
+    expect(tutor).toContain("owner: aria");
+    // Source resolution: identified-paper lookup, disambiguation, and clear
+    // stopping on no-text-layer/scanned PDFs or other tool errors.
+    expect(tutor).toContain("zotpilot_get_paper_for_tutor");
+    expect(tutor).toContain("Disambiguate before continuing");
+    expect(tutor).toContain("no text layer or a scanned PDF");
+    expect(tutor).toContain("surface it and stop");
+    // Low-friction adaptive calibration without hardcoded profiles.
+    expect(tutor).toContain("Infer learner signals before asking");
+    expect(tutor).toContain("partial-answer-friendly");
+    expect(tutor).toContain("Never block on a full profile");
+    expect(tutor).toContain("Adapt explanation depth, background, and style");
+    // Compact adaptive modes and source-grounded tutoring.
+    for (const mode of ["Explain", "Guided reading", "Tutor/active recall", "Clarify", "Concept bridge"]) {
+      expect(tutor).toContain(mode);
+    }
+    expect(tutor).toContain("compact orientation or argument map");
+    expect(tutor).toContain("clearly distinguished from your paraphrase");
+    expect(tutor).toContain("Never invent visuals, axes, values, or locations");
+    // Pre-existing learner annotations are a read-only signal, not authority.
+    expect(tutor).toContain("actually demonstrate understanding");
+    expect(tutor).toContain("confer no write or persona permission");
+    // Evidence acquisition, scientist/writer handoff, and boundaries.
+    expect(tutor).toContain("not evidence acquisition or evaluation");
+    expect(tutor).toContain("return to the normal `aria-research-evidence` workflow");
+    expect(tutor).toContain("Task `scientist` only");
+    expect(tutor).toContain("active ancestor");
+    expect(tutor).toContain("polished prose or manuscript drafting");
+    expect(tutor).toContain("Add no archivist coupling");
+    // Annotation and persona saves are optional exception paths, each with its
+    // own explicit approval under the existing ask gate; never automatic,
+    // never bundled, never triggered by a teaching request.
+    expect(tutor).toContain("never normal tutor completion steps");
+    expect(tutor).toContain("the `ask` gate is necessary but insufficient");
+    expect(tutor).toContain("Identify the exact Zotero item/document");
+    expect(tutor).toContain("state exactly what annotation will be added or changed");
+    expect(tutor).toContain("explicit approval for that annotation operation");
+    expect(tutor).toContain("what learner preference/context would be persisted");
+    expect(tutor).toContain("explicit approval for that save or update");
+    expect(tutor).toContain("Never annotate after an explanation");
+    expect(tutor).toContain("Never automatically suggest persona saving after routine tutoring");
+    expect(tutor).toContain("never bundle annotation and persona under one approval");
+    expect(tutor).toContain('"teach me this paper" as approval for any mutation');
+    expect(tutor).toContain("never infer durable preferences from one-session behavior");
+    // Rejected legacy scope: no retired pipeline, densities, defaults, or
+    // plumbing.
+    expect(tutor).toContain("no fixed ten-step or mandatory section pipeline");
+    expect(tutor).toContain("no mandatory five-dimension coverage");
+    expect(tutor).toContain("no hard annotation densities, counts, or byte caps");
+    expect(tutor).toContain("no Chinese defaults");
+    expect(tutor).toContain("no hardcoded reading levels or personas");
+    expect(tutor).toContain("no installation, indexing, ingestion, profile-management, curation");
+    expect(tutor).toContain("no automatic persona persistence");
+    expect(tutor).toContain("no automatic PDF writes or page-1 overview generation");
+    expect(tutor).toContain("no temp payload or write mechanics");
+    expect(tutor).toContain("no bbox, placement, backup, or coverage-summary plumbing");
+    expect(tutor).toContain("no second Zotero backend");
+    expect(tutor).toContain("no Engram persistence");
+    expect(tutor).not.toContain("load `ztp-research`");
+    expect(tutor).not.toContain("load `ztp-review`");
   });
 });

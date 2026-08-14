@@ -369,7 +369,19 @@ describe("ariaPlugin", () => {
     expect(researcher.list).toBe("allow");
     expect(researcher.lsp).toBe("deny");
     expect(researcher.read).toMatchObject({ "*": "allow", "*.env": "deny", "*.env.example": "allow" });
-    expect(researcher.skill).toEqual({ "*": "deny", "aria-research-evidence": "allow" });
+    expect(researcher.skill).toEqual({
+      "*": "deny",
+      "aria-research-evidence": "allow",
+      "aria-zotero-tutor": "allow",
+    });
+    // Arbitrary unknown skills stay denied by the skill wildcard.
+    expect(researcher.skill).not.toHaveProperty("aria-document-design");
+    expect(researcher.skill).not.toHaveProperty("rdc-code-implementation");
+    expect(researcher.skill).not.toHaveProperty("some-unknown-skill");
+    // aria-zotero-tutor stays researcher-only: no other role grants it.
+    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "archivist", "writer", "scientist"]) {
+      expect(permission(role)?.skill ?? {}).not.toHaveProperty("aria-zotero-tutor");
+    }
 
     // Context7 only; no Engram, CodeGraph, Wiki, or wildcard MCP authority.
     expect(researcher["context7_*"]).toBe("allow");

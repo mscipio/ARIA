@@ -282,6 +282,15 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Do not delegate every request to user-level `ztp-research`/`ztp-review` workflows");
     expect(prompt).not.toContain("load `ztp-research`");
     expect(prompt).not.toContain("load `ztp-review`");
+    // Exactly one lean aria-zotero-tutor routing reference for identified-paper
+    // tutoring, with no inlined tutoring methodology.
+    expect(prompt.match(/aria-zotero-tutor/g)).toHaveLength(1);
+    expect(prompt).toContain("already-identified paper");
+    expect(prompt).not.toContain("Explain —");
+    expect(prompt).not.toContain("Guided reading");
+    expect(prompt).not.toContain("Tutor/active recall");
+    expect(prompt).not.toContain("Concept bridge");
+    expect(prompt).not.toContain("calibrat");
   });
 
   it("contains no obsolete retrieval-only Engram wording", () => {

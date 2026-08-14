@@ -227,7 +227,11 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     "context7_*": "allow",
     ...ZOTPILOT_MCP_READ,
     ...ZOTPILOT_MCP_MUTATION,
-    skill: skillAccess("aria-research-evidence"),
+    // aria-zotero-tutor owns learner-stateful interactive pedagogy over an
+    // identified source; aria-research-evidence keeps acquisition/evaluation,
+    // discovery, verification, citation verification, disagreement/gaps, and
+    // evidence handoff.
+    skill: skillAccess("aria-research-evidence", "aria-zotero-tutor"),
     // Deny-by-default delegation: scientist is the researcher's only
     // downstream role.
     task: {
