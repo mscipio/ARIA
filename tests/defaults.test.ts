@@ -185,16 +185,82 @@ describe("ARIA defaults", () => {
 
   it("reviewer prompt keeps independent read-only review contract and loads review skills", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.reviewer.promptText;
-    expect(prompt).toContain("load `rdc-implementation-review`");
+    expect(prompt).toContain("Load `rdc-implementation-review`");
     expect(prompt).toContain("Load `rdc-testing-discipline`");
+    expect(prompt).toContain("Load `rdc-adversarial-review`");
+    expect(prompt).toContain("only when the coder explicitly tasks adversarial review");
     expect(prompt).toContain("Allowed Plan action: `get` only");
     expect(prompt).toContain("Engram use is read-only during review");
+  });
+
+  it("reviewer prompt separates normal and adversarial modes semantically", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles.reviewer.promptText;
+
+    // Normal mode is mandatory and default
+    expect(prompt).toContain("# Normal Implementation Review (mandatory and default)");
+    expect(prompt).toContain("Every persisted task and every explicit acceptance criterion");
     expect(prompt).toContain("PASS");
     expect(prompt).toContain("FAIL");
     expect(prompt).toContain("INSUFFICIENT EVIDENCE");
-    expect(prompt).toContain("Every persisted task and every explicit acceptance criterion");
     expect(prompt).toContain("Requirements Assessment");
     expect(prompt).toContain("Verdict");
+    expect(prompt).toContain("CONFIDENCE:");
+
+    // Normal-mode CONFIDENCE final-line requirement is explicitly scoped to
+    // normal implementation review output only, not adversarial review.
+    expect(prompt).toContain("final line of the normal implementation review output must be `CONFIDENCE: {1-10}`");
+    expect(prompt).toContain("This final-line requirement applies only to normal implementation review output");
+    expect(prompt).toContain("adversarial review has its own exact five-field BLOCKING schema");
+    expect(prompt).toContain("does not emit a trailing `CONFIDENCE:` line");
+
+    // Adversarial mode is coder-tasked only, after normal PASS
+    expect(prompt).toContain("# Adversarial Review (coder-tasked only, after normal PASS)");
+    expect(prompt).toContain("only when the coder explicitly tasks adversarial review after a normal PASS");
+    expect(prompt).toContain("Do not inherit, duplicate, or mix the normal checklist, output format, severity taxonomy, or confidence score");
+
+    // Adversarial mode has exactly five fields for BLOCKING findings
+    expect(prompt).toContain("**Invariant**");
+    expect(prompt).toContain("**Attack scenario/counterexample**");
+    expect(prompt).toContain("**Failure**");
+    expect(prompt).toContain("**Evidence**");
+    expect(prompt).toContain("**Required remediation/verification**");
+
+    // Adversarial mode does not duplicate normal mode's severity taxonomy
+    const adversarialSection = prompt.split("# Adversarial Review")[1] || "";
+    expect(adversarialSection).not.toContain("[critical|high|medium]");
+    expect(adversarialSection).not.toContain("[medium|low]");
+    expect(adversarialSection).not.toContain("CONFIDENCE:");
+    expect(adversarialSection).not.toContain("Requirements Assessment");
+    expect(adversarialSection).not.toContain("Testing Gaps");
+  });
+
+  it("coder prompt routes optional adversarial review after normal PASS with independent non-resetting bounds", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
+    expect(prompt).toContain("Optional adversarial review");
+    expect(prompt).toContain("after a normal reviewer PASS");
+    expect(prompt).toContain("coder-chosen and risk-based, not universal");
+    expect(prompt).toContain("runs only after normal PASS");
+    // Independent non-resetting cumulative allowances.
+    expect(prompt).toContain("independent, objective-wide, cumulative, non-resetting allowances");
+    expect(prompt).toContain("one normal-origin implementation allowance");
+    expect(prompt).toContain("one adversarial-origin implementation allowance");
+    // Adversarial-origin fix consumes the adversarial allowance and re-enters
+    // the mandatory normal-review gate; that gate does not reset the normal
+    // allowance.
+    expect(prompt).toContain("consumes the adversarial allowance");
+    expect(prompt).toContain("mandatory normal-review gate");
+    expect(prompt).toContain("does not reset or extend the normal allowance");
+    expect(prompt).toContain("still unused");
+    // After every substantive fix, require normal PASS before adversarial re-review.
+    expect(prompt).toContain("require normal PASS before adversarial re-review");
+    // Stop for user direction when the applicable allowance is exhausted.
+    expect(prompt).toContain("Stop for user direction when the applicable allowance is exhausted");
+    // Final both-passed invariant.
+    expect(prompt).toContain("both normal and adversarial review must have passed");
+    // Out-of-scope materially required work: architect scope assessment.
+    expect(prompt).toContain("task architect for scope assessment and renewed approval");
+    // No new tools, delegation, persistence, or universal invocation.
+    expect(prompt).not.toContain("load `rdc-adversarial-review`");
   });
 
   it("adds shared MCP guidance only to roles that have shared MCP access", () => {

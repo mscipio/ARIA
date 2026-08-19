@@ -16,8 +16,8 @@ describe("package-owned ARIA skills", () => {
       .map((entry) => entry.name)
       .sort();
 
-    expect(names).toHaveLength(20);
-    expect(names.filter((name) => name.startsWith("rdc-"))).toHaveLength(8);
+    expect(names).toHaveLength(21);
+    expect(names.filter((name) => name.startsWith("rdc-"))).toHaveLength(9);
     expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(12);
     for (const name of names) {
       expect(name).toMatch(/^(rdc|aria)-/);
@@ -63,6 +63,107 @@ describe("package-owned ARIA skills", () => {
     expect(skill("rdc-code-implementation")).toContain("Preserve existing working-tree changes");
     expect(skill("rdc-implementation-review")).toContain("every explicit acceptance criterion");
     expect(skill("rdc-testing-discipline")).toContain("smallest representative verification");
+  });
+
+  it("keeps the adversarial review skill bounded to a complementary reviewer-owned attack pass", () => {
+    const adversarial = skill("rdc-adversarial-review");
+    // Exact frontmatter contract, including OpenCode compatibility and aria ownership.
+    expect(adversarial).toContain("name: rdc-adversarial-review");
+    expect(adversarial).toContain("compatibility: opencode");
+    expect(adversarial).toContain("owner: aria");
+    // Complementary reviewer-owned mode, not a replacement or new agent.
+    expect(adversarial).toContain("new complementary reviewer-owned adversarial mode");
+    expect(adversarial).toContain("not a replacement for normal implementation review and not a new agent");
+    // Retained core: target-bounded adversarial focus, hostile hunting, concrete
+    // finding plus surgical-fix intent, realistic-triggerability classification,
+    // and bounded remediation/re-review with stop/escalation.
+    expect(adversarial).toContain("Target-bounded adversarial focus");
+    expect(adversarial).toContain("Hostile edge/error/security/assumption hunting");
+    expect(adversarial).toContain("Concrete finding plus surgical-fix intent");
+    expect(adversarial).toContain("Realistic-triggerability classification");
+    expect(adversarial).toContain("Bounded remediation and re-review with stop/escalation");
+    // Explicitly rejected legacy concepts: dual blind judges, Judgment Day,
+    // arbitrary severity taxonomies, mandatory minimum findings, line-count
+    // thresholds, old registry/runtime/delegation adapters, universal
+    // checklists, duplicate normal review, unrelated git/PR automation.
+    expect(adversarial).toContain("Dual blind judges");
+    expect(adversarial).toContain("Judgment Day");
+    expect(adversarial).toContain("CRITICAL");
+    expect(adversarial).toContain("WARNING");
+    expect(adversarial).toContain("SUGGESTION");
+    expect(adversarial).toContain("Mandatory minimum finding counts");
+    expect(adversarial).toContain("line-count thresholds");
+    expect(adversarial).toContain("Old registry, runtime, or delegation adapters");
+    expect(adversarial).toContain("Universal checklists");
+    expect(adversarial).toContain("Duplication of the normal implementation review checklist");
+    expect(adversarial).toContain("Unrelated git/PR automation");
+    // Boundary with normal implementation review: adversarial runs only after
+    // normal PASS and does not duplicate the normal checklist.
+    expect(adversarial).toContain("Runs **only after**");
+    expect(adversarial).toContain("Does **not** duplicate the normal checklist");
+    // Selective invocation: coder-chosen, risk-based, not universal.
+    expect(adversarial).toContain("Adversarial review is **not universal**");
+    expect(adversarial).toContain("coder chooses whether to invoke it");
+    for (const trigger of [
+      "Permissions, authority, or trust boundaries",
+      "Mutation of persistent state",
+      "Security-sensitive code paths",
+      "Migrations, schema changes",
+      "Retries, idempotency, or partial-failure handling",
+      "Concurrency, synchronization, or caching",
+      "Public API surface",
+      "Complex fallback or failure handling",
+      "Substantial architectural change",
+      "Reviewer low confidence",
+      "Explicit user request",
+    ]) {
+      expect(adversarial).toContain(trigger);
+    }
+    // No policy engine, no automatic trigger, no line-count or finding-count threshold.
+    expect(adversarial).toContain("no policy engine");
+    expect(adversarial).toContain("no automatic trigger");
+    // Mandatory post-finding sequence: after any substantive fix, run normal
+    // review again and require PASS before adversarial re-review.
+    expect(adversarial).toContain("Mandatory post-finding sequence");
+    expect(adversarial).toContain("Run the **normal implementation review again**");
+    expect(adversarial).toContain("Require its `PASS` before any adversarial re-review");
+    expect(adversarial).toContain("Normal review is **never replaced, bypassed, or shortened**");
+    // Final accepted-state invariant: after the last substantive change, both
+    // normal and adversarial review must have passed.
+    expect(adversarial).toContain("Final accepted-state invariant");
+    expect(adversarial).toContain("normal implementation review has passed");
+    expect(adversarial).toContain("adversarial review has passed");
+    // Independent cumulative allowances: non-resetting, neither mode refreshes
+    // the other's allowance.
+    expect(adversarial).toContain("Independent cumulative allowances");
+    expect(adversarial).toContain("independent, non-resetting");
+    expect(adversarial).toContain("Neither mode refreshes or extends the other's allowance");
+    expect(adversarial).toContain("**one** normal-remediation implementation round");
+    expect(adversarial).toContain("**one** adversarial-origin remediation implementation round");
+    // Adversarial-origin fix consumes adversarial allowance and re-enters the
+    // mandatory normal-review gate; that gate does not reset the normal allowance.
+    expect(adversarial).toContain("consumes the adversarial allowance");
+    expect(adversarial).toContain("does not reset or extend");
+    expect(adversarial).toContain("still-unused");
+    // Out-of-scope handling: NON-BLOCKING future work; materially required work
+    // needs architect scope assessment and renewed approval.
+    expect(adversarial).toContain("NON-BLOCKING");
+    expect(adversarial).toContain("architect scope assessment and renewed approval");
+    // Exact five-field BLOCKING finding format.
+    expect(adversarial).toContain("Invariant");
+    expect(adversarial).toContain("Attack scenario/counterexample");
+    expect(adversarial).toContain("Failure");
+    expect(adversarial).toContain("Evidence");
+    expect(adversarial).toContain("Required remediation/verification");
+    // Vague/speculative/generic advice without a reachable contract breach is
+    // not BLOCKING.
+    expect(adversarial).toContain("Vague, speculative, or generic");
+    expect(adversarial).toContain("not** `BLOCKING`");
+    // No severity taxonomies, numeric risk scoring, or ranking schemes.
+    expect(adversarial).toContain("numeric risk scoring");
+    // No new agent/role, delegation, persistence, or MCP/backend surface.
+    expect(adversarial).toContain("not a new agent");
+    expect(adversarial).toContain("no persistence surface");
   });
 
   it("keeps Wiki lookup, archival, and compilation as distinct capabilities", () => {

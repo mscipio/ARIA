@@ -9,6 +9,7 @@
 - **Architect plan review** — QA before implementation: `READY` or `REVISED` with the smallest corrections needed
 - **Explicit human approval** — the coder summarizes the plan and **stops and waits** for the user to approve before any code is written
 - **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
+- **Optional adversarial review** — after normal review passes, the reviewer may run a second adversarial pass that attacks plausible counterexamples, hidden assumptions, and hostile edge/error/security/ordering paths; risk-based invocation, not universal
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
 - **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
 - **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki, writer, and scientist remain intentionally isolated
@@ -25,9 +26,10 @@
 6. Only after the user approves, the coder calls `plan` action `approve` to persist the approval. Tasks cannot enter implementation until the current plan revision is approved.
 7. The implementer completes tasks and runs the relevant checks; the coder records evidence by updating tasks.
 8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
-9. If reviewer reports blocking findings for tasks within approved scope, the coder uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews.
-10. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
-11. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
+9. If reviewer reports blocking findings for tasks within approved scope, the coder uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews. After any substantive adversarial-origin fix, normal review runs again before adversarial re-review.
+10. Optionally, after normal review passes, the coder may invoke adversarial review based on risk signals (permissions, mutation, security, migration, concurrency, public API, architecture). Adversarial review attacks the apparently correct implementation and follows the same remediation/re-review cycle. Both normal and adversarial review must pass after the last substantive change.
+11. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
+12. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
 
 The tasklist is scoped to the worktree, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
 
@@ -66,7 +68,7 @@ Examples:
 - planner → `rdc-implementation-planning` + `rdc-testing-discipline`
 - architect → `rdc-plan-review` or `rdc-scope-assessment`
 - implementer → `rdc-code-implementation` + proportional testing guidance
-- reviewer → `rdc-implementation-review` + proportional testing guidance
+- reviewer → `rdc-implementation-review` + `rdc-adversarial-review` (optional, after normal PASS) + proportional testing guidance
 - archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
 - writer → `aria-document-design`, `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
 - researcher → `aria-research-evidence` (discovery/verification) or `aria-zotero-tutor` (tutoring an identified paper)

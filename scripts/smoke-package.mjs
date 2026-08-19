@@ -55,6 +55,7 @@ const requiredPaths = [
   "skills/rdc-scope-assessment/SKILL.md",
   "skills/rdc-code-implementation/SKILL.md",
   "skills/rdc-implementation-review/SKILL.md",
+  "skills/rdc-adversarial-review/SKILL.md",
   "skills/rdc-testing-discipline/SKILL.md",
   "skills/aria-wiki-lookup/SKILL.md",
   "skills/aria-wiki-archive/SKILL.md",
@@ -253,19 +254,19 @@ const skillNames = readdirSync(skillsDir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
-if (skillNames.length !== 20) {
-  console.error("smoke-package: expected 20 packaged skills, got", skillNames.length);
+if (skillNames.length !== 21) {
+  console.error("smoke-package: expected 21 packaged skills, got", skillNames.length);
   process.exit(1);
 }
-if (skillNames.filter((name) => name.startsWith("rdc-")).length !== 8) {
-  console.error("smoke-package: expected 8 rdc-* skills");
+if (skillNames.filter((name) => name.startsWith("rdc-")).length !== 9) {
+  console.error("smoke-package: expected 9 rdc-* skills");
   process.exit(1);
 }
 if (skillNames.filter((name) => name.startsWith("aria-")).length !== 12) {
   console.error("smoke-package: expected 12 aria-* skills");
   process.exit(1);
 }
-for (const name of ["aria-research-planning", "aria-results-analysis", "aria-zotero-tutor"]) {
+for (const name of ["aria-research-planning", "aria-results-analysis", "aria-zotero-tutor", "rdc-adversarial-review"]) {
   if (!skillNames.includes(name)) {
     console.error("smoke-package: packed skills are missing " + name);
     process.exit(1);
@@ -520,8 +521,8 @@ exit 2
   if (!doctorOutput.includes("tools/list")) {
     fail("doctor live-tool-inventory limitation missing tools/list wording");
   }
-  if (!doctorOutput.includes("20 of 20 validated")) {
-    fail("doctor packaged skills finding does not report the exact 20-skill inventory");
+  if (!doctorOutput.includes("21 of 21 validated")) {
+    fail("doctor packaged skills finding does not report the exact 21-skill inventory");
   }
   // The doctor consumes the merged debug config surface: the fake reports an
   // effective subagent_depth of 4, which is sufficient (PASS, effective value).

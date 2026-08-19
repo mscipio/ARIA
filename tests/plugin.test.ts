@@ -7,6 +7,58 @@ import { join, relative } from "node:path";
 import ariaPlugin, { ariaPlugin as pluginModule } from "../src/index";
 import { getPackageRoot } from "../src/defaults";
 
+/**
+ * Test-local coder skill-permission evaluator for this regression only.
+ *
+ * Models exactly three semantics exercised by the coder + rdc-adversarial-review
+ * regression below — no more:
+ *   1. Exact skill-name match OR wildcard `*` match (no glob engine).
+ *   2. Default-before-agent-specific ordering: custom-agent default
+ *      `* -> allow` precedes merged agent-specific rules.
+ *   3. Last-match-wins: the final matching rule in merged order determines
+ *      the action (equivalent to OpenCode Permission.evaluate()'s findLast).
+ *
+ * This is NOT a general permission evaluator. It does not import or replicate
+ * unrelated runtime machinery (non-skill permissions, prefix globs, ask
+ * fallbacks beyond the default wildcard, or cross-agent semantics).
+ */
+function evaluateSkillPermissionExactOrWildcardLastWins(
+  agentSkillPermission: Record<string, string> | undefined
+): (skillName: string) => "allow" | "deny" | "ask" {
+  // (2) Default rule: wildcard allow, placed before agent-specific rules.
+  const defaultRules = [
+    { permission: "skill", pattern: "*", action: "allow" as const }
+  ];
+
+  // Agent-specific rules from permission.skill object.
+  const agentRules = agentSkillPermission
+    ? Object.entries(agentSkillPermission).map(([pattern, action]) => ({
+        permission: "skill",
+        pattern,
+        action: action as "allow" | "deny" | "ask"
+      }))
+    : [];
+
+  // (2) Default-before-agent-specific ordering.
+  const allRules = [...defaultRules, ...agentRules];
+
+  return (skillName: string) => {
+    // (3) Last-match-wins: iterate in reverse.
+    for (let i = allRules.length - 1; i >= 0; i--) {
+      const rule = allRules[i];
+      if (rule) {
+        // (1) Exact skill-name match OR wildcard `*` only — no glob engine.
+        if (rule.pattern === skillName || rule.pattern === "*") {
+          return rule.action;
+        }
+      }
+    }
+
+    // Unreachable with the default wildcard present; retained for type safety.
+    return "ask";
+  };
+}
+
 const server = pluginModule.server;
 const tempDirs: string[] = [];
 const plugins: Array<Awaited<ReturnType<typeof server>>> = [];
@@ -161,6 +213,46 @@ describe("ariaPlugin", () => {
         scientist: "allow",
       },
     });
+    // Coder explicitly denies rdc-adversarial-review while preserving prior
+    // effective access to all other skills via inherited default wildcard allow.
+    expect(permission("coder")?.skill).toEqual({
+      "rdc-adversarial-review": "deny",
+    });
+
+    // Effective access resolution test under actual OpenCode semantics:
+    // custom agent defaults include wildcard `* -> allow`, agent-specific rules
+    // are merged after, and findLast determines the final action (last match wins).
+    const coderPerm = permission("coder") as Record<string, unknown>;
+    const coderSkillPermission = coderPerm.skill as Record<string, string> | undefined;
+    const evaluateCoderSkill = evaluateSkillPermissionExactOrWildcardLastWins(coderSkillPermission);
+
+    // 1) Coder + rdc-adversarial-review resolves to "deny" and is excluded from
+    //    Skill.available-equivalent filtering (explicit deny overrides default allow).
+    expect(evaluateCoderSkill("rdc-adversarial-review")).toBe("deny");
+    // Skill.available() returns false when evaluate returns "deny"
+    const adversarialAvailable = evaluateCoderSkill("rdc-adversarial-review") !== "deny";
+    expect(adversarialAvailable).toBe(false);
+
+    // 2) Coder + representative existing rdc and aria skills resolves to "allow"
+    //    via inherited default wildcard (no matching agent-specific rule).
+    expect(evaluateCoderSkill("rdc-code-implementation")).toBe("allow");
+    expect(evaluateCoderSkill("aria-research-evidence")).toBe("allow");
+    // These skills remain available via Skill.available-equivalent check
+    expect(evaluateCoderSkill("rdc-code-implementation") !== "deny").toBe(true);
+    expect(evaluateCoderSkill("aria-research-evidence") !== "deny").toBe(true);
+
+    // 3) The exact deny does not alter unrelated effective access: other skills
+    //    still resolve to default allow.
+    expect(evaluateCoderSkill("rdc-implementation-review")).toBe("allow");
+    expect(evaluateCoderSkill("rdc-testing-discipline")).toBe("allow");
+    expect(evaluateCoderSkill("aria-document-design")).toBe("allow");
+    expect(evaluateCoderSkill("aria-wiki-lookup")).toBe("allow");
+
+    // Verify precedence: agent-specific deny overrides default allow for exact match
+    const testRules = { "specific-skill": "deny" };
+    const evaluateTest = evaluateSkillPermissionExactOrWildcardLastWins(testRules);
+    expect(evaluateTest("specific-skill")).toBe("deny"); // Exact match: deny
+    expect(evaluateTest("other-skill")).toBe("allow"); // No match: default allow
     expect(permission("explorer")).toMatchObject({ edit: "deny", bash: "deny", glob: "allow" });
     expect(permission("planner")).toMatchObject({ edit: "deny", bash: "deny", webfetch: "allow", plan: "allow" });
     expect(permission("architect")).toMatchObject({ edit: "deny", bash: "deny", websearch: "allow", plan: "allow" });
@@ -190,40 +282,49 @@ describe("ariaPlugin", () => {
     expect(permission("writer")).not.toHaveProperty("engram_*");
     expect(permission("writer")).not.toHaveProperty("codegraph_*");
     expect(permission("writer")).not.toHaveProperty("context7_*");
-    expect(permission("explorer")).toMatchObject({
-      skill: { "*": "deny", "rdc-code-exploration": "allow" },
+    expect(permission("explorer")?.skill).toEqual({
+      "*": "deny",
+      "rdc-code-exploration": "allow",
     });
-    expect(permission("planner")).toMatchObject({
-      skill: {
-        "*": "deny",
-        "rdc-implementation-planning": "allow",
-        "rdc-testing-discipline": "allow",
-      },
+    expect(permission("visualizer")?.skill).toEqual({
+      "*": "deny",
+      "rdc-visual-analysis": "allow",
     });
-    expect(permission("architect")).toMatchObject({
-      skill: {
-        "*": "deny",
-        "rdc-plan-review": "allow",
-        "rdc-scope-assessment": "allow",
-        "rdc-testing-discipline": "allow",
-      },
+    expect(permission("planner")?.skill).toEqual({
+      "*": "deny",
+      "rdc-implementation-planning": "allow",
+      "rdc-testing-discipline": "allow",
     });
-    expect(permission("implementer")).toMatchObject({
-      skill: { "*": "deny", "rdc-code-implementation": "allow", "rdc-testing-discipline": "allow" },
+    expect(permission("architect")?.skill).toEqual({
+      "*": "deny",
+      "rdc-plan-review": "allow",
+      "rdc-scope-assessment": "allow",
+      "rdc-testing-discipline": "allow",
     });
-    expect(permission("reviewer")).toMatchObject({
-      skill: { "*": "deny", "rdc-implementation-review": "allow", "rdc-testing-discipline": "allow" },
+    expect(permission("implementer")?.skill).toEqual({
+      "*": "deny",
+      "rdc-code-implementation": "allow",
+      "rdc-testing-discipline": "allow",
     });
-    expect(permission("writer")).toMatchObject({
-      skill: {
-        "*": "deny",
-        "aria-academic-writing": "allow",
-        "aria-writing-anti-ai": "allow",
-        "aria-review-response": "allow",
-        "aria-paper-self-review": "allow",
-        "aria-document-design": "allow",
-      },
+    expect(permission("reviewer")?.skill).toEqual({
+      "*": "deny",
+      "rdc-implementation-review": "allow",
+      "rdc-adversarial-review": "allow",
+      "rdc-testing-discipline": "allow",
     });
+    expect(permission("writer")?.skill).toEqual({
+      "*": "deny",
+      "aria-academic-writing": "allow",
+      "aria-writing-anti-ai": "allow",
+      "aria-review-response": "allow",
+      "aria-paper-self-review": "allow",
+      "aria-document-design": "allow",
+    });
+    // rdc-adversarial-review is reviewer-only: no other role grants it.
+    // The coder explicitly denies it (see above), so exclude coder from this check.
+    for (const role of ["explorer", "visualizer", "planner", "architect", "implementer", "researcher", "archivist", "writer", "scientist"]) {
+      expect(permission(role)?.skill ?? {}).not.toHaveProperty("rdc-adversarial-review");
+    }
     // aria-document-design stays writer-only: no other role grants it.
     for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "scientist"]) {
       expect(permission(role)?.skill ?? {}).not.toHaveProperty("aria-document-design");
@@ -255,6 +356,12 @@ describe("ariaPlugin", () => {
         "aria-wiki-archive": "allow",
         "aria-wiki-compile": "allow",
       },
+    });
+    expect(wikiPerm?.skill).toEqual({
+      "*": "deny",
+      "aria-wiki-lookup": "allow",
+      "aria-wiki-archive": "allow",
+      "aria-wiki-compile": "allow",
     });
     // MCP: no Engram, CodeGraph, or Context7 access ? archivist
     // reads engram from the local engram.db via archive-engram command
@@ -480,6 +587,11 @@ describe("ariaPlugin", () => {
         "aria-results-analysis": "allow",
       },
       task: { "*": "deny", researcher: "allow", writer: "allow", coder: "allow" },
+    });
+    expect(scientist?.skill).toEqual({
+      "*": "deny",
+      "aria-research-planning": "allow",
+      "aria-results-analysis": "allow",
     });
     // No MCP or persistence authority of any kind.
     expect(scientist).not.toHaveProperty("engram_*");

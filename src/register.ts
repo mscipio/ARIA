@@ -213,7 +213,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     bash: "allow",
     webfetch: "allow",
     websearch: "allow",
-    skill: skillAccess("rdc-implementation-review", "rdc-testing-discipline"),
+    skill: skillAccess("rdc-implementation-review", "rdc-adversarial-review", "rdc-testing-discipline"),
     plan: "allow",
   },
   researcher: {
@@ -375,6 +375,10 @@ const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
  * than an inline literal) so the read-only doctor can validate that the coder
  * carries the canonical `REQUIRED_MCP_PERMISSION` grants without copying the
  * permission table.
+ *
+ * The coder explicitly denies `rdc-adversarial-review` to prevent this
+ * reviewer-owned mode from being directly loadable under coder authority,
+ * while preserving prior effective access to all other skills.
  */
 function coderPermission(): AgentPermission {
   return {
@@ -383,6 +387,9 @@ function coderPermission(): AgentPermission {
     bash: "deny",
     task: TASK_PERMISSIONS,
     plan: "allow",
+    skill: {
+      "rdc-adversarial-review": "deny",
+    },
   };
 }
 
