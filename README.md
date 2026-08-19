@@ -12,7 +12,7 @@
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
 - **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
 - **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki, writer, and scientist remain intentionally isolated
-- **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, explicit evidence-level/uncertainty reporting, and claim-level citation verification of source identity and claim-source support
+- **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, explicit evidence-level/uncertainty reporting, claim-level citation verification of source identity and claim-source support, and chat-first tutoring/guided reading of an identified library paper
 - **Bounded scientist authority** — `mode: all` scientific authority for question specification, methodology, and result interpretation, with deny-by-default code/shell/MCP/evidence/persistence authority; delegates evidence to `researcher`, prose to `writer`, and computation to `coder`
 
 ## Workflow
@@ -69,7 +69,7 @@ Examples:
 - reviewer → `rdc-implementation-review` + proportional testing guidance
 - archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
 - writer → `aria-document-design`, `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
-- researcher → `aria-research-evidence`
+- researcher → `aria-research-evidence` (discovery/verification) or `aria-zotero-tutor` (tutoring an identified paper)
 - scientist → `aria-research-planning` or `aria-results-analysis`
 
 ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers its packaged `skills/` directory through OpenCode's native `skills.paths` configuration, appending it to any pre-existing paths (append-and-preserve), so skills stay version-locked to the loaded ARIA package without copying files into the user's global skill directory or depending on myopencode/another registry.
@@ -339,6 +339,8 @@ The packaged `aria-research-evidence` skill defines the repeatable evidence proc
 - **Disagreement, uncertainty, and evidence-gap reporting** — conflicts across sources and missing evidence are reported explicitly, never smoothed over.
 - **Structured evidence handoffs** — findings with provenance and level, an itemized disagreements/uncertainties/gaps list, and cited sources.
 - **Claim-level citation verification** — source identity/existence is checked separately from claim-source support, so a citation is confirmed to exist and its support for the specific claim is classified, never inferred from topical similarity.
+
+`aria-zotero-tutor` is the researcher's skill for a different question: chat-first interactive tutoring and guided reading of a single, already-identified paper in the Zotero library. Unlike `aria-research-evidence` — which owns discovery, verification, citation support, and evidence handoffs — tutoring calibrates goal, familiarity, target, and depth with the learner and explains only from the paper's exposed source content. Any surfaced PDF annotation or reading-persona save uses the existing ZotPilot operation and requires separate explicit approval for that operation; neither is automatic.
 
 Hard boundaries: the researcher verifies source identity and claim-source support, not scientific meaning — interpretation, hypotheses, mechanisms, and nontrivial scientific judgment belong to the `scientist`, whom the researcher may task when claim-to-source alignment exceeds straightforward comparison. The researcher never edits project files, performs software/shell work, maintains the Wiki, drafts manuscript or rebuttal prose, persists to Engram automatically, spawns nested researcher subagents, or mutates Zotero without explicit per-operation approval. It has no Engram, CodeGraph, Wiki, broad MCP, or wildcard ZotPilot authority; its Bash access is deny-by-default with only `zotpilot`/`zotpilot *` approval-gated as a fallback path.
 

@@ -65,6 +65,7 @@ const requiredPaths = [
   "skills/aria-paper-self-review/SKILL.md",
   "skills/aria-document-design/SKILL.md",
   "skills/aria-research-evidence/SKILL.md",
+  "skills/aria-zotero-tutor/SKILL.md",
   "skills/aria-research-planning/SKILL.md",
   "skills/aria-results-analysis/SKILL.md",
   "dist/lifecycle.js",
@@ -162,6 +163,10 @@ if (config.agent?.researcher?.prompt?.includes("aria-research-evidence") !== tru
   console.error("smoke-package: researcher prompt does not reference its research skill");
   process.exit(1);
 }
+if (config.agent?.researcher?.prompt?.includes("aria-zotero-tutor") !== true) {
+  console.error("smoke-package: researcher prompt does not reference the zotero tutor skill");
+  process.exit(1);
+}
 if (!(config.skills?.paths ?? []).some((value) => value.endsWith("/aria/skills") || value.endsWith("\\aria\\skills"))) {
   console.error("smoke-package: package skill path is not registered", config.skills?.paths);
   process.exit(1);
@@ -248,19 +253,19 @@ const skillNames = readdirSync(skillsDir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
-if (skillNames.length !== 19) {
-  console.error("smoke-package: expected 19 packaged skills, got", skillNames.length);
+if (skillNames.length !== 20) {
+  console.error("smoke-package: expected 20 packaged skills, got", skillNames.length);
   process.exit(1);
 }
 if (skillNames.filter((name) => name.startsWith("rdc-")).length !== 8) {
   console.error("smoke-package: expected 8 rdc-* skills");
   process.exit(1);
 }
-if (skillNames.filter((name) => name.startsWith("aria-")).length !== 11) {
-  console.error("smoke-package: expected 11 aria-* skills");
+if (skillNames.filter((name) => name.startsWith("aria-")).length !== 12) {
+  console.error("smoke-package: expected 12 aria-* skills");
   process.exit(1);
 }
-for (const name of ["aria-research-planning", "aria-results-analysis"]) {
+for (const name of ["aria-research-planning", "aria-results-analysis", "aria-zotero-tutor"]) {
   if (!skillNames.includes(name)) {
     console.error("smoke-package: packed skills are missing " + name);
     process.exit(1);
@@ -515,8 +520,8 @@ exit 2
   if (!doctorOutput.includes("tools/list")) {
     fail("doctor live-tool-inventory limitation missing tools/list wording");
   }
-  if (!doctorOutput.includes("19 of 19 validated")) {
-    fail("doctor packaged skills finding does not report the exact 19-skill inventory");
+  if (!doctorOutput.includes("20 of 20 validated")) {
+    fail("doctor packaged skills finding does not report the exact 20-skill inventory");
   }
   // The doctor consumes the merged debug config surface: the fake reports an
   // effective subagent_depth of 4, which is sufficient (PASS, effective value).
