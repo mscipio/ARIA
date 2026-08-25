@@ -1,4 +1,5 @@
 import { tool, type Plugin } from "@opencode-ai/plugin";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 
 import { getPackageRoot } from "./defaults.js";
@@ -27,12 +28,12 @@ function stringField(value: unknown, key: string): string | undefined {
   return typeof field === "string" && field.length > 0 ? field : undefined;
 }
 
-function projectDirectory(input: unknown): string {
+export function projectDirectory(input: unknown): string {
   return (
-    stringField(input, "worktree") ??
-    stringField((input as { project?: unknown } | undefined)?.project, "worktree") ??
-    stringField(input, "directory") ??
-    stringField((input as { project?: unknown } | undefined)?.project, "directory") ??
+    meaningfulDirectory(input, "directory") ??
+    meaningfulDirectory((input as { project?: unknown } | undefined)?.project, "directory") ??
+    meaningfulDirectory(input, "worktree") ??
+    meaningfulDirectory((input as { project?: unknown } | undefined)?.project, "worktree") ??
     process.cwd()
   );
 }
@@ -40,31 +41,60 @@ function projectDirectory(input: unknown): string {
 /**
  * Detect whether a directory is a platform filesystem root sentinel
  * (e.g., `/` on POSIX, `C:\` on Windows) using portable Node path semantics.
+ * Also rejects existing paths whose canonical realpath resolves to the
+ * filesystem root (e.g., a symlink `/tmp/project-link -> /`), so adversarial
+ * symlink-to-root candidates cannot bypass lexical root checks. Missing or
+ * nonexistent paths fall through to the lexical check only — realpath is
+ * best-effort and must not throw for absent candidates.
  */
 function isFilesystemRoot(dir: string): boolean {
   const resolved = path.resolve(dir);
   const parsed = path.parse(resolved);
-  return resolved === parsed.root;
+  if (resolved === parsed.root) return true;
+  try {
+    const real = realpathSync(resolved);
+    const realParsed = path.parse(real);
+    return real === realParsed.root;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Return the string field `key` from `value` only when it is a meaningful
+ * directory: non-empty, not a lexical filesystem root sentinel, and (for
+ * existing paths) not a symlink whose canonical realpath resolves to the
+ * filesystem root. Returns undefined otherwise so callers can chain
+ * candidates with `??` without a non-meaningful value (e.g., `/` or a
+ * symlink-to-root) shadowing a later meaningful candidate.
+ */
+function meaningfulDirectory(value: unknown, key: string): string | undefined {
+  const dir = stringField(value, key);
+  if (dir && !isFilesystemRoot(dir)) return dir;
+  return undefined;
 }
 
 /**
  * Select the Plan persistence root per-invocation from the ToolContext.
- * Prefer a non-empty meaningful `context.worktree`; treat the platform
- * filesystem root sentinel as non-meaningful so it cannot override a
- * narrower valid `context.directory`; otherwise use the valid current
- * `context.directory`. Throws when neither field supplies a non-empty
- * root so Plan execution never resolves against process cwd.
+ * Prefer a meaningful non-root `context.directory` (lexical root and
+ * existing symlink-to-root are both rejected); otherwise fall back to
+ * the meaningful non-root plugin-startup OpenCode directory captured at
+ * plugin init. Never inspects `context.worktree` or `process.cwd()`, so
+ * Plan persistence cannot resolve against the filesystem root sentinel,
+ * a symlink-to-root, or the unrelated process working directory. Throws
+ * when neither directory is meaningful so Plan execution fails clearly
+ * before any Plan API, read, migration, or write.
  */
-function planInvocationRoot(context: { worktree: string; directory: string }): string {
-  if (context.worktree && !isFilesystemRoot(context.worktree)) {
-    return context.worktree;
+function planInvocationRoot(context: { directory: string }, startupDirectory: string): string {
+  if (context.directory && !isFilesystemRoot(context.directory)) {
+    return context.directory;
   }
-  if (!context.directory) {
-    throw new Error(
-      "Plan execution requires a non-empty invocation root; neither context.worktree nor context.directory provided a valid directory",
-    );
+  if (startupDirectory && !isFilesystemRoot(startupDirectory)) {
+    return startupDirectory;
   }
-  return context.directory;
+  throw new Error(
+    "Plan execution requires a meaningful OpenCode directory; neither context.directory nor the plugin-startup directory provided a valid root",
+  );
 }
 
 function pluginOptions(options: unknown): AriaPluginOptions {
@@ -664,6 +694,17 @@ function agentDefinitions(
 export const ariaPlugin: Plugin = async (input, options = {}) => {
   const directory = projectDirectory(input);
   const config = resolveAriaConfig(directory, pluginOptions(options));
+  // Capture the meaningful startup OpenCode directory for Plan persistence.
+  // Only `directory` candidates are considered (never `worktree`, process.cwd(),
+  // filesystem-root sentinels, or existing symlinks whose canonical realpath
+  // resolves to the filesystem root). Each candidate is validated individually
+  // for meaningfulness BEFORE precedence, so a non-meaningful top-level
+  // input.directory='/' (or a symlink-to-root) cannot shadow a meaningful
+  // input.project.directory.
+  const startupDirectory =
+    meaningfulDirectory(input, "directory") ??
+    meaningfulDirectory((input as { project?: unknown } | undefined)?.project, "directory") ??
+    "";
 
   return {
     config: async (runtimeConfig) => {
@@ -723,7 +764,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
           if (error) return formatToolError(error);
           const ok = (output: string) => ({ title, output });
           try {
-            const root = planInvocationRoot(context);
+            const root = planInvocationRoot(context, startupDirectory);
             switch (args.action) {
               case "get": {
                 const active = await readActivePlan(root);
