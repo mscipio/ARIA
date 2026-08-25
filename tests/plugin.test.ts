@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { Config } from "@opencode-ai/plugin";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import type { Config, ToolContext } from "@opencode-ai/plugin";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -75,13 +75,22 @@ async function load(input: Parameters<typeof server>[0]) {
   return plugin;
 }
 
-function toolContext(agent: string, sessionID: string, abort?: AbortSignal) {
+function toolContext(
+  agent: string,
+  sessionID: string,
+  abort?: AbortSignal,
+  options?: { worktree?: string; directory?: string; messageID?: string },
+): ToolContext {
   return {
     agent,
     sessionID,
-    abort,
+    messageID: options?.messageID ?? `msg-${sessionID}`,
+    abort: abort ?? new AbortController().signal,
+    worktree: options?.worktree ?? "",
+    directory: options?.directory ?? "",
     metadata() {},
-  } as never;
+    async ask() {},
+  };
 }
 
 function outputOf(result: unknown): string {
@@ -636,12 +645,13 @@ describe("ariaPlugin", () => {
   });
 
   it("enforces the runtime plan ACL per role and action", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const planner = (session: string) => toolContext("planner", session);
-    const architect = (session: string) => toolContext("architect", session);
-    const coder = (session: string) => toolContext("coder", session);
-    const reviewer = (session: string) => toolContext("reviewer", session);
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
+    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
+    const reviewer = (session: string) => toolContext("reviewer", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "ACL plan", tasks: ["Task"] },
@@ -740,9 +750,9 @@ describe("ariaPlugin", () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const planner = (session: string) => toolContext("planner", session);
-    const architect = (session: string) => toolContext("architect", session);
-    const coder = (session: string) => toolContext("coder", session);
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
+    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     // 1. planner creates
     const created = await plan.execute(
@@ -833,15 +843,265 @@ describe("ariaPlugin", () => {
     const plugin = await load({ directory: nested, worktree: root } as never);
     await plugin.tool!.plan!.execute(
       { action: "create", title: "Worktree plan", tasks: ["Task"] },
-      toolContext("coder", "session"),
+      toolContext("coder", "session", undefined, { worktree: root, directory: nested }),
     );
     expect(await readFile(join(root, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Worktree plan");
   });
 
-  it("rejects stale plan id and revision on mutations", async () => {
-    const plugin = await load({ directory: await project() } as never);
+  it("selects context.directory when worktree is the filesystem root sentinel", async () => {
+    // Case (1): filesystem-root worktree sentinel must not override a narrower valid directory.
+    const projectDir = await project();
+    const plugin = await load({ directory: projectDir } as never);
+    // Simulate OpenCode passing worktree="/" (POSIX root sentinel) with a valid directory.
+    await plugin.tool!.plan!.execute(
+      { action: "create", title: "Root sentinel plan", tasks: ["Task"] },
+      toolContext("coder", "session", undefined, { worktree: "/", directory: projectDir }),
+    );
+    // The plan must be written to projectDir/.aria/rdc/TASKS.md, NOT to /.aria/rdc/TASKS.md.
+    expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Root sentinel plan");
+  });
+
+  it("selects meaningful worktree over nested context.directory", async () => {
+    // Case (2): a real worktree like /repo must win over a nested directory like /repo/packages/app.
+    const repoRoot = await project();
+    const nestedDir = join(repoRoot, "packages", "app");
+    await mkdir(nestedDir, { recursive: true });
+    const plugin = await load({ directory: nestedDir } as never);
+    await plugin.tool!.plan!.execute(
+      { action: "create", title: "Worktree wins plan", tasks: ["Task"] },
+      toolContext("coder", "session", undefined, { worktree: repoRoot, directory: nestedDir }),
+    );
+    // The plan must be written to repoRoot/.aria/rdc/TASKS.md, not nestedDir/.aria/rdc/TASKS.md.
+    expect(await readFile(join(repoRoot, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Worktree wins plan");
+  });
+
+  it("selects invocation context root over unrelated plugin-startup cwd", async () => {
+    // Case (3): tool/session context selects its root over a different unrelated plugin-startup cwd.
+    const startupDir = await project();
+    const invocationDir = await project();
+    const plugin = await load({ directory: startupDir } as never);
+    await plugin.tool!.plan!.execute(
+      { action: "create", title: "Invocation context plan", tasks: ["Task"] },
+      toolContext("coder", "session", undefined, { directory: invocationDir }),
+    );
+    // The plan must be written to invocationDir/.aria/rdc/TASKS.md, not startupDir/.aria/rdc/TASKS.md.
+    expect(await readFile(join(invocationDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Invocation context plan");
+    // Verify startupDir did NOT receive the plan.
+    await expect(readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("selects valid context.directory when worktree is empty", async () => {
+    // Case (4): a valid context directory is used when no meaningful worktree exists.
+    const projectDir = await project();
+    const plugin = await load({ directory: projectDir } as never);
+    await plugin.tool!.plan!.execute(
+      { action: "create", title: "Directory fallback plan", tasks: ["Task"] },
+      toolContext("coder", "session", undefined, { worktree: "", directory: projectDir }),
+    );
+    expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Directory fallback plan");
+  });
+
+  it("Plan get returns the invocation-root plan, not the plugin-startup plan", async () => {
+    // Regression: Plan `get` must resolve its persistence root from the
+    // per-invocation ToolContext, not from the plugin-startup cwd. Seed a
+    // distinguishable plan at each root and assert that `get` returns the
+    // invocation-root plan.
+    const startupDir = await project();
+    const invocationDir = await project();
+    const plugin = await load({ directory: startupDir } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session);
+
+    // Seed a plan at the plugin-startup root.
+    await plan.execute(
+      { action: "create", title: "Startup plan", tasks: ["Startup task"] },
+      toolContext("coder", "startup-session", undefined, { directory: startupDir }),
+    );
+
+    // Seed a different plan at the per-invocation root.
+    await plan.execute(
+      { action: "create", title: "Invocation plan", tasks: ["Invocation task"] },
+      toolContext("coder", "invocation-session", undefined, { directory: invocationDir }),
+    );
+
+    // `get` invoked with the invocation context must return the invocation-root plan.
+    const getResult = await plan.execute(
+      { action: "get" },
+      toolContext("coder", "invocation-session", undefined, { directory: invocationDir }),
+    );
+    const getOutput = outputOf(getResult);
+    expect(getOutput).toContain("Plan: Invocation plan");
+    expect(getOutput).not.toContain("Startup plan");
+  });
+
+  it("rejects Plan execution when neither worktree nor directory provides a valid root", async () => {
+    // Regression: when both context.worktree and context.directory are empty,
+    // Plan execution must reject with a clear error instead of passing an empty
+    // path that Node resolves against process cwd. No Plan state may be read,
+    // migrated, or created under the unrelated plugin-startup directory or
+    // process.cwd().
+    const startupDir = await project();
+    const plugin = await load({ directory: startupDir } as never);
+    const plan = plugin.tool!.plan!;
+
+    // Seed a distinguishable legacy state at the plugin-startup root so we can
+    // prove migration does NOT occur against the startup cwd when the
+    // invocation context is empty.
+    const startupLegacyDir = join(startupDir, ".code-ensemble");
+    await mkdir(startupLegacyDir, { recursive: true });
+    await writeFile(
+      join(startupLegacyDir, "TASKS.md"),
+      "# Startup legacy sentinel — must remain untouched\n",
+      "utf8",
+    );
+
+    // Seed a distinguishable active plan at the plugin-startup root so we can
+    // prove get/read does NOT fall back to the startup cwd.
+    const startupActiveDir = join(startupDir, ".aria", "rdc");
+    await mkdir(startupActiveDir, { recursive: true });
+    await writeFile(
+      join(startupActiveDir, "TASKS.md"),
+      "# Startup active sentinel — must remain untouched\n",
+      "utf8",
+    );
+
+    // Empty worktree + empty directory -> get must reject.
+    const getResult = await plan.execute(
+      { action: "get" },
+      toolContext("coder", "empty-context-session", undefined, { worktree: "", directory: "" }),
+    );
+    expect(outputOf(getResult)).toMatch(/non-empty invocation root/);
+    expect(titleOf(getResult)).toBe("Error");
+
+    // Create must also reject under the same empty context.
+    const createResult = await plan.execute(
+      { action: "create", title: "Should not exist", tasks: ["Task"] },
+      toolContext("coder", "empty-context-create", undefined, { worktree: "", directory: "" }),
+    );
+    expect(outputOf(createResult)).toMatch(/non-empty invocation root/);
+    expect(titleOf(createResult)).toBe("Error");
+
+    // No Plan state may have been created under the plugin-startup directory.
+    await expect(readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).resolves.toContain(
+      "Startup active sentinel",
+    );
+
+    // Legacy state at the startup root must remain untouched (no migration).
+    await expect(readFile(join(startupLegacyDir, "TASKS.md"), "utf8")).resolves.toContain(
+      "Startup legacy sentinel",
+    );
+    // The canonical directory must not have received a migrated copy from the
+    // startup legacy location.
+    const afterStartupCanonical = join(startupDir, ".aria", "rdc", "TASKS.md");
+    const afterContent = await readFile(afterStartupCanonical, "utf8");
+    expect(afterContent).not.toContain("Startup legacy sentinel");
+    expect(afterContent).toContain("Startup active sentinel");
+  });
+
+  it("valid invocation context never falls back to process.cwd() or plugin-startup cwd", async () => {
+    // Regression: a valid invocation context must route Plan persistence to
+    // the invocation root, never to process.cwd() or the plugin-startup
+    // directory. Temporarily change process.cwd() to an unrelated directory
+    // and assert the plan is created at the invocation root.
+    const startupDir = await project();
+    const invocationDir = await project();
+    const cwdDir = await project();
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(cwdDir);
+      const plugin = await load({ directory: startupDir } as never);
+      const plan = plugin.tool!.plan!;
+
+      // Create a plan with a valid invocation context — must go to
+      // invocationDir, not cwdDir or startupDir.
+      await plan.execute(
+        { action: "create", title: "Process cwd isolation plan", tasks: ["Task"] },
+        toolContext("coder", "cwd-isolation-session", undefined, { directory: invocationDir }),
+      );
+      expect(
+        await readFile(join(invocationDir, ".aria/rdc", "TASKS.md"), "utf8"),
+      ).toContain("Process cwd isolation plan");
+      // process.cwd() must not receive the plan.
+      await expect(readFile(join(cwdDir, ".aria/rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+      // Plugin-startup cwd must not receive the plan.
+      await expect(readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+
+      // Get must also read from the invocation root, not process.cwd().
+      const getResult = await plan.execute(
+        { action: "get" },
+        toolContext("coder", "cwd-isolation-get", undefined, { directory: invocationDir }),
+      );
+      expect(outputOf(getResult)).toContain("Plan: Process cwd isolation plan");
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("legacy migration follows the invocation root, not the plugin-startup cwd", async () => {
+    // Regression: the legacy `.code-ensemble` -> `.aria/rdc` migration must
+    // operate on the invocation root selected from the per-invocation
+    // ToolContext, not on the plugin-startup directory. Seed a legacy state
+    // at the invocation root only, invoke Plan `get` with that invocation
+    // context, and assert the legacy plan is migrated and returned while the
+    // plugin-startup root receives no migration or creation.
+    const startupDir = await project();
+    const invocationDir = await project();
+    const plugin = await load({ directory: startupDir } as never);
+    const plan = plugin.tool!.plan!;
+
+    // Seed a legacy plan at the invocation root only.
+    const invocationLegacyDir = join(invocationDir, ".code-ensemble");
+    await mkdir(invocationLegacyDir, { recursive: true });
+    // A minimal valid plan markdown is not required for the migration test:
+    // migrateLegacyState only renames the directory; the subsequent read
+    // will surface "No active TASKS.md" if the content is not a valid plan.
+    // So we seed a valid active plan at the legacy location by writing through
+    // the plan tool first at the invocation root, then moving the canonical
+    // directory back to the legacy location.
+    await plan.execute(
+      { action: "create", title: "Legacy invocation plan", tasks: ["Legacy task"] },
+      toolContext("coder", "legacy-seed-session", undefined, { directory: invocationDir }),
+    );
+    // Move canonical -> legacy to simulate a pre-migration state.
+    const invocationCanonicalDir = join(invocationDir, ".aria", "rdc");
+    const invocationCanonicalFile = join(invocationCanonicalDir, "TASKS.md");
+    const legacyFile = join(invocationLegacyDir, "TASKS.md");
+    // Ensure legacy dir is empty before rename (mkdir already created it).
+    await rm(invocationLegacyDir, { recursive: true, force: true });
+    // Rename canonical -> legacy.
+    const { rename } = await import("node:fs/promises");
+    await rename(invocationCanonicalDir, invocationLegacyDir);
+    // Confirm the canonical file is gone and the legacy file exists.
+    await expect(readFile(invocationCanonicalFile, "utf8")).rejects.toThrow();
+    await expect(readFile(legacyFile, "utf8")).resolves.toContain("Legacy invocation plan");
+
+    // Invoke Plan `get` with the invocation context — must migrate and return
+    // the legacy plan from the invocation root.
+    const getResult = await plan.execute(
+      { action: "get" },
+      toolContext("coder", "legacy-read-session", undefined, { directory: invocationDir }),
+    );
+    expect(outputOf(getResult)).toContain("Plan: Legacy invocation plan");
+
+    // After migration, the canonical location must hold the plan and the
+    // legacy location must be gone.
+    await expect(readFile(invocationCanonicalFile, "utf8")).resolves.toContain(
+      "Legacy invocation plan",
+    );
+    await expect(readFile(invocationLegacyDir, "utf8")).rejects.toThrow();
+
+    // The plugin-startup root must not have received any migration or plan
+    // creation as a side effect.
+    await expect(readFile(join(startupDir, ".aria", "rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+    await expect(
+      readFile(join(startupDir, ".code-ensemble", "TASKS.md"), "utf8"),
+    ).rejects.toThrow();
+  });
+
+  it("rejects stale plan id and revision on mutations", async () => {
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
+    const plan = plugin.tool!.plan!;
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Stale test", tasks: ["Task"] },
@@ -886,10 +1146,11 @@ describe("ariaPlugin", () => {
   });
 
   it("replaces the plan title and tasks through the architect", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const planner = (session: string) => toolContext("planner", session);
-    const architect = (session: string) => toolContext("architect", session);
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
+    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Old title", tasks: ["Old task"] },
@@ -920,11 +1181,12 @@ describe("ariaPlugin", () => {
   });
 
   it("uses readable titles for plan actions", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const planner = (session: string) => toolContext("planner", session);
-    const architect = (session: string) => toolContext("architect", session);
-    const coder = (session: string) => toolContext("coder", session);
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
+    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Dashboard", tasks: ["Build UI"] },
@@ -957,9 +1219,10 @@ describe("ariaPlugin", () => {
   });
 
   it("add on approved plan resets approval to pending", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session);
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Add gate", tasks: ["Task"] },
@@ -998,9 +1261,10 @@ describe("ariaPlugin", () => {
   });
 
   it("remediate preserves approved state", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session);
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Remediate", tasks: ["Task"] },
@@ -1030,9 +1294,10 @@ describe("ariaPlugin", () => {
   });
 
   it("remediate rejects unapproved plan and incomplete tasks", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session);
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Remediate guards", tasks: ["A", "B"] },
@@ -1062,9 +1327,10 @@ describe("ariaPlugin", () => {
   });
 
   it("remediates the plan through the coder after review", async () => {
-    const plugin = await load({ directory: await project() } as never);
+    const root = await project();
+    const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session);
+    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Remediate flow", tasks: ["Task"] },

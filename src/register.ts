@@ -37,6 +37,36 @@ function projectDirectory(input: unknown): string {
   );
 }
 
+/**
+ * Detect whether a directory is a platform filesystem root sentinel
+ * (e.g., `/` on POSIX, `C:\` on Windows) using portable Node path semantics.
+ */
+function isFilesystemRoot(dir: string): boolean {
+  const resolved = path.resolve(dir);
+  const parsed = path.parse(resolved);
+  return resolved === parsed.root;
+}
+
+/**
+ * Select the Plan persistence root per-invocation from the ToolContext.
+ * Prefer a non-empty meaningful `context.worktree`; treat the platform
+ * filesystem root sentinel as non-meaningful so it cannot override a
+ * narrower valid `context.directory`; otherwise use the valid current
+ * `context.directory`. Throws when neither field supplies a non-empty
+ * root so Plan execution never resolves against process cwd.
+ */
+function planInvocationRoot(context: { worktree: string; directory: string }): string {
+  if (context.worktree && !isFilesystemRoot(context.worktree)) {
+    return context.worktree;
+  }
+  if (!context.directory) {
+    throw new Error(
+      "Plan execution requires a non-empty invocation root; neither context.worktree nor context.directory provided a valid directory",
+    );
+  }
+  return context.directory;
+}
+
 function pluginOptions(options: unknown): AriaPluginOptions {
   const configPath = stringField(options, "configPath");
   return configPath ? { configPath } : {};
@@ -693,14 +723,15 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
           if (error) return formatToolError(error);
           const ok = (output: string) => ({ title, output });
           try {
+            const root = planInvocationRoot(context);
             switch (args.action) {
               case "get": {
-                const active = await readActivePlan(directory);
+                const active = await readActivePlan(root);
                 return ok(formatPlanOutput(active?.plan ?? null));
               }
               case "create": {
                 if (!args.title || !args.tasks) return formatToolError("title and tasks are required for create");
-                return ok(formatPlanOutput(await createPlan(directory, args.title, args.tasks, context.abort)));
+                return ok(formatPlanOutput(await createPlan(root, args.title, args.tasks, context.abort)));
               }
               case "replace": {
                 if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for replace");
@@ -709,7 +740,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
                 }
                 if (!args.title || !args.tasks) return formatToolError("title and tasks are required for replace");
                 return ok(formatPlanOutput(
-                  await replacePlan(directory, args.expectedPlanID, args.expectedRevision, args.title, args.tasks, context.abort),
+                  await replacePlan(root, args.expectedPlanID, args.expectedRevision, args.title, args.tasks, context.abort),
                 ));
               }
               case "add": {
@@ -717,7 +748,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
                 if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for add");
                 if (!args.tasks) return formatToolError("tasks are required for add");
                 return ok(formatPlanOutput(
-                  await addPlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
+                  await addPlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
                 ));
               }
               case "remediate": {
@@ -725,7 +756,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
                 if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for remediate");
                 if (!args.tasks) return formatToolError("tasks are required for remediate");
                 return ok(formatPlanOutput(
-                  await remediatePlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
+                  await remediatePlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
                 ));
               }
               case "update": {
@@ -734,7 +765,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
                 if (!args.taskID || !args.status) return formatToolError("taskID and status are required for update");
                 return ok(formatPlanOutput(
                   await updatePlanTask(
-                    directory,
+                    root,
                     args.expectedPlanID,
                     args.expectedRevision,
                     args.taskID,
@@ -748,13 +779,13 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
                 if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for approve");
                 if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for approve");
                 return ok(formatPlanOutput(
-                  await approvePlan(directory, args.expectedPlanID, args.expectedRevision, context.abort),
+                  await approvePlan(root, args.expectedPlanID, args.expectedRevision, context.abort),
                 ));
               }
               case "close": {
                 if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for close");
                 if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for close");
-                const closed = await closePlan(directory, args.expectedPlanID, args.expectedRevision, context.abort);
+                const closed = await closePlan(root, args.expectedPlanID, args.expectedRevision, context.abort);
                 return ok(formatClosedPlanOutput(closed.plan, closed.archived));
               }
               default:
