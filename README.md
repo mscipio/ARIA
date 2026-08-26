@@ -31,7 +31,7 @@
 11. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
 12. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
 
-The tasklist is scoped to the worktree, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
+The tasklist is scoped to the OpenCode workspace/session directory, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
 
 ## Team
 
@@ -78,7 +78,7 @@ ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifi
 
 ## Shared Plan
 
-`.aria/rdc/TASKS.md` is the project-wide source of truth for the coder workflow. On first Plan access, a legacy `.code-ensemble/` state directory is migrated once to `.aria/rdc/` when the canonical destination does not already exist.
+`.aria/rdc/TASKS.md` is the project-wide source of truth for the coder workflow, following the OpenCode workspace/session directory rather than the Git worktree or a single OpenCode conversation. On first Plan access, a legacy `.code-ensemble/` state directory is migrated once to `.aria/rdc/` when the canonical destination does not already exist.
 
 Schema v3 fields:
 

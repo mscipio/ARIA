@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Config, ToolContext } from "@opencode-ai/plugin";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, parse, relative, resolve } from "node:path";
 
 import ariaPlugin, { ariaPlugin as pluginModule } from "../src/index";
+import { projectDirectory } from "../src/register";
 import { getPackageRoot } from "../src/defaults";
 
 /**
@@ -67,6 +68,17 @@ async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "aria-plugin-"));
   tempDirs.push(root);
   return root;
+}
+
+/**
+ * Create a symlink at `linkPath` whose target is the platform filesystem root
+ * derived from the link path itself (never hardcoded). Uses type 'junction' so
+ * Windows requires no symlink privilege; POSIX ignores the type and preserves
+ * equivalent symlink-to-root behavior.
+ */
+async function symlinkToRoot(linkPath: string): Promise<void> {
+  const root = parse(resolve(linkPath)).root;
+  await symlink(root, linkPath, "junction");
 }
 
 async function load(input: Parameters<typeof server>[0]) {
@@ -836,16 +848,19 @@ describe("ariaPlugin", () => {
     expect(await readFile(join(root, ".aria/rdc", "TASKS.md"), "utf8").catch(() => "")).toBe("");
   });
 
-  it("scopes the shared plan to the worktree instead of a nested directory", async () => {
+  it("scopes the shared plan to the invocation directory, not the startup worktree", async () => {
+    // Regression: with the new semantics, context.directory is preferred over
+    // context.worktree for Plan persistence. The plan must be written to the
+    // invocation directory (nested), not the startup worktree (root).
     const root = await project();
     const nested = join(root, "packages", "app");
     await mkdir(nested, { recursive: true });
     const plugin = await load({ directory: nested, worktree: root } as never);
     await plugin.tool!.plan!.execute(
-      { action: "create", title: "Worktree plan", tasks: ["Task"] },
+      { action: "create", title: "Invocation directory plan", tasks: ["Task"] },
       toolContext("coder", "session", undefined, { worktree: root, directory: nested }),
     );
-    expect(await readFile(join(root, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Worktree plan");
+    expect(await readFile(join(nested, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Invocation directory plan");
   });
 
   it("selects context.directory when worktree is the filesystem root sentinel", async () => {
@@ -861,18 +876,20 @@ describe("ariaPlugin", () => {
     expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Root sentinel plan");
   });
 
-  it("selects meaningful worktree over nested context.directory", async () => {
-    // Case (2): a real worktree like /repo must win over a nested directory like /repo/packages/app.
+  it("selects nested invocation directory over repo startup directory", async () => {
+    // Regression: with the new semantics, context.directory is preferred over
+    // context.worktree for Plan persistence. A nested invocation directory
+    // like /repo/packages/app must win over the repo startup directory /repo.
     const repoRoot = await project();
     const nestedDir = join(repoRoot, "packages", "app");
     await mkdir(nestedDir, { recursive: true });
-    const plugin = await load({ directory: nestedDir } as never);
+    const plugin = await load({ directory: repoRoot } as never);
     await plugin.tool!.plan!.execute(
-      { action: "create", title: "Worktree wins plan", tasks: ["Task"] },
+      { action: "create", title: "Nested invocation plan", tasks: ["Task"] },
       toolContext("coder", "session", undefined, { worktree: repoRoot, directory: nestedDir }),
     );
-    // The plan must be written to repoRoot/.aria/rdc/TASKS.md, not nestedDir/.aria/rdc/TASKS.md.
-    expect(await readFile(join(repoRoot, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Worktree wins plan");
+    // The plan must be written to nestedDir/.aria/rdc/TASKS.md, not repoRoot/.aria/rdc/TASKS.md.
+    expect(await readFile(join(nestedDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Nested invocation plan");
   });
 
   it("selects invocation context root over unrelated plugin-startup cwd", async () => {
@@ -899,6 +916,151 @@ describe("ariaPlugin", () => {
       toolContext("coder", "session", undefined, { worktree: "", directory: projectDir }),
     );
     expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Directory fallback plan");
+  });
+
+  it("falls back to startup directory when invocation directory is filesystem root or empty", async () => {
+    // Regression: when context.directory is a filesystem root sentinel or empty,
+    // Plan persistence must fall back to the meaningful plugin-startup OpenCode
+    // directory captured at plugin init, not error or use process.cwd().
+    const startupDir = await project();
+    const plugin = await load({ directory: startupDir } as never);
+    const plan = plugin.tool!.plan!;
+
+    // Case 1: context.directory is filesystem root sentinel -> fall back to startup.
+    await plan.execute(
+      { action: "create", title: "Root fallback plan", tasks: ["Task"] },
+      toolContext("coder", "root-fallback-session", undefined, { directory: "/" }),
+    );
+    expect(await readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Root fallback plan");
+
+    // Clean up for case 2.
+    await rm(join(startupDir, ".aria", "rdc", "TASKS.md"), { force: true });
+
+    // Case 2: context.directory is empty -> fall back to startup.
+    await plan.execute(
+      { action: "create", title: "Empty fallback plan", tasks: ["Task"] },
+      toolContext("coder", "empty-fallback-session", undefined, { directory: "" }),
+    );
+    expect(await readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Empty fallback plan");
+  });
+
+  it("top-level input.directory='/' does not shadow meaningful input.project.directory", async () => {
+    // Regression: when OpenCode passes input.directory='/' (filesystem root
+    // sentinel) together with a meaningful input.project.directory, the Plan
+    // startup fallback must resolve to the project directory, not error or
+    // fall through to process.cwd(). Each candidate is validated individually
+    // for meaningfulness BEFORE precedence.
+    const projectDir = await project();
+    const plugin = await load({ directory: "/", project: { directory: projectDir } } as never);
+    const plan = plugin.tool!.plan!;
+
+    // Invoke Plan with a non-meaningful context.directory so the startup
+    // fallback is exercised.
+    await plan.execute(
+      { action: "create", title: "Project directory fallback plan", tasks: ["Task"] },
+      toolContext("coder", "project-dir-fallback-session", undefined, { directory: "/" }),
+    );
+    // The plan must be written to projectDir/.aria/rdc/TASKS.md, not to
+    // /.aria/rdc/TASKS.md or process.cwd()/.aria/rdc/TASKS.md.
+    expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain(
+      "Project directory fallback plan",
+    );
+    // Verify the filesystem root did NOT receive the plan.
+    await expect(readFile(join("/", ".aria", "rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("symlink-to-root context.directory is rejected and Plan falls back to startup directory", async () => {
+    // Adversarial regression: an existing symlink whose canonical realpath
+    // resolves to the filesystem root (e.g., /tmp/project-link -> /) must be
+    // rejected by the central meaningful-directory validation, so Plan
+    // persistence falls back to the meaningful startup directory instead of
+    // resolving against the filesystem root.
+    const startupDir = await project();
+    const symlinkDir = join(startupDir, "root-link");
+    await symlinkToRoot(symlinkDir);
+    const plugin = await load({ directory: startupDir } as never);
+    const plan = plugin.tool!.plan!;
+
+    // Invoke Plan with a symlink-to-root context.directory -> must fall back to startup.
+    await plan.execute(
+      { action: "create", title: "Symlink-to-root fallback plan", tasks: ["Task"] },
+      toolContext("coder", "symlink-root-fallback-session", undefined, { directory: symlinkDir }),
+    );
+    // The plan must be written to startupDir/.aria/rdc/TASKS.md, not to the
+    // filesystem root via the symlink.
+    expect(await readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain(
+      "Symlink-to-root fallback plan",
+    );
+    // Verify the filesystem root did NOT receive the plan.
+    await expect(readFile(join("/", ".aria", "rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("symlink-to-root input.directory does not shadow meaningful input.project.directory for Plan startup", async () => {
+    // Adversarial regression: an existing symlink whose canonical realpath
+    // resolves to the filesystem root must be rejected by the central
+    // meaningful-directory validation, so a symlink-to-root input.directory
+    // cannot shadow a meaningful input.project.directory for Plan startup.
+    const projectDir = await project();
+    const symlinkDir = join(projectDir, "root-link");
+    await symlinkToRoot(symlinkDir);
+    const plugin = await load({ directory: symlinkDir, project: { directory: projectDir } } as never);
+    const plan = plugin.tool!.plan!;
+
+    // Invoke Plan with a non-meaningful context.directory so the startup
+    // fallback is exercised.
+    await plan.execute(
+      { action: "create", title: "Symlink startup fallback plan", tasks: ["Task"] },
+      toolContext("coder", "symlink-startup-fallback-session", undefined, { directory: "/" }),
+    );
+    // The plan must be written to projectDir/.aria/rdc/TASKS.md, not to the
+    // filesystem root via the symlink.
+    expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain(
+      "Symlink startup fallback plan",
+    );
+    // Verify the filesystem root did NOT receive the plan.
+    await expect(readFile(join("/", ".aria", "rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+  });
+
+  it("config precedence: lexical root input.directory does not shadow nested project.directory", async () => {
+    // Adversarial regression: the startup/config selector must validate EACH
+    // directory candidate before precedence, so a lexical root top-level
+    // input.directory='/' cannot shadow a meaningful nested input.project.directory.
+    const projectDir = await project();
+    const result = projectDirectory({ directory: "/", project: { directory: projectDir } });
+    expect(result).toBe(projectDir);
+  });
+
+  it("config precedence: lexical root input.directory does not shadow meaningful config worktree", async () => {
+    // Adversarial regression: the startup/config selector must validate EACH
+    // directory and retained worktree candidate before precedence, so a lexical
+    // root top-level input.directory='/' cannot shadow a meaningful worktree.
+    const worktreeDir = await project();
+    const result = projectDirectory({ directory: "/", worktree: worktreeDir });
+    expect(result).toBe(worktreeDir);
+  });
+
+  it("config precedence: symlink-to-root input.directory does not shadow meaningful project.directory", async () => {
+    // Adversarial regression: the startup/config selector must validate EACH
+    // directory candidate before precedence, so an existing symlink whose
+    // canonical realpath resolves to the filesystem root cannot shadow a
+    // meaningful nested input.project.directory.
+    const projectDir = await project();
+    const symlinkDir = join(projectDir, "root-link");
+    await symlinkToRoot(symlinkDir);
+    const result = projectDirectory({ directory: symlinkDir, project: { directory: projectDir } });
+    expect(result).toBe(projectDir);
+  });
+
+  it("config precedence: symlink-to-root input.directory does not shadow meaningful config worktree", async () => {
+    // Adversarial regression: the startup/config selector must validate EACH
+    // directory and retained worktree candidate before precedence, so an
+    // existing symlink whose canonical realpath resolves to the filesystem
+    // root cannot shadow a meaningful worktree.
+    const worktreeDir = await project();
+    const symlinkDir = join(worktreeDir, "root-link");
+    await symlinkToRoot(symlinkDir);
+    const result = projectDirectory({ directory: symlinkDir, worktree: worktreeDir });
+    expect(result).toBe(worktreeDir);
   });
 
   it("Plan get returns the invocation-root plan, not the plugin-startup plan", async () => {
@@ -933,68 +1095,46 @@ describe("ariaPlugin", () => {
     expect(getOutput).not.toContain("Startup plan");
   });
 
-  it("rejects Plan execution when neither worktree nor directory provides a valid root", async () => {
-    // Regression: when both context.worktree and context.directory are empty,
-    // Plan execution must reject with a clear error instead of passing an empty
-    // path that Node resolves against process cwd. No Plan state may be read,
-    // migrated, or created under the unrelated plugin-startup directory or
-    // process.cwd().
-    const startupDir = await project();
-    const plugin = await load({ directory: startupDir } as never);
+  it("rejects Plan execution when neither context.directory nor startup directory provides a valid root", async () => {
+    // Regression: when both context.directory and the plugin-startup directory
+    // are non-meaningful (empty or filesystem root), Plan execution must reject
+    // with a clear error instead of passing an empty path that Node resolves
+    // against process cwd. No Plan state may be read, migrated, or created
+    // under the unrelated plugin-startup directory or process.cwd().
+    // Pass a non-meaningful startup directory (filesystem root) so the
+    // fallback also fails.
+    const plugin = await load({ directory: "/" } as never);
     const plan = plugin.tool!.plan!;
 
-    // Seed a distinguishable legacy state at the plugin-startup root so we can
-    // prove migration does NOT occur against the startup cwd when the
-    // invocation context is empty.
-    const startupLegacyDir = join(startupDir, ".code-ensemble");
-    await mkdir(startupLegacyDir, { recursive: true });
-    await writeFile(
-      join(startupLegacyDir, "TASKS.md"),
-      "# Startup legacy sentinel — must remain untouched\n",
-      "utf8",
-    );
+    // Use an unrelated temp dir as process.cwd() to prove no state is created there.
+    const cwdDir = await project();
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(cwdDir);
 
-    // Seed a distinguishable active plan at the plugin-startup root so we can
-    // prove get/read does NOT fall back to the startup cwd.
-    const startupActiveDir = join(startupDir, ".aria", "rdc");
-    await mkdir(startupActiveDir, { recursive: true });
-    await writeFile(
-      join(startupActiveDir, "TASKS.md"),
-      "# Startup active sentinel — must remain untouched\n",
-      "utf8",
-    );
+      // Empty context.directory + non-meaningful startup directory -> get must reject.
+      const getResult = await plan.execute(
+        { action: "get" },
+        toolContext("coder", "empty-context-session", undefined, { worktree: "", directory: "" }),
+      );
+      expect(outputOf(getResult)).toMatch(/meaningful OpenCode directory/);
+      expect(titleOf(getResult)).toBe("Error");
 
-    // Empty worktree + empty directory -> get must reject.
-    const getResult = await plan.execute(
-      { action: "get" },
-      toolContext("coder", "empty-context-session", undefined, { worktree: "", directory: "" }),
-    );
-    expect(outputOf(getResult)).toMatch(/non-empty invocation root/);
-    expect(titleOf(getResult)).toBe("Error");
+      // Create must also reject under the same empty context.
+      const createResult = await plan.execute(
+        { action: "create", title: "Should not exist", tasks: ["Task"] },
+        toolContext("coder", "empty-context-create", undefined, { worktree: "", directory: "" }),
+      );
+      expect(outputOf(createResult)).toMatch(/meaningful OpenCode directory/);
+      expect(titleOf(createResult)).toBe("Error");
 
-    // Create must also reject under the same empty context.
-    const createResult = await plan.execute(
-      { action: "create", title: "Should not exist", tasks: ["Task"] },
-      toolContext("coder", "empty-context-create", undefined, { worktree: "", directory: "" }),
-    );
-    expect(outputOf(createResult)).toMatch(/non-empty invocation root/);
-    expect(titleOf(createResult)).toBe("Error");
-
-    // No Plan state may have been created under the plugin-startup directory.
-    await expect(readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).resolves.toContain(
-      "Startup active sentinel",
-    );
-
-    // Legacy state at the startup root must remain untouched (no migration).
-    await expect(readFile(join(startupLegacyDir, "TASKS.md"), "utf8")).resolves.toContain(
-      "Startup legacy sentinel",
-    );
-    // The canonical directory must not have received a migrated copy from the
-    // startup legacy location.
-    const afterStartupCanonical = join(startupDir, ".aria", "rdc", "TASKS.md");
-    const afterContent = await readFile(afterStartupCanonical, "utf8");
-    expect(afterContent).not.toContain("Startup legacy sentinel");
-    expect(afterContent).toContain("Startup active sentinel");
+      // No Plan state may have been created under process.cwd().
+      await expect(readFile(join(cwdDir, ".aria/rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+      // No Plan state may have been created under the filesystem root.
+      await expect(readFile(join("/", ".aria", "rdc", "TASKS.md"), "utf8")).rejects.toThrow();
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 
   it("valid invocation context never falls back to process.cwd() or plugin-startup cwd", async () => {
