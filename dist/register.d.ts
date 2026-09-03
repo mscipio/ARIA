@@ -1,5 +1,6 @@
 import { type Plugin } from "@opencode-ai/plugin";
 import type { RoleName } from "./types.js";
+export declare function projectDirectory(input: unknown): string;
 type PermissionAction = "allow" | "ask" | "deny";
 type PermissionRule = PermissionAction | Record<string, PermissionAction>;
 type AgentPermission = Record<string, PermissionRule>;

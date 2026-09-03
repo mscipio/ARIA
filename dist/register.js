@@ -1,4 +1,5 @@
 import { tool } from "@opencode-ai/plugin";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { getPackageRoot } from "./defaults.js";
 import { resolveAriaConfig } from "./overrides.js";
@@ -10,12 +11,69 @@ function stringField(value, key) {
     const field = value[key];
     return typeof field === "string" && field.length > 0 ? field : undefined;
 }
-function projectDirectory(input) {
-    return (stringField(input, "worktree") ??
-        stringField(input?.project, "worktree") ??
-        stringField(input, "directory") ??
-        stringField(input?.project, "directory") ??
+export function projectDirectory(input) {
+    return (meaningfulDirectory(input, "directory") ??
+        meaningfulDirectory(input?.project, "directory") ??
+        meaningfulDirectory(input, "worktree") ??
+        meaningfulDirectory(input?.project, "worktree") ??
         process.cwd());
+}
+/**
+ * Detect whether a directory is a platform filesystem root sentinel
+ * (e.g., `/` on POSIX, `C:\` on Windows) using portable Node path semantics.
+ * Also rejects existing paths whose canonical realpath resolves to the
+ * filesystem root (e.g., a symlink `/tmp/project-link -> /`), so adversarial
+ * symlink-to-root candidates cannot bypass lexical root checks. Missing or
+ * nonexistent paths fall through to the lexical check only — realpath is
+ * best-effort and must not throw for absent candidates.
+ */
+function isFilesystemRoot(dir) {
+    const resolved = path.resolve(dir);
+    const parsed = path.parse(resolved);
+    if (resolved === parsed.root)
+        return true;
+    try {
+        const real = realpathSync(resolved);
+        const realParsed = path.parse(real);
+        return real === realParsed.root;
+    }
+    catch {
+        return false;
+    }
+}
+/**
+ * Return the string field `key` from `value` only when it is a meaningful
+ * directory: non-empty, not a lexical filesystem root sentinel, and (for
+ * existing paths) not a symlink whose canonical realpath resolves to the
+ * filesystem root. Returns undefined otherwise so callers can chain
+ * candidates with `??` without a non-meaningful value (e.g., `/` or a
+ * symlink-to-root) shadowing a later meaningful candidate.
+ */
+function meaningfulDirectory(value, key) {
+    const dir = stringField(value, key);
+    if (dir && !isFilesystemRoot(dir))
+        return dir;
+    return undefined;
+}
+/**
+ * Select the Plan persistence root per-invocation from the ToolContext.
+ * Prefer a meaningful non-root `context.directory` (lexical root and
+ * existing symlink-to-root are both rejected); otherwise fall back to
+ * the meaningful non-root plugin-startup OpenCode directory captured at
+ * plugin init. Never inspects `context.worktree` or `process.cwd()`, so
+ * Plan persistence cannot resolve against the filesystem root sentinel,
+ * a symlink-to-root, or the unrelated process working directory. Throws
+ * when neither directory is meaningful so Plan execution fails clearly
+ * before any Plan API, read, migration, or write.
+ */
+function planInvocationRoot(context, startupDirectory) {
+    if (context.directory && !isFilesystemRoot(context.directory)) {
+        return context.directory;
+    }
+    if (startupDirectory && !isFilesystemRoot(startupDirectory)) {
+        return startupDirectory;
+    }
+    throw new Error("Plan execution requires a meaningful OpenCode directory; neither context.directory nor the plugin-startup directory provided a valid root");
 }
 function pluginOptions(options) {
     const configPath = stringField(options, "configPath");
@@ -539,6 +597,16 @@ function agentDefinitions(config, worktree) {
 export const ariaPlugin = async (input, options = {}) => {
     const directory = projectDirectory(input);
     const config = resolveAriaConfig(directory, pluginOptions(options));
+    // Capture the meaningful startup OpenCode directory for Plan persistence.
+    // Only `directory` candidates are considered (never `worktree`, process.cwd(),
+    // filesystem-root sentinels, or existing symlinks whose canonical realpath
+    // resolves to the filesystem root). Each candidate is validated individually
+    // for meaningfulness BEFORE precedence, so a non-meaningful top-level
+    // input.directory='/' (or a symlink-to-root) cannot shadow a meaningful
+    // input.project.directory.
+    const startupDirectory = meaningfulDirectory(input, "directory") ??
+        meaningfulDirectory(input?.project, "directory") ??
+        "";
     return {
         config: async (runtimeConfig) => {
             runtimeConfig.agent ??= {};
@@ -591,15 +659,16 @@ export const ariaPlugin = async (input, options = {}) => {
                         return formatToolError(error);
                     const ok = (output) => ({ title, output });
                     try {
+                        const root = planInvocationRoot(context, startupDirectory);
                         switch (args.action) {
                             case "get": {
-                                const active = await readActivePlan(directory);
+                                const active = await readActivePlan(root);
                                 return ok(formatPlanOutput(active?.plan ?? null));
                             }
                             case "create": {
                                 if (!args.title || !args.tasks)
                                     return formatToolError("title and tasks are required for create");
-                                return ok(formatPlanOutput(await createPlan(directory, args.title, args.tasks, context.abort)));
+                                return ok(formatPlanOutput(await createPlan(root, args.title, args.tasks, context.abort)));
                             }
                             case "replace": {
                                 if (!args.expectedPlanID)
@@ -609,7 +678,7 @@ export const ariaPlugin = async (input, options = {}) => {
                                 }
                                 if (!args.title || !args.tasks)
                                     return formatToolError("title and tasks are required for replace");
-                                return ok(formatPlanOutput(await replacePlan(directory, args.expectedPlanID, args.expectedRevision, args.title, args.tasks, context.abort)));
+                                return ok(formatPlanOutput(await replacePlan(root, args.expectedPlanID, args.expectedRevision, args.title, args.tasks, context.abort)));
                             }
                             case "add": {
                                 if (!args.expectedPlanID)
@@ -618,7 +687,7 @@ export const ariaPlugin = async (input, options = {}) => {
                                     return formatToolError("expectedRevision is required for add");
                                 if (!args.tasks)
                                     return formatToolError("tasks are required for add");
-                                return ok(formatPlanOutput(await addPlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
+                                return ok(formatPlanOutput(await addPlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
                             }
                             case "remediate": {
                                 if (!args.expectedPlanID)
@@ -627,7 +696,7 @@ export const ariaPlugin = async (input, options = {}) => {
                                     return formatToolError("expectedRevision is required for remediate");
                                 if (!args.tasks)
                                     return formatToolError("tasks are required for remediate");
-                                return ok(formatPlanOutput(await remediatePlanTasks(directory, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
+                                return ok(formatPlanOutput(await remediatePlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
                             }
                             case "update": {
                                 if (!args.expectedPlanID)
@@ -636,21 +705,21 @@ export const ariaPlugin = async (input, options = {}) => {
                                     return formatToolError("expectedRevision is required for update");
                                 if (!args.taskID || !args.status)
                                     return formatToolError("taskID and status are required for update");
-                                return ok(formatPlanOutput(await updatePlanTask(directory, args.expectedPlanID, args.expectedRevision, args.taskID, args.status, args.evidence, context.abort)));
+                                return ok(formatPlanOutput(await updatePlanTask(root, args.expectedPlanID, args.expectedRevision, args.taskID, args.status, args.evidence, context.abort)));
                             }
                             case "approve": {
                                 if (!args.expectedPlanID)
                                     return formatToolError("expectedPlanID is required for approve");
                                 if (args.expectedRevision === undefined)
                                     return formatToolError("expectedRevision is required for approve");
-                                return ok(formatPlanOutput(await approvePlan(directory, args.expectedPlanID, args.expectedRevision, context.abort)));
+                                return ok(formatPlanOutput(await approvePlan(root, args.expectedPlanID, args.expectedRevision, context.abort)));
                             }
                             case "close": {
                                 if (!args.expectedPlanID)
                                     return formatToolError("expectedPlanID is required for close");
                                 if (args.expectedRevision === undefined)
                                     return formatToolError("expectedRevision is required for close");
-                                const closed = await closePlan(directory, args.expectedPlanID, args.expectedRevision, context.abort);
+                                const closed = await closePlan(root, args.expectedPlanID, args.expectedRevision, context.abort);
                                 return ok(formatClosedPlanOutput(closed.plan, closed.archived));
                             }
                             default:
