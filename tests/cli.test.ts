@@ -1,7 +1,11 @@
 import { execFile } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 // CLI-level coverage for bin/aria.mjs dispatch: the doctor branch must use
 // the src/doctor.ts runner/formatter/exit-code contract, and the
@@ -29,6 +33,102 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ co
   }
 }
 
+const configureFixtureRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(configureFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+interface ConfigureFixture {
+  root: string;
+  binCopy: string;
+  workdir: string;
+  recordPath: string;
+  opencodeMarker: string;
+  fakeBinDir: string;
+}
+
+const CONFIGURE_STUB_SOURCE = `import { writeFileSync } from "node:fs";
+export async function configureModels(worktree, options) {
+  const recordPath = process.env.CONFIGURE_FIXTURE_RECORD;
+  if (recordPath) {
+    writeFileSync(
+      recordPath,
+      JSON.stringify({ worktree, argCount: arguments.length, hasOptions: options !== undefined }),
+      "utf8",
+    );
+  }
+  const status = process.env.CONFIGURE_FIXTURE_STATUS ?? "configured";
+  if (status === "configured") return { status: "configured", message: "fixture configured ok" };
+  if (status === "unchanged") return { status: "unchanged", message: "fixture unchanged ok" };
+  if (status === "skipped") return { status: "skipped", message: "fixture skipped ok" };
+  if (status === "failed") return { status: "failed", message: "fixture failed", error: "fixture discovery down" };
+  if (status === "throw") throw new Error("fixture boom");
+  throw new Error("unknown fixture status: " + status);
+}
+`;
+
+/**
+ * Isolated checkout for deterministic configure-dispatch coverage: an exact
+ * copy of the real bin/aria.mjs paired with a stubbed dist/model-config.js.
+ * The stub records its invocation (proving cwd/discovery routing) and returns
+ * a caller-controlled outcome without contacting real providers. The fixture
+ * contains no lifecycle.js/deps.js/doctor.js, so a configure path that
+ * regressed into registration or sync work would fail to resolve its import.
+ */
+async function makeConfigureFixture(): Promise<ConfigureFixture> {
+  const root = await mkdtemp(resolve(tmpdir(), "aria-configure-"));
+  configureFixtureRoots.push(root);
+  const binDir = resolve(root, "bin");
+  const distDir = resolve(root, "dist");
+  const workdir = resolve(root, "worktree");
+  const fakeBinDir = resolve(root, "fakebin");
+  await mkdir(binDir, { recursive: true });
+  await mkdir(distDir, { recursive: true });
+  await mkdir(workdir, { recursive: true });
+  await mkdir(fakeBinDir, { recursive: true });
+
+  const binCopy = resolve(binDir, "aria.mjs");
+  await writeFile(binCopy, readFileSync(binPath, "utf8"), "utf8");
+  await chmod(binCopy, 0o755);
+  await writeFile(resolve(distDir, "model-config.js"), CONFIGURE_STUB_SOURCE, "utf8");
+
+  const recordPath = resolve(root, "configure-call.json");
+  const opencodeMarker = resolve(root, "opencode-called");
+  const fakeOpencode = resolve(fakeBinDir, "opencode");
+  await writeFile(fakeOpencode, `#!/bin/sh\necho "opencode called $@" >> "${opencodeMarker}"\nexit 1\n`, "utf8");
+  await chmod(fakeOpencode, 0o755);
+
+  return { root, binCopy, workdir, recordPath, opencodeMarker, fakeBinDir };
+}
+
+async function runFixtureBin(
+  fixture: ConfigureFixture,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    const result = await execFileAsync(process.execPath, [fixture.binCopy, ...args], {
+      cwd: fixture.workdir,
+      env: {
+        ...process.env,
+        ...env,
+        PATH: `${fixture.fakeBinDir}:${process.env.PATH ?? ""}`,
+      },
+      timeout: CLI_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+  }
+}
+
+function readConfigureCall(recordPath: string): { worktree: string; argCount: number; hasOptions: boolean } {
+  return JSON.parse(readFileSync(recordPath, "utf8")) as { worktree: string; argCount: number; hasOptions: boolean };
+}
+
 describe("bin/aria.mjs doctor dispatch", () => {
   it("help documents the read-only doctor contract while setup/update/deps-sync lines stay unchanged", async () => {
     const result = await runCli(["--help"]);
@@ -37,6 +137,7 @@ describe("bin/aria.mjs doctor dispatch", () => {
     expect(result.stdout).toContain("aria doctor                Read-only health check of ARIA");
     expect(result.stdout).toContain("aria setup                 Register ARIA with OpenCode and synchronize dependencies");
     expect(result.stdout).toContain("aria setup --configure     Then interactively configure ARIA role models");
+    expect(result.stdout).toContain("aria configure             Interactively configure ARIA role models only (no registration or sync)");
     expect(result.stdout).toContain("aria update                Pull latest changes, reinstall, and re-sync dependencies");
     expect(result.stdout).toContain("aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)");
     expect(result.stdout).toContain("aria routes                Print resolved model routes for each ARIA role");
@@ -93,5 +194,113 @@ describe("bin/aria.mjs doctor dispatch", () => {
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Unknown deps subcommand");
     expect(result.stderr).toContain("Usage: aria deps sync");
+  });
+});
+
+describe("bin/aria.mjs configure dispatch", () => {
+  it("rejects an unsupported trailing flag before doing configuration work", async () => {
+    const result = await runCli(["configure", "--bogus"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown configure option");
+    expect(result.stderr).toContain("Usage: aria configure");
+    // Rejected before configuration work: no model-configuration report.
+    expect(result.stdout).not.toContain("Model configuration:");
+  });
+
+  it("maps non-TTY skipped configuration to exit 0 without registration or sync", async () => {
+    // execFile provides no TTY, so configureModels takes its deterministic
+    // non-TTY skipped path before model discovery (no providers needed).
+    const result = await runCli(["configure"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Model configuration: skipped.");
+    // Configure-only never runs the setup phases.
+    expect(result.stdout).not.toContain("Registration:");
+    expect(result.stdout).not.toContain("Sync:");
+  });
+
+  it("executes configured/unchanged/skipped outcomes to exit 0 with cwd routing and no registration or sync", async () => {
+    const fixture = await makeConfigureFixture();
+    // The fixture isolates configure-only to its model-config stub: no
+    // lifecycle/deps/doctor modules exist for the copied CLI to regress into.
+    expect(existsSync(resolve(fixture.root, "dist", "lifecycle.js"))).toBe(false);
+
+    const cases = [
+      { status: "configured", fragment: "[OK] fixture configured ok" },
+      { status: "unchanged", fragment: "unchanged. fixture unchanged ok" },
+      { status: "skipped", fragment: "skipped. fixture skipped ok" },
+    ] as const;
+    for (const { status, fragment } of cases) {
+      await rm(fixture.recordPath, { force: true });
+      await rm(fixture.opencodeMarker, { force: true });
+      const result = await runFixtureBin(fixture, ["configure"], {
+        CONFIGURE_FIXTURE_STATUS: status,
+        CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(`Model configuration: ${fragment}`);
+      expect(result.stdout).not.toContain("Registration:");
+      expect(result.stdout).not.toContain("Sync:");
+      expect(result.stderr).toBe("");
+
+      // Called once with the subprocess cwd and no option overrides, so the
+      // CLI uses the existing implementation with its normal discovery
+      // defaults (deterministically stubbed here, never real providers).
+      const call = readConfigureCall(fixture.recordPath);
+      expect(call.worktree).toBe(fixture.workdir);
+      expect(call.argCount).toBe(1);
+      expect(call.hasOptions).toBe(false);
+      expect(existsSync(fixture.opencodeMarker)).toBe(false);
+    }
+  });
+
+  it("executes failed/thrown outcomes to nonzero with a [FAIL] report", async () => {
+    const fixture = await makeConfigureFixture();
+
+    const failed = await runFixtureBin(fixture, ["configure"], {
+      CONFIGURE_FIXTURE_STATUS: "failed",
+      CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
+    });
+    expect(failed.code).toBe(1);
+    expect(failed.stderr).toContain("Model configuration: [FAIL]");
+    expect(failed.stderr).toContain("fixture discovery down");
+    expect(failed.stdout).not.toContain("Registration:");
+    expect(failed.stdout).not.toContain("Sync:");
+    const failedCall = readConfigureCall(fixture.recordPath);
+    expect(failedCall.worktree).toBe(fixture.workdir);
+    expect(failedCall.argCount).toBe(1);
+    expect(existsSync(fixture.opencodeMarker)).toBe(false);
+
+    await rm(fixture.recordPath, { force: true });
+    await rm(fixture.opencodeMarker, { force: true });
+    const thrown = await runFixtureBin(fixture, ["configure"], {
+      CONFIGURE_FIXTURE_STATUS: "throw",
+      CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
+    });
+    expect(thrown.code).toBe(1);
+    expect(thrown.stderr).toContain("Model configuration: [FAIL]");
+    expect(thrown.stderr).toContain("fixture boom");
+    expect(thrown.stdout).not.toContain("Registration:");
+    expect(thrown.stdout).not.toContain("Sync:");
+    expect(existsSync(fixture.opencodeMarker)).toBe(false);
+  });
+
+  it("rejects a trailing flag in the fixture before invoking configuration work", async () => {
+    const fixture = await makeConfigureFixture();
+
+    const result = await runFixtureBin(fixture, ["configure", "--bogus"], {
+      CONFIGURE_FIXTURE_STATUS: "configured",
+      CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown configure option");
+    expect(result.stderr).toContain("Usage: aria configure");
+    expect(result.stdout).not.toContain("Model configuration:");
+    // Rejected before the dynamic import/call: the stub never ran.
+    expect(existsSync(fixture.recordPath)).toBe(false);
+    expect(existsSync(fixture.opencodeMarker)).toBe(false);
   });
 });

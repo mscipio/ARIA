@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // ARIA CLI — dependency-free, Node standard library only.
-// Supported: aria setup [--configure], aria update, aria deps sync, aria doctor, aria routes, aria --help
+// Supported: aria setup [--configure], aria configure, aria update, aria deps sync, aria doctor, aria routes, aria --help
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,6 +25,7 @@ function usage() {
 Usage:
   aria setup                 Register ARIA with OpenCode and synchronize dependencies
   aria setup --configure     Then interactively configure ARIA role models
+  aria configure             Interactively configure ARIA role models only (no registration or sync)
   aria update                Pull latest changes, reinstall, and re-sync dependencies
   aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
@@ -69,6 +70,40 @@ async function main() {
     const report = await runDoctor();
     console.log(formatDoctorReport(report));
     return doctorExitCode(report.findings);
+  }
+
+  if (command === "configure") {
+    // Configure-only: no trailing operands or options. Runs model
+    // configuration directly without registration or dependency sync.
+    const unexpected = args.slice(1);
+    if (unexpected.length > 0) {
+      console.error(`Unknown configure option: ${unexpected.join(" ")}`);
+      console.error("Usage: aria configure");
+      return 1;
+    }
+
+    try {
+      const { configureModels } = await import("../dist/model-config.js");
+      const result = await configureModels(process.cwd());
+
+      if (result.status === "configured") {
+        console.log(`Model configuration: [OK] ${result.message}`);
+        return 0;
+      }
+      if (result.status === "unchanged") {
+        console.log(`Model configuration: unchanged. ${result.message}`);
+        return 0;
+      }
+      if (result.status === "skipped") {
+        console.log(`Model configuration: skipped. ${result.message}`);
+        return 0;
+      }
+      console.error(`Model configuration: [FAIL] ${result.error || result.message}`);
+      return 1;
+    } catch (err) {
+      console.error(`Model configuration: [FAIL] ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
   }
 
   if (command === "setup") {

@@ -349,6 +349,18 @@ console.log("smoke-package: ok", {
   if (!helpOutput.includes("--configure")) {
     fail("aria --help does not advertise setup --configure");
   }
+  if (!helpOutput.includes("Register ARIA with OpenCode and synchronize dependencies")) {
+    fail("aria --help does not describe setup as register plus sync");
+  }
+  if (!helpOutput.includes("Then interactively configure ARIA role models")) {
+    fail("aria --help does not describe setup --configure as full setup then configure");
+  }
+  if (!helpOutput.includes("aria configure")) {
+    fail("aria --help does not mention configure");
+  }
+  if (!helpOutput.includes("only (no registration or sync)")) {
+    fail("aria --help does not describe configure as configure-only without registration or sync");
+  }
 
   // -------------------------------------------------------------------------
   // Hermetic `aria doctor` smoke: the installed package's real CLI must

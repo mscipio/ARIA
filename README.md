@@ -168,7 +168,7 @@ Restart OpenCode after setup to load the registered plugin.
 
 ## Configuration
 
-ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. Project `aria.json` is read-only; the global file may be created manually or written interactively by `aria setup --configure` (see below).
+ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. Project `aria.json` is read-only; the global file may be created manually or written interactively by `aria setup --configure` or `aria configure` (see below).
 
 | File | Path | Scope |
 |------|------|-------|
@@ -214,6 +214,7 @@ ARIA currently requires three external integrations. ARIA does not fork, vendor,
 ```bash
 aria setup             # Register ARIA plugin with OpenCode and synchronize dependencies
 aria setup --configure # Register ARIA, sync dependencies, then interactively configure role models
+aria configure         # Interactively configure role models only (no registration or sync)
 aria update            # Pull latest changes, reinstall, and re-sync dependencies
 aria deps sync         # Synchronize required integrations (Engram, Context7, CodeGraph)
 aria doctor            # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
@@ -242,6 +243,10 @@ From the top-level menu you may:
 - **Configure roles** — pick roles from a comma-separated list, then for each role keep the current assignment (Enter), reset to the ARIA default (`0`), type an exact model identifier, or search discovered models by case-insensitive substring. A search listing at most ten models offers numbered selection; larger result sets ask you to refine the search.
 
 Choosing a model replaces the role's global `model` field, then a compact variant prompt offers the model's reported variants (`Enter` for no variant, a number to select one), so a stale variant cannot survive a model change. Resetting a role to the ARIA default removes that role's global `model` and `variant` fields rather than writing sentinel or copied values. Only the canonical global `~/.config/opencode/aria.json` is written, atomically, after creating its parent directory. When the canonical file is absent, existing legacy-global choices seed the result only if you make an explicit edit, and no canonical file is created for an unchanged or default-only result when none existed. Project-local `aria.json` files are never written; when a project override masks a global edit, the result reports it and points to `aria routes` as the authoritative resolved-routing view. When stdin is not a terminal, the phase is skipped without failing setup.
+
+### `aria configure`
+
+`aria configure` runs the same interactive role-model configuration as `aria setup --configure`, but standalone: it performs no plugin registration and no dependency sync. It calls the existing model-configuration implementation directly with the current working directory and the normal terminal/discovery defaults, so precedence, masking, atomic canonical-global writes, and project-file immutability are identical to `setup --configure`. `configured`, `unchanged`, and non-TTY `skipped` outcomes exit `0`; discovery/write failures and thrown errors report `Model configuration: [FAIL]` and exit nonzero. Like `setup --configure`, it never writes project-local `aria.json`.
 
 ### `aria update`
 
