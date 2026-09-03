@@ -37,6 +37,14 @@ After processing:
 
 Consult `<PACKAGE_ROOT>/wiki-pipeline/docs/compile-workflow.md` when detailed curation policy is needed.
 
+## Refresh (Archive + Compile)
+
+Refresh enters the existing compile workflow above, curating only the handed-off new sources from the successful `archive-all` invocation in this Refresh.
+
+- The handoff set is never inferred: not from directory scans, timestamps, trackers, or previous runs.
+- On incomplete or ambiguous invocation output, stop without compiling.
+- Standalone Compile never archives.
+
 ## Boundaries
 
 - Raw files are immutable provenance.
@@ -44,3 +52,5 @@ Consult `<PACKAGE_ROOT>/wiki-pipeline/docs/compile-workflow.md` when detailed cu
 - Do not archive automatically before compilation.
 - Do not bridge unrelated external material into the Wiki.
 - Do not infer missing facts from partial retrieval.
+- Compile is agent-driven Wiki read/edit: read each handed-off raw source, then create or update curated pages with the Wiki read/edit grants.
+- No `run.py` compile/update command exists (`run.py` supports only `archive-opencode`, `archive-engram`, `archive-all`, `lint`, `search`, `primer`). Do not search for or invent a compile/update command. This rule fixes the observed lint-then-blocked misbehavior: running lint and then stalling while searching for a compile command.

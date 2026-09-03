@@ -264,6 +264,61 @@ describe("package-owned ARIA skills", () => {
     expect(research).toContain("Do not persist anything to Engram automatically");
   });
 
+  it("keeps archivist Refresh ordered on positive archive reports with stop-on-failure", () => {
+    const archive = skill("aria-wiki-archive");
+    // Refresh runs the existing archive-all operation.
+    expect(archive).toContain("archive-all");
+    expect(archive).toContain("Refresh runs the existing `archive-all` operation above");
+    // Handoff-derivation rule: only the exact filenames positively reported as
+    // newly written by that successful current invocation.
+    expect(archive).toContain("only the exact filenames positively reported as newly written");
+    expect(archive).toContain("successful current invocation");
+    // No-compile-on-failure and no-compile-on-zero.
+    expect(archive).toContain("On archive failure or an ambiguous partial result, stop with no compile");
+    expect(archive).toContain("successful no-op");
+    expect(archive).toContain("nothing to compile");
+    // Standalone isolation: Archival still stops after archival.
+    expect(archive).toContain("Standalone Archival still reports what was archived and stops");
+    // Archive surface and raw immutability intact.
+    expect(archive).toContain("archive-opencode");
+    expect(archive).toContain("archive-engram");
+    expect(archive).toContain("Archival does not compile");
+    expect(archive).toContain("Raw files are immutable provenance");
+    // No shell surface beyond the documented commands.
+    expect(archive).not.toContain("run.py compile");
+    expect(archive).not.toContain("run.py update");
+    expect(archive).not.toContain("python -c");
+  });
+
+  it("keeps compile Refresh curated-only with no shell-compile direction", () => {
+    const compile = skill("aria-wiki-compile");
+    // Refresh enters the existing workflow curating only handed-off new sources.
+    expect(compile).toContain("curating only the handed-off new sources");
+    // Handoff-derivation rule: never inferred; stop on ambiguous.
+    expect(compile).toContain("never inferred");
+    expect(compile).toContain("directory scans");
+    expect(compile).toContain("timestamps");
+    expect(compile).toContain("trackers");
+    expect(compile).toContain("previous runs");
+    expect(compile).toContain("On incomplete or ambiguous invocation output, stop without compiling");
+    // Standalone isolation: Compile never archives.
+    expect(compile).toContain("Standalone Compile never archives");
+    // No shell-compile direction: no run.py compile/update exists; never search for/invent one.
+    expect(compile).toContain("No `run.py` compile/update command exists");
+    expect(compile).toContain("Do not search for or invent a compile/update command");
+    expect(compile).not.toContain("run.py compile");
+    expect(compile).not.toContain("run.py update");
+    expect(compile).not.toContain("python -c");
+    // Compile stays agent-driven Wiki read/edit.
+    expect(compile).toContain("agent-driven Wiki read/edit");
+    // Existing workflow intact: indexes/log regen and lint/primer conditions.
+    expect(compile).toContain("regenerate `wiki/index.md`");
+    expect(compile).toContain("append creates/updates/skips and rationale to `wiki/log.md`");
+    expect(compile).toContain("only when structural change makes it useful");
+    expect(compile).toContain("when useful");
+    expect(compile).toContain("Raw files are immutable provenance");
+  });
+
   it("keeps the Zotero tutor bounded to chat-first source-grounded pedagogy", () => {
     const tutor = skill("aria-zotero-tutor");
     // Exact frontmatter contract, including OpenCode compatibility.

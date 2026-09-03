@@ -407,4 +407,25 @@ describe("ARIA defaults", () => {
     // No archivist coupling to the scientist.
     expect(config.roles["archivist"].promptText).not.toContain("scientist");
   });
+
+  it("archivist prompt routes four explicit modes with Refresh as the only transition", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles["archivist"].promptText;
+    // Four-mode contract.
+    expect(prompt).toContain("**Lookup:**");
+    expect(prompt).toContain("**Archival:**");
+    expect(prompt).toContain("**Compile / Update:**");
+    expect(prompt).toContain("**Refresh / Archive + Compile:**");
+    // Explicit archive-and-compile requests select Refresh.
+    expect(prompt).toContain("refresh the wiki");
+    // Refresh ordering: archive first, then compile.
+    const refreshLine = prompt.split("\n").find((line) => line.includes("Refresh / Archive + Compile")) ?? "";
+    expect(refreshLine).toContain("`aria-wiki-archive` first");
+    expect(refreshLine).toContain("then `aria-wiki-compile`");
+    // No-transition-by-default preserved, with Refresh as the only exception.
+    expect(prompt).toContain("Never run a different mode as a fallback");
+    expect(prompt).toContain("Never archive automatically, compile after archival automatically");
+    expect(prompt).toContain("The only exception is Refresh");
+    expect(prompt).toContain("when the original request explicitly selected Refresh");
+    expect(prompt).toContain("after archival succeeds");
+  });
 });

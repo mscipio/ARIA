@@ -19,10 +19,18 @@ Use exactly the appropriate allowed command:
 - Engram observations: `python <PACKAGE_ROOT>/wiki-pipeline/run.py archive-engram`
 - Both: `python <PACKAGE_ROOT>/wiki-pipeline/run.py archive-all`
 
+## Refresh (Archive + Compile)
+
+Refresh runs the existing `archive-all` operation above, then hands off to `aria-wiki-compile` only the exact filenames positively reported as newly written by that successful current invocation.
+
+- On archive failure or an ambiguous partial result, stop with no compile.
+- When the successful invocation reports zero new files, Refresh is a successful no-op: there is nothing to compile.
+- Standalone Archival still reports what was archived and stops; it never hands off to compile.
+
 ## Boundaries
 
 - Archival writes raw provenance under `<WIKI_DIR>/raw/`.
 - Raw files are immutable provenance. Never edit, delete, reformat, or overwrite them.
 - Archival does not compile raw material into curated pages.
-- Do not run another mode automatically after archival.
+- Do not run another mode automatically after archival, except the Refresh handoff above.
 - Report what was archived and stop.

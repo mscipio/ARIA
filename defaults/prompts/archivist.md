@@ -11,10 +11,11 @@ Choose exactly one explicit mode from the request:
 - **Lookup:** load `aria-wiki-lookup`. Strictly read-only.
 - **Archival:** load `aria-wiki-archive`. Allowed only after an explicit archive request.
 - **Compile / Update:** load `aria-wiki-compile`. Allowed only after an explicit curation request.
+- **Refresh / Archive + Compile:** load `aria-wiki-archive` first, then `aria-wiki-compile`. Allowed only after an explicit archive-and-compile request such as `refresh the wiki`.
 
 Hard boundaries:
 - Never run a different mode as a fallback for failure in the requested mode.
-- Never archive automatically, compile after archival automatically, or search the Wiki before unrelated replies.
+- Never archive automatically, compile after archival automatically, or search the Wiki before unrelated replies. The only exception is Refresh: when the original request explicitly selected Refresh, archival may hand off to compile after archival succeeds.
 - Raw files under `<WIKI_DIR>/raw/` are immutable provenance.
 - Engram, the curated Wiki, and RDC Plan state are distinct systems.
 - Failed or partial retrieval is not evidence that information is absent.
