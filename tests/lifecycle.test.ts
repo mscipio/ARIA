@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -96,37 +96,19 @@ function binaryUrl(checkout: string): string {
   return pathToFileURL(resolve(checkout, "bin", "aria.mjs")).href;
 }
 
-/** Introspection output with the given plugin registered (real OpenCode format) */
-function debugInfoWithPlugin(uri: string): string {
-  return [
-    "OpenCode Debug Info",
-    "Version: 1.18.16",
-    "plugins:",
-    `  - ${uri}`,
-    "Other:",
-    "  value",
-  ].join("\n");
+/** V2 `plugin list` output with the given target registered (real 2.0.23 table format) */
+function pluginListWithTarget(target: string): string {
+  return ["ID  VERSION  SOURCE", `aria  local  ${target}`].join("\n");
 }
 
-/** Introspection output with plugins section but no entries */
-function debugInfoEmptyPlugins(): string {
-  return [
-    "OpenCode Debug Info",
-    "Version: 1.18.16",
-    "plugins:",
-    "Other:",
-    "  value",
-  ].join("\n");
+/** V2 `plugin list` output when no plugins are configured */
+function pluginListEmpty(): string {
+  return "No plugins found";
 }
 
-/** Introspection output without any plugins section */
-function debugInfoNoPluginsSection(): string {
-  return [
-    "OpenCode Debug Info",
-    "Version: 1.18.16",
-    "Other:",
-    "  value",
-  ].join("\n");
+/** Unrecognized output (no V2 table header) for the compatibility-fallback path */
+function pluginListUnrecognized(): string {
+  return ["OpenCode Debug Info", "Version: 1.18.16", "Other:", "  value"].join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +226,6 @@ describe("parsePluginSpecifiers", () => {
 describe("setup", () => {
   it("registers the plugin then runs depsSync on first setup", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -259,8 +240,8 @@ describe("setup", () => {
     };
 
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
-      [`opencode plugin ${uri} --global`]: { stdout: "plugin registered" },
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { stdout: "plugin registered" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -274,7 +255,6 @@ describe("setup", () => {
 
   it("reports already registered when plugin URI is in introspected plugins list", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -289,7 +269,7 @@ describe("setup", () => {
     };
 
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoWithPlugin(uri) },
+      "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -297,24 +277,17 @@ describe("setup", () => {
     expect(result.ok).toBe(true);
     expect(result.stage).toBe("complete");
     expect(result.setup!.registration.action).toBe("already registered");
-    expect(result.setup!.registration.detail).toContain("introspection");
+    expect(result.setup!.registration.detail).toContain("plugin list");
     expect(result.setup!.sync.ok).toBe(true);
     expect(depsSyncCalled).toBe(true);
   });
 
-  it("detects already-registered plugin from same-indent - list entry in introspection output", async () => {
+  it("detects already-registered plugin from a TUI-only list entry (ID dash) by target", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
-    // Same-indent output: the - list marker is at the same indent as "plugins:"
-    const debugOutput = [
-      "OpenCode Debug Info",
-      "Version: 1.18.16",
-      "plugins:",
-      `- ${uri}`,
-      "Other:",
-      "  value",
-    ].join("\n");
+    // V2 `plugin list` reports config-only (TUI) local plugins with ID "-";
+    // detection keys on the SOURCE target, not the ID column.
+    const debugOutput = ["ID  VERSION  SOURCE", `-  local  ${checkout}`].join("\n");
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -330,7 +303,7 @@ describe("setup", () => {
 
     // Only configure introspection — any registration attempt would fail
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugOutput },
+      "opencode plugin list": { stdout: debugOutput },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -344,7 +317,6 @@ describe("setup", () => {
 
   it("does not run depsSync when registration fails with a real error", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -353,8 +325,8 @@ describe("setup", () => {
     };
 
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
-      [`opencode plugin ${uri} --global`]: { error: "permission denied" },
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { error: "permission denied" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -367,7 +339,6 @@ describe("setup", () => {
 
   it("falls back when introspection is unavailable and explicit duplicate is treated as already registered", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -377,8 +348,8 @@ describe("setup", () => {
 
     // Introspection fails, registration reports "already registered"
     const executor = mockExecutor({
-      "opencode debug info": { error: "command not found" },
-      [`opencode plugin ${uri} --global`]: { error: "Error: plugin already registered" },
+      "opencode plugin list": { error: "command not found" },
+      [`opencode plugin add ${checkout}`]: { error: "Error: plugin already registered" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -391,7 +362,6 @@ describe("setup", () => {
 
   it("fails closed on fallback when registration error is not a duplicate", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -400,8 +370,8 @@ describe("setup", () => {
     };
 
     const executor = mockExecutor({
-      "opencode debug info": { error: "command not found" },
-      [`opencode plugin ${uri} --global`]: { error: "unknown error" },
+      "opencode plugin list": { error: "command not found" },
+      [`opencode plugin add ${checkout}`]: { error: "unknown error" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -414,7 +384,6 @@ describe("setup", () => {
 
   it("falls back to compatibility when introspection output has no plugins section", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -424,9 +393,9 @@ describe("setup", () => {
 
     // Introspection returns output without a plugins section → unrecognized format
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoNoPluginsSection() },
+      "opencode plugin list": { stdout: pluginListUnrecognized() },
       // Fallback: attempt registration succeeds
-      [`opencode plugin ${uri} --global`]: { stdout: "plugin registered via fallback" },
+      [`opencode plugin add ${checkout}`]: { stdout: "plugin registered via fallback" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -438,7 +407,6 @@ describe("setup", () => {
 
   it("treats 'already configured' as already registered in compatibility fallback", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -448,8 +416,8 @@ describe("setup", () => {
 
     // Introspection fails, registration reports "already configured"
     const executor = mockExecutor({
-      "opencode debug info": { error: "command not found" },
-      [`opencode plugin ${uri} --global`]: { error: "Error: plugin already configured" },
+      "opencode plugin list": { error: "command not found" },
+      [`opencode plugin add ${checkout}`]: { error: "Error: plugin already configured" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -462,7 +430,6 @@ describe("setup", () => {
 
   it("reports sync failure when depsSync returns ok=false", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     const mockDepsSync = async () => ({
       ok: false,
@@ -472,7 +439,7 @@ describe("setup", () => {
     });
 
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoWithPlugin(uri) },
+      "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -486,14 +453,13 @@ describe("setup", () => {
 
   it("catches depsSync throwing and reports as sync error", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     const mockDepsSync = async () => {
       throw new Error("unexpected crash");
     };
 
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoWithPlugin(uri) },
+      "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -511,7 +477,7 @@ describe("setup", () => {
     expect(uri).toContain("my%20project%20(v2)");
 
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoWithPlugin(uri) },
+      "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
     const result = await setup(binaryUrl(checkout), executor, async () => ({
@@ -527,7 +493,6 @@ describe("setup", () => {
   // T010: recognized-empty plugins section falls through to compatibility fallback
   it("falls back to compatibility when plugins section is recognized but empty", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -543,8 +508,8 @@ describe("setup", () => {
 
     // Introspection returns an empty plugins section (recognized=true, specifiers=[])
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
-      [`opencode plugin ${uri} --global`]: { stdout: "plugin registered via fallback" },
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { stdout: "plugin registered via fallback" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
@@ -557,7 +522,6 @@ describe("setup", () => {
   // T011: run() helper preserves stdout from error, enabling "already configured" detection
   it("preserves stdout from failed exec to detect already configured in compatibility fallback", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     let depsSyncCalled = false;
     const mockDepsSync = async () => {
@@ -575,10 +539,10 @@ describe("setup", () => {
     // "already configured" — tests that run() extracts stdout from the error object.
     const executor: Executor = async (command, args, _options) => {
       const key = `${command} ${args.join(" ")}`;
-      if (key === "opencode debug info") {
+      if (key === "opencode plugin list") {
         throw new Error("command not found: opencode");
       }
-      if (key === `opencode plugin ${uri} --global`) {
+      if (key === `opencode plugin add ${checkout}`) {
         const err = Object.assign(new Error("Command failed: exit code 1"), {
           stdout: "plugin already configured",
           stderr: "some error detail",
@@ -598,16 +562,109 @@ describe("setup", () => {
 });
 
 // ---------------------------------------------------------------------------
+// setup --plugin-spec (T012 Git-package source)
+// ---------------------------------------------------------------------------
+
+describe("setup --plugin-spec", () => {
+  const SPEC = "github:mscipio/ARIA#0123456789abcdef0123456789abcdef01234567";
+
+  async function tempFiles() {
+    const root = await mkdtemp(resolve(tmpdir(), "rdc-plugin-spec-"));
+    tempDirs.push(root);
+    return {
+      globalConfigPath: resolve(root, "opencode.json"),
+      agentsDir: resolve(root, "agents"),
+      skillsRoot: resolve(root, "skills"),
+    };
+  }
+
+  const okSync = async () => ({ ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
+
+  it("registers the spec verbatim via plugin add with no file:// conversion and no --global", async () => {
+    const checkout = await makeFixtureCheckout();
+    const files = await tempFiles();
+    const { executor, calls } = collectingExecutor({
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${SPEC}`]: { stdout: "plugin installed" },
+    });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { files, pluginSpec: SPEC });
+
+    expect(result.ok).toBe(true);
+    expect(result.stage).toBe("complete");
+    expect(result.setup!.registration.action).toBe("registered");
+    const addCalls = calls.filter((call) => call.command === "opencode" && call.args[0] === "plugin" && call.args[1] === "add");
+    expect(addCalls.length).toBe(1);
+    expect(addCalls[0]!.args).toEqual(["plugin", "add", SPEC]);
+    // The config-file truth names the same Git package (exactly once), never
+    // the local checkout URI.
+    const written = JSON.parse(await readFile(files.globalConfigPath, "utf8")) as { plugins?: unknown };
+    expect(written.plugins).toEqual([SPEC]);
+  });
+
+  it("treats a listed spec as already registered without calling plugin add", async () => {
+    const checkout = await makeFixtureCheckout();
+    const files = await tempFiles();
+    const listed = ["ID  VERSION  SOURCE", `aria  pinned  ${SPEC}`].join("\n");
+    const { executor, calls } = collectingExecutor({
+      "opencode plugin list": { stdout: listed },
+    });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { files, pluginSpec: SPEC });
+
+    expect(result.ok).toBe(true);
+    expect(result.setup!.registration.action).toBe("already registered");
+    expect(calls.some((call) => call.args.includes("add"))).toBe(false);
+  });
+
+  it("re-registers the spec when a different source holds the aria id", async () => {
+    const checkout = await makeFixtureCheckout();
+    const files = await tempFiles();
+    const listed = ["ID  VERSION  SOURCE", "aria  local  /somewhere/else"].join("\n");
+    const { executor, calls } = collectingExecutor({
+      "opencode plugin list": { stdout: listed },
+      [`opencode plugin add ${SPEC}`]: { stdout: "plugin installed" },
+    });
+
+    const result = await setup(binaryUrl(checkout), executor, okSync, { files, pluginSpec: SPEC });
+
+    expect(result.ok).toBe(true);
+    expect(result.setup!.registration.action).toBe("registered");
+    const addCalls = calls.filter((call) => call.command === "opencode" && call.args[0] === "plugin" && call.args[1] === "add");
+    expect(addCalls.length).toBe(1);
+    expect(addCalls[0]!.args).toEqual(["plugin", "add", SPEC]);
+  });
+
+  it("fails closed on an empty spec before sync or file writes", async () => {
+    const checkout = await makeFixtureCheckout();
+    const files = await tempFiles();
+    let syncCalled = false;
+    const executor: Executor = async () => {
+      throw new Error("executor must not be called for an empty spec");
+    };
+
+    const result = await setup(binaryUrl(checkout), executor, async () => {
+      syncCalled = true;
+      return { ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } };
+    }, { files, pluginSpec: "" });
+
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("registration");
+    expect(result.setup!.registration.action).toBe("failed");
+    expect(syncCalled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // setup return values for CLI formatting
 // ---------------------------------------------------------------------------
 
 describe("setup return values for CLI formatting", () => {
   it("first registration returns registered + sync ok", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
-      [`opencode plugin ${uri} --global`]: { stdout: "plugin registered" },
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { stdout: "plugin registered" },
     });
     const mockSync = async () => ({ ok: true, engram: { action: "synced" }, context7: { action: "configured" }, codegraph: { action: "synced" } });
     const result = await setup(binaryUrl(checkout), executor, mockSync);
@@ -618,8 +675,7 @@ describe("setup return values for CLI formatting", () => {
 
   it("already registered via introspection", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
     const mockSync = async () => ({ ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
     const result = await setup(binaryUrl(checkout), executor, mockSync);
     expect(result.ok).toBe(true);
@@ -629,10 +685,9 @@ describe("setup return values for CLI formatting", () => {
 
   it("registration failure blocks sync", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
     const executor = mockExecutor({
-      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
-      [`opencode plugin ${uri} --global`]: { error: "permission denied" },
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { error: "permission denied" },
     });
     const mockSync = async () => { throw new Error("should not be called"); };
     const result = await setup(binaryUrl(checkout), executor, mockSync);
@@ -643,8 +698,7 @@ describe("setup return values for CLI formatting", () => {
 
   it("sync failure reported", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
     const mockSync = async () => ({ ok: false, engram: { action: "failed", error: "timeout" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
     const result = await setup(binaryUrl(checkout), executor, mockSync);
     expect(result.ok).toBe(false);
@@ -662,12 +716,11 @@ describe("setup optional model configuration phase", () => {
 
   it("default setup makes no discovery or prompt call", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     const configureModelsFn = vi.fn(async () => {
       throw new Error("model configuration must not run");
     });
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
     const result = await setup(binaryUrl(checkout), executor, okSync, { configureModelsFn });
 
@@ -679,13 +732,12 @@ describe("setup optional model configuration phase", () => {
 
   it("does not run the optional phase when registration or sync fails", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
     const configureModelsFn = vi.fn(async () => ({ status: "configured" as const, message: "done" }));
 
     // Registration failure short-circuits before sync and configuration.
     const failingRegistration = mockExecutor({
-      "opencode debug info": { stdout: debugInfoEmptyPlugins() },
-      [`opencode plugin ${uri} --global`]: { error: "permission denied" },
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { error: "permission denied" },
     });
     const registrationResult = await setup(binaryUrl(checkout), failingRegistration, okSync, {
       configure: true,
@@ -694,7 +746,7 @@ describe("setup optional model configuration phase", () => {
     expect(registrationResult.stage).toBe("registration");
 
     // Sync failure short-circuits before configuration.
-    const failingSync = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const failingSync = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
     const syncResult = await setup(binaryUrl(checkout), failingSync, async () => ({
       ok: false,
       engram: { action: "install-failed", error: "download failed" },
@@ -708,11 +760,10 @@ describe("setup optional model configuration phase", () => {
 
   it("runs the optional phase only after successful registration and sync", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
     const worktree = "/tmp/example-worktree";
 
     const configureModelsFn = vi.fn(async () => ({ status: "configured" as const, message: "done" }));
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
     const result = await setup(binaryUrl(checkout), executor, okSync, {
       configure: true,
@@ -731,14 +782,13 @@ describe("setup optional model configuration phase", () => {
 
   it("reports a failed model phase without regressing registration or sync invariants", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     const configureModelsFn = vi.fn(async () => ({
       status: "failed" as const,
       message: "Model configuration could not be written; no changes were persisted.",
       error: "discovery down",
     }));
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
     const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
 
@@ -752,12 +802,11 @@ describe("setup optional model configuration phase", () => {
 
   it("reports a thrown model-phase error as a distinct stage without regressing setup", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     const configureModelsFn = vi.fn(async () => {
       throw new Error("unexpected crash");
     });
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
     const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
 
@@ -771,13 +820,12 @@ describe("setup optional model configuration phase", () => {
 
   it("treats a non-TTY skipped model phase as successful setup", async () => {
     const checkout = await makeFixtureCheckout();
-    const uri = pathToFileURL(checkout).href;
 
     const configureModelsFn = vi.fn(async () => ({
       status: "skipped" as const,
       message: "stdin is not a terminal",
     }));
-    const executor = mockExecutor({ "opencode debug info": { stdout: debugInfoWithPlugin(uri) } });
+    const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
     const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
 

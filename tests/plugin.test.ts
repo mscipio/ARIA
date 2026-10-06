@@ -4,8 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, parse, relative, resolve } from "node:path";
 
-import ariaPlugin, { ariaPlugin as pluginModule } from "../src/index";
-import { projectDirectory } from "../src/register";
+import { ariaPlugin as ariaServer, projectDirectory } from "../src/register";
+
+// T002: the package entrypoint (src/index.ts) is now the native V2 minimal
+// foundation. These V1 behavior tests intentionally target the preserved V1
+// source (src/register.ts) until T003+ migrates agents/permissions/plan tool.
+const server = ariaServer;
+const pluginModule = { id: "aria", server };
+const ariaPlugin = pluginModule;
 import { getPackageRoot } from "../src/defaults";
 
 /**
@@ -60,7 +66,6 @@ function evaluateSkillPermissionExactOrWildcardLastWins(
   };
 }
 
-const server = pluginModule.server;
 const tempDirs: string[] = [];
 const plugins: Array<Awaited<ReturnType<typeof server>>> = [];
 

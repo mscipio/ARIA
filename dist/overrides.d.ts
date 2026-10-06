@@ -1,4 +1,5 @@
-import type { AriaPluginOptions, AriaProjectOverrides, ResolvedAriaConfig } from "./types.js";
+import type { AriaPluginOptions, AriaProjectOverrides, ResolvedAriaConfig, RoleName } from "./types.js";
+export declare const ROLES: RoleName[];
 declare class ConfigValidationError extends Error {
     constructor(filePath: string, path: string, got: unknown, want: string);
 }
@@ -19,7 +20,9 @@ export declare function readGlobalAriaOverrides(): AriaProjectOverrides;
  * on which project fields are pinned.
  *
  * Path discovery: an explicit `options.configPath` wins; otherwise prefer
- * `aria.json` and fall back to the legacy filename.
+ * `aria.json` and fall back to the legacy filename. `options.skipProject`
+ * (T008) returns {} without touching the filesystem, for global-only
+ * resolution.
  */
 export declare function readProjectAriaOverrides(worktree: string, options?: AriaPluginOptions): AriaProjectOverrides;
 export declare function resolveAriaConfig(worktree: string, options?: AriaPluginOptions, metaUrl?: string): ResolvedAriaConfig;

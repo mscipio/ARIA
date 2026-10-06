@@ -12,6 +12,16 @@ import {
   type ModelConfigureOptions,
   type ModelConfigureOutput,
 } from "./model-config.js";
+import { defaultAgentsDir, installAgentFiles, rollbackAgentInstall, type AgentInstallResult } from "./agents.js";
+import {
+  defaultGlobalConfigPath,
+  ensureAriaSetupConfigFile,
+  isSameLocalPluginIdentity,
+  resolveSetupAriaConfig,
+  rollbackSetupConfigFile,
+  type SetupConfigFileResult,
+} from "./setup-config.js";
+import { getPackageSkillsRoot } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,8 +37,40 @@ export interface LifecycleResult {
 export interface SetupResult {
   registration: { action: "registered" | "already registered" | "failed"; detail?: string };
   sync: { ok: boolean; output?: string; error?: string };
+  /**
+   * Outcome of the global V2 config phase (T008). Always present unless
+   * registration failed first.
+   */
+  config?: SetupConfigPhase;
+  /**
+   * Outcome of the managed agent-file phase (T008). Always present unless
+   * registration or config failed first.
+   */
+  agents?: SetupAgentsPhase;
   /** Outcome of the optional model-configuration phase; absent unless requested. */
   model?: ModelConfigurationResult;
+}
+
+/**
+ * T008 file-phase outcomes: global `opencode.json` (exact plugin URI,
+ * single skills root, depth default 3; unrelated user keys preserved,
+ * backup before replace, idempotent) and the eleven managed agent files
+ * (via T003 `installAgentFiles`, resolved project-neutral).
+ */
+export interface SetupConfigPhase {
+  path: string;
+  changed: boolean;
+  created: boolean;
+  backupPath?: string;
+  detail?: string;
+}
+
+export interface SetupAgentsPhase {
+  dir: string;
+  version: string;
+  written: number;
+  unchanged: number;
+  detail?: string;
 }
 
 /**
@@ -57,6 +99,36 @@ export interface SetupOptions {
   tty?: boolean;
   /** Model-configuration seam (defaults to the real `configureModels`). */
   configureModelsFn?: ConfigureModelsFn;
+  /**
+   * T012 Git-package source (`aria setup --plugin-spec <spec>`): explicit
+   * `opencode plugin add` package specifier (e.g.
+   * `github:mscipio/ARIA#<EXACT_SHA>`). Used verbatim as the registration
+   * argument and the config-file plugin identity — never rewritten to a
+   * `file://` URI, never given `--global` (2.0.23 documents no such flag for
+   * `plugin add`). Absent preserves the local-checkout behavior (absolute
+   * checkout path, no `file://` scheme, no invented flags).
+   */
+  pluginSpec?: string;
+  /**
+   * T008 file-phase path overrides (all optional; omitted values resolve to
+   * the production defaults: global `opencode.json`, global agents dir, and
+   * the installed package skills root). Tests point these at temp dirs; no
+   * workstation files are touched outside the resolved paths.
+   */
+  files?: SetupFilesOptions;
+}
+
+/**
+ * Path overrides for the T008 setup file phases. Every field is optional;
+ * omitted fields resolve to the production defaults.
+ */
+export interface SetupFilesOptions {
+  /** Global V2 config path (defaults to `~/.config/opencode/opencode.json`). */
+  globalConfigPath?: string;
+  /** Managed agent directory (defaults to `~/.config/opencode/agents/`). */
+  agentsDir?: string;
+  /** Version-locked skills root (defaults to the installed package `skills/`). */
+  skillsRoot?: string;
 }
 
 export interface CommandResult {
@@ -123,13 +195,149 @@ async function run(
 }
 
 // ---------------------------------------------------------------------------
-// Introspection via opencode debug info
+// Introspection via `opencode plugin list` (V2, pinned 2.0.23)
 // ---------------------------------------------------------------------------
+//
+// Pinned 2.0.23 contract (isolated `opencode` 2.0.23 binary, exact `--help`
+// evidence; workstation 1.18.34 untouched):
+// - `opencode plugin --help` lists subcommands
+//   list/add/check/update/remove (no bare `plugin <module>` V1 form; bare
+//   `plugin file://...` fails with `Unknown subcommand`).
+// - `opencode plugin add --help` shows
+//   `USAGE opencode plugin add [flags] <package>` with
+//   `package string npm registry or Git package specifier` and no `--global`
+//   flag (`plugin add ... --global` fails with `Unrecognized flag: --global`).
+// - `opencode debug --help` lists subcommands agents/config/paths only;
+//   `debug info` fails with `Unknown subcommand "info"`.
+// - `opencode plugin list --help` shows `USAGE opencode plugin list [flags]`
+//   with an optional `--builtin` flag. Its table output (see
+//   `packages/cli/src/commands/handlers/plugin/list.ts` `format()`) is a
+//   `ID  VERSION  SOURCE` header followed by one row per plugin, or the
+//   literal `No plugins found` when empty. Local entries report VERSION
+//   `local` and SOURCE as the absolute filesystem path (via `fileURLToPath`,
+//   never a `file://` URI); TUI-only entries use ID `-`.
+// - `plugin add` installs npm/Git specs only (see
+//   `packages/cli/src/commands/handlers/plugin/add.ts` plus
+//   `packages/util/src/npm.ts` `parse()`: only npm-package-arg `version`,
+//   `range`, `tag`, and `git` types are installable; `directory`/`file`/
+//   `link` specs fail with
+//   `Plugin target must be an npm registry package or Git package specifier`
+//   before any install or config mutation). Local directories therefore
+//   register through the global-config `plugins[]` file truth (see
+//   `packages/core/src/config/plugin/source.ts` `scan()` + `localSource()`:
+//   `file://`, absolute-path, and `./`/`../` entries all resolve to local),
+//   which T008 `ensureAriaSetupConfigFile` already writes with backup.
+// - `plugin add` already targets the global configuration (its description
+//   is `Install a plugin and add it to the global configuration`), so no
+//   `--global` flag exists or is passed (no invented flags).
+//
+// Registration therefore uses `opencode plugin add <package>` with the T012
+// `--plugin-spec` verbatim when given (a Git spec installs directly, no
+// conversion), otherwise the narrowest local argument (the absolute checkout
+// directory path: no `file://` scheme, no `--global`, no invented flags).
+// When the pinned runtime rejects that local path with its exact npm/Git-only
+// message, setup proceeds to the supported config-file local registration
+// below instead of failing closed on an expected CLI limitation; every other
+// registration error still fails closed before any file mutation or sync.
+
+/**
+ * V2 `opencode plugin list` table entry (ID/VERSION/SOURCE columns).
+ */
+export interface PluginListEntry {
+  id: string;
+  version: string;
+  /** SOURCE column: absolute local path for local plugins, package spec otherwise. */
+  target: string;
+}
+
+/**
+ * Parse V2 `opencode plugin list` output into table entries.
+ * Recognized shapes: the `ID  VERSION  SOURCE` header followed by rows, or
+ * the literal `No plugins found` (recognized empty). Anything else is
+ * unrecognized (never guessed).
+ */
+function parsePluginList(output: string): { recognized: boolean; entries: PluginListEntry[] } {
+  const lines = output.split("\n");
+  if (lines.some((line) => line.trim().toLowerCase() === "no plugins found")) {
+    return { recognized: true, entries: [] };
+  }
+  const headerIndex = lines.findIndex((line) => /^\s*ID\s+VERSION\s+SOURCE\s*$/i.test(line));
+  if (headerIndex === -1) {
+    return { recognized: false, entries: [] };
+  }
+  const entries: PluginListEntry[] = [];
+  for (let index = headerIndex + 1; index < lines.length; index++) {
+    const line = lines[index]!;
+    if (line.trim() === "") continue;
+    // ID and VERSION contain no spaces; SOURCE is the remainder (paths may
+    // contain spaces, e.g. "my project (v2)").
+    const match = line.trim().match(/^(\S+)\s+(\S+)\s+(.+)$/);
+    if (!match?.[1] || !match[2] || !match[3]) continue;
+    entries.push({ id: match[1], version: match[2], target: match[3].trim() });
+  }
+  return { recognized: true, entries };
+}
+
+/**
+ * Local-identity match for `plugin list` SOURCE entries (one consistent
+ * T008 rule, owned by `src/setup-config.ts`): an absolute path and its
+ * corresponding `file://` URI are one identity. The SOURCE column reports
+ * absolute paths for local plugins, so the checkout path compares directly
+ * and `file://` equivalence is accepted for config-file forms. Bare npm
+ * names, remote URLs, and unrelated specifiers match only on exact
+ * equality (existing symlink/realpath behavior preserved: lexical only).
+ */
+function matchesCurrentPluginTarget(target: string, checkout: string, pluginUri: string): boolean {
+  return isSameLocalPluginIdentity(target, checkout) || isSameLocalPluginIdentity(target, pluginUri);
+}
+
+/**
+ * Interpret a `opencode plugin add <package>` result. Success reports
+ * `registered` (or `already registered` when the runtime confirms the spec
+ * is already configured). Failure reports `already registered` for duplicate
+ * diagnostics, follows the documented local-directory path when the pinned
+ * runtime rejects a local path with its exact npm/Git-only message (the
+ * check happens before any install or config mutation, so falling through
+ * to the supported config-file registration below is side-effect-free), and
+ * otherwise fails closed.
+ */
+function interpretPluginAddResult(
+  pluginResult: CommandResult,
+  packageArg: string,
+): { action: "registered" | "already registered" | "failed"; detail?: string } {
+  if (pluginResult.ok) {
+    if (`${pluginResult.stdout} ${pluginResult.stderr}`.toLowerCase().includes("already configured")) {
+      return { action: "already registered", detail: "plugin already configured (reported by plugin add)" };
+    }
+    return { action: "registered" };
+  }
+  const combined = `${pluginResult.stderr} ${pluginResult.stdout}`.toLowerCase();
+  const isDuplicate =
+    combined.includes("already registered") ||
+    combined.includes("duplicate") ||
+    combined.includes("already exists") ||
+    combined.includes("already configured");
+  if (isDuplicate) {
+    return { action: "already registered", detail: "treated as already registered (compatibility fallback)" };
+  }
+  if (combined.includes("must be an npm registry package or git package specifier")) {
+    return {
+      action: "registered",
+      detail:
+        "plugin add does not install local directories (2.0.23 registry/Git only); proceeding to config-file registration",
+    };
+  }
+  return { action: "failed", detail: `opencode plugin add ${packageArg} failed: ${pluginResult.stderr}` };
+}
 
 /**
  * Parse the `opencode debug info` output to find registered plugin URIs.
- * Returns the list of plugin specifier strings found in the plugins section
- * and whether a plugins section was recognized at all.
+ *
+ * @deprecated V1-only. `debug info` does not exist on pinned OpenCode 2.0.23
+ * (`debug --help` lists agents/config/paths only; `debug info` fails with
+ * `Unknown subcommand "info"`). Kept exported for existing unit coverage;
+ * setup now uses {@link parsePluginList} (`opencode plugin list`) plus
+ * direct config-file truth and never invokes `debug info`.
  */
 function parsePluginSpecifiers(output: string): { recognized: boolean; specifiers: string[] } {
   const lines = output.split("\n");
@@ -205,65 +413,92 @@ export async function setup(
   const checkout = await resolveCheckout(binaryUrl);
   const pluginUri = pathToFileURL(checkout).href;
 
+  // T012: an explicit but empty `--plugin-spec` fails closed before any
+  // introspection, registration, or file mutation (registering "nothing" must
+  // never silently fall back to the local checkout).
+  if (options.pluginSpec !== undefined && options.pluginSpec.length === 0) {
+    return {
+      ok: false,
+      stage: "registration",
+      setup: {
+        registration: { action: "failed", detail: "--plugin-spec is empty (expected a Git package specifier such as github:mscipio/ARIA#<EXACT_SHA>)" },
+        sync: { ok: false, error: "sync skipped due to registration failure" },
+      },
+    };
+  }
+  // T012: with `--plugin-spec` the spec is the registration argument AND the
+  // config-file plugin identity, verbatim (no `file://` conversion: a Git
+  // spec is not a local path, and the config must name the same package the
+  // runtime installed so detection stays exactly-once). Without it, the
+  // narrowest supported local argument is the absolute checkout directory
+  // path (no `file://` scheme, no `--global`, no invented flags).
+  const pluginSpec = options.pluginSpec;
+  const packageArg = pluginSpec ?? checkout;
+  const configPluginIdentity = pluginSpec ?? pluginUri;
+
   let registrationAction: SetupResult["registration"]["action"] = "failed";
   let registrationDetail: string | undefined;
 
   // -----------------------------------------------------------------------
-  // Phase 1 — Register plugin (idempotent via introspection)
+  // Phase 1 — Register plugin (idempotent via `plugin list` + config truth)
   // -----------------------------------------------------------------------
+  //
+  // The registration argument is the explicit T012 `--plugin-spec` verbatim
+  // when given (a Git package specifier needs no conversion), otherwise the
+  // narrowest supported local package argument (the absolute checkout
+  // directory path: no `file://` scheme, no `--global`, no invented flags).
+  // `plugin list` SOURCE entries compare directly against that same argument
+  // (Git specs by exact equality; local checkouts also accept the
+  // corresponding `file://` URI under the one consistent local-identity rule
+  // shared with the config file truth).
 
   // Try introspection first (read-only, never mutates config)
-  const infoResult = await run(executor, checkout, "opencode", "debug", "info");
-  const introspectionOk = infoResult.ok && infoResult.stdout;
+  const listResult = await run(executor, checkout, "opencode", "plugin", "list");
+  const introspectionOk = listResult.ok && listResult.stdout;
   let usedIntrospection = false;
 
   if (introspectionOk) {
-    const { recognized, specifiers } = parsePluginSpecifiers(infoResult.stdout);
-    if (recognized && specifiers.length > 0) {
+    const { recognized, entries } = parsePluginList(listResult.stdout);
+    if (recognized) {
       usedIntrospection = true;
 
-      // Compare exact URI
-      if (specifiers.some((spec) => spec === pluginUri)) {
+      const matchesCurrent = (target: string): boolean =>
+        (pluginSpec !== undefined && target === pluginSpec) ||
+        matchesCurrentPluginTarget(target, checkout, pluginUri);
+      const currentEntries = entries.filter((entry) => matchesCurrent(entry.target));
+      if (currentEntries.length > 0) {
         registrationAction = "already registered";
-        registrationDetail = "plugin already registered (detected via introspection)";
+        registrationDetail = currentEntries.length > 1
+          ? "plugin already registered (detected via plugin list; duplicate observed, no new registration)"
+          : "plugin already registered (detected via plugin list)";
+      } else if (entries.some((entry) => entry.id === "aria")) {
+        // Conflicting-stale: an `aria` ID is listed with a different source.
+        // Safe update path: add the current checkout below (config phase
+        // preserves the stale entry with backup; nothing is deleted).
+        const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
+        const interpreted = interpretPluginAddResult(pluginResult, packageArg);
+        registrationAction = interpreted.action;
+        registrationDetail = interpreted.detail;
       } else {
-        // Plugin not registered yet — register it
-        const pluginResult = await run(executor, checkout, "opencode", "plugin", pluginUri, "--global");
-        if (pluginResult.ok) {
-          registrationAction = "registered";
-        } else {
-          registrationAction = "failed";
-          registrationDetail = `opencode plugin ${pluginUri} --global failed: ${pluginResult.stderr}`;
-        }
+        // Absent — register it
+        const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
+        const interpreted = interpretPluginAddResult(pluginResult, packageArg);
+        registrationAction = interpreted.action;
+        registrationDetail = interpreted.detail;
       }
     }
-    // recognized-empty section → fall through to compatibility fallback
     // Unrecognized format → fall through to compatibility fallback
   }
 
   // Compatibility fallback when introspection unavailable or format unrecognized
   if (!usedIntrospection) {
-    const pluginResult = await run(executor, checkout, "opencode", "plugin", pluginUri, "--global");
-    if (pluginResult.ok) {
-      registrationAction = "registered";
-    } else {
-      const combined = `${pluginResult.stderr} ${pluginResult.stdout}`.toLowerCase();
-      const isDuplicate =
-        combined.includes("already registered") ||
-        combined.includes("duplicate") ||
-        combined.includes("already exists") ||
-        combined.includes("already configured");
-      if (isDuplicate) {
-        registrationAction = "already registered";
-        registrationDetail = "treated as already registered (compatibility fallback)";
-      } else {
-        registrationAction = "failed";
-        registrationDetail = `opencode plugin ${pluginUri} --global failed: ${pluginResult.stderr}`;
-      }
-    }
+    const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
+    const interpreted = interpretPluginAddResult(pluginResult, packageArg);
+    registrationAction = interpreted.action;
+    registrationDetail = interpreted.detail;
   }
 
-  // Fail closed — if registration failed, do not proceed to sync
+  // Fail closed — if registration failed, do not proceed to file phases or sync
   if (registrationAction === "failed") {
     return {
       ok: false,
@@ -275,8 +510,88 @@ export async function setup(
     };
   }
 
+  const registration = { action: registrationAction, detail: registrationDetail } as const;
+
   // -----------------------------------------------------------------------
-  // Phase 2 — Sync dependencies (always invoked exactly once after registration check)
+  // Phase 1b — Global V2 config (T008): exact plugin URI, single skills
+  // root, depth default 3. Preserves unrelated user keys, backs up before
+  // replacing, and writes nothing when nothing changed. Fail closed: sync
+  // is skipped when the config cannot be ensured.
+  // -----------------------------------------------------------------------
+
+  const filesOptions = options.files ?? {};
+  const globalConfigPath = filesOptions.globalConfigPath ?? defaultGlobalConfigPath();
+  const skillsRoot = filesOptions.skillsRoot ?? getPackageSkillsRoot();
+
+  let configState: SetupConfigFileResult;
+  try {
+    configState = await ensureAriaSetupConfigFile({ configPath: globalConfigPath, pluginUri: configPluginIdentity, skillsRoot });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      stage: "config",
+      setup: {
+        registration: { ...registration },
+        sync: { ok: false, error: "sync skipped due to config failure" },
+        config: { path: globalConfigPath, changed: false, created: false, detail: message },
+      },
+    };
+  }
+  const configPhase: SetupConfigPhase = {
+    path: globalConfigPath,
+    changed: configState.changed,
+    created: configState.created,
+    backupPath: configState.backupPath,
+  };
+
+  // -----------------------------------------------------------------------
+  // Phase 1c — Managed agent files (T008): the eleven deterministic files
+  // via T003 `installAgentFiles` (ownership markers, user-agent backups,
+  // atomic writes). Resolution is project-neutral (defaults plus global
+  // overrides only) so CWD project models never bake into global files
+  // (T005: project overlays stay runtime-only). Failure rolls back the
+  // config write above; sync is skipped.
+  // -----------------------------------------------------------------------
+
+  const agentsDir = filesOptions.agentsDir ?? defaultAgentsDir();
+  let installed: AgentInstallResult;
+  try {
+    const resolved = resolveSetupAriaConfig(options.worktree ?? process.cwd());
+    installed = await installAgentFiles(resolved, { dir: agentsDir });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Partial-install rollback (T008): installAgentFiles throws before
+    // returning rollback state, so accumulated agent changes (replaced
+    // files + backups, including a backup-moved-before-failed-replacement
+    // exposed as `partialResult`) must be rolled back here too. Config
+    // rollback below stays mandatory; both passes are best-effort.
+    const partial = (error as { partialResult?: AgentInstallResult } | null | undefined)?.partialResult;
+    if (partial && (partial.written.length > 0 || Object.keys(partial.backups ?? {}).length > 0)) {
+      await rollbackAgentInstall(agentsDir, partial).catch(() => undefined);
+    }
+    await rollbackSetupConfigFile(globalConfigPath, configState).catch(() => undefined);
+    return {
+      ok: false,
+      stage: "agents",
+      setup: {
+        registration: { ...registration },
+        sync: { ok: false, error: "sync skipped due to agent install failure" },
+        config: { ...configPhase, detail: "rolled back due to agent install failure" },
+        agents: { dir: agentsDir, version: "", written: 0, unchanged: 0, detail: message },
+      },
+    };
+  }
+  const agentsPhase: SetupAgentsPhase = {
+    dir: installed.dir,
+    version: installed.version,
+    written: installed.written.length,
+    unchanged: installed.unchanged.length,
+  };
+
+  // -----------------------------------------------------------------------
+  // Phase 2 — Sync dependencies (always invoked exactly once after the
+  // registration and file phases above)
   // -----------------------------------------------------------------------
 
   let syncResult: Awaited<ReturnType<typeof depsSync>>;
@@ -288,8 +603,10 @@ export async function setup(
       ok: false,
       stage: "sync",
       setup: {
-        registration: { action: registrationAction, detail: registrationDetail },
+        registration: { ...registration },
         sync: { ok: false, error: `depsSync threw: ${message}` },
+        config: configPhase,
+        agents: agentsPhase,
       },
     };
   }
@@ -319,8 +636,10 @@ export async function setup(
         ok: false,
         stage: "model_configuration",
         setup: {
-          registration: { action: registrationAction, detail: registrationDetail },
+          registration: { ...registration },
           sync: { ok: true, output: "all dependencies synchronized" },
+          config: configPhase,
+          agents: agentsPhase,
           model: {
             status: "failed",
             message: "Model configuration failed; no changes were persisted.",
@@ -337,8 +656,10 @@ export async function setup(
         ok: false,
         stage: "model_configuration",
         setup: {
-          registration: { action: registrationAction, detail: registrationDetail },
+          registration: { ...registration },
           sync: { ok: true, output: "all dependencies synchronized" },
+          config: configPhase,
+          agents: agentsPhase,
           model: modelResult,
         },
       };
@@ -348,8 +669,10 @@ export async function setup(
       ok: true,
       stage: "complete",
       setup: {
-        registration: { action: registrationAction, detail: registrationDetail },
+        registration: { ...registration },
         sync: { ok: true, output: "all dependencies synchronized" },
+        config: configPhase,
+        agents: agentsPhase,
         model: modelResult,
       },
     };
@@ -359,12 +682,14 @@ export async function setup(
     ok: syncOk,
     stage: syncOk ? "complete" : "sync",
     setup: {
-      registration: { action: registrationAction, detail: registrationDetail },
+      registration: { ...registration },
       sync: {
         ok: syncOk,
         output: syncOk ? "all dependencies synchronized" : undefined,
         error: syncOk ? undefined : "one or more dependencies failed to synchronize",
       },
+      config: configPhase,
+      agents: agentsPhase,
     },
   };
 }
@@ -488,4 +813,4 @@ export async function update(
 }
 
 // Expose for testing
-export { resolveCheckout, parsePluginSpecifiers, run as runInCheckout };
+export { resolveCheckout, parsePluginSpecifiers, parsePluginList, run as runInCheckout };

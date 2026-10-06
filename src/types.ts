@@ -29,6 +29,13 @@ export interface RoleOverride {
 
 export interface AriaPluginOptions {
   configPath?: string;
+  /**
+   * T008: skip project-local overrides (global-only resolution). Setup and
+   * doctor file verification resolve defaults plus global overrides only, so
+   * a CWD project's models never bake into global managed agent files (T005:
+   * project overlays are runtime-only).
+   */
+  skipProject?: boolean;
 }
 
 export interface AriaProjectOverrides {

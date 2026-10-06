@@ -12,7 +12,7 @@ import type {
   RoleOverride,
 } from "./types.js";
 
-const ROLES: RoleName[] = [
+export const ROLES: RoleName[] = [
   "coder",
   "explorer",
   "visualizer",
@@ -175,12 +175,15 @@ export function readGlobalAriaOverrides(): AriaProjectOverrides {
  * on which project fields are pinned.
  *
  * Path discovery: an explicit `options.configPath` wins; otherwise prefer
- * `aria.json` and fall back to the legacy filename.
+ * `aria.json` and fall back to the legacy filename. `options.skipProject`
+ * (T008) returns {} without touching the filesystem, for global-only
+ * resolution.
  */
 export function readProjectAriaOverrides(
   worktree: string,
   options: AriaPluginOptions = {},
 ): AriaProjectOverrides {
+  if (options.skipProject) return {};
   const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
   const discoveredAriaPath = resolve(worktree, "aria.json");
   const discoveredLegacyPath = resolve(worktree, "review-driven-code.json");

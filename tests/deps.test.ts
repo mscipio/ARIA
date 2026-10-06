@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
@@ -1073,6 +1073,98 @@ describe("depsSync -- Context7", () => {
     const result = await depsSync(executor, configDir);
     expect(result.context7.action).toBe("already-configured");
   });
+
+  it("detects the documented V2 global mcp.servers.context7 shape", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "rdc-config-"));
+    tempDirs.push(root);
+    const configDir = resolve(root, ".config", "opencode");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      resolve(configDir, "opencode.json"),
+      JSON.stringify({ mcp: { servers: { context7: { type: "remote", url: "https://mcp.context7.com/mcp" } } } }),
+    );
+    const home = homedir();
+    const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
+    const executor = mockExecutor({
+      "engram version": { stdout: "engram 1.20.0" },
+      ...brewMocks(cellarBin, `${home}/.local/Cellar`),
+      ...codegraphMocks,
+      "opencode --version": { stdout: "1.18.15" },
+      "opencode mcp list": { stdout: allHealthyMcpList() },
+    });
+
+    const result = await depsSync(executor, configDir);
+    expect(result.context7.action).toBe("already-configured");
+  });
+
+  it("leaves unrelated MCP servers alone when context7 is already configured", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "rdc-config-"));
+    tempDirs.push(root);
+    const configDir = resolve(root, ".config", "opencode");
+    await mkdir(configDir, { recursive: true });
+    const before = {
+      mcp: {
+        servers: {
+          context7: { type: "remote", url: "https://mcp.context7.com/mcp" },
+          engram: { type: "local", command: ["engram", "mcp"] },
+        },
+      },
+    };
+    await writeFile(resolve(configDir, "opencode.json"), JSON.stringify(before));
+    const home = homedir();
+    const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
+    const calls: string[] = [];
+    const executor: Executor = async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
+      if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
+      if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
+      if (command === "which" && args[0] === "engram") return { stdout: cellarBin, stderr: "" };
+      if (command === "brew" && args[0] === "--cellar") return { stdout: `${home}/.local/Cellar`, stderr: "" };
+      if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
+      if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
+      if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "--version") return { stdout: "1.3.1", stderr: "" };
+      if (command === "codegraph" && args[0] === "upgrade") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "install") return { stdout: "", stderr: "" };
+      if (command === "opencode" && args[0] === "--version") return { stdout: "1.18.15", stderr: "" };
+      if (command === "opencode" && args[0] === "mcp" && args[1] === "list") return { stdout: allHealthyMcpList(), stderr: "" };
+      throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+    };
+
+    const result = await depsSync(executor, configDir);
+    expect(result.context7.action).toBe("already-configured");
+    expect(calls.some((call) => call.includes("mcp add"))).toBe(false);
+    const after = JSON.parse(await readFile(resolve(configDir, "opencode.json"), "utf8"));
+    expect(after).toEqual(before);
+  });
+
+  it("writes missing context7 to the global config via mcp add --global", async () => {
+    const configDir = await makeEmptyConfigDir();
+    const home = homedir();
+    const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
+    const calls: string[] = [];
+    const executor: Executor = async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
+      if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
+      if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
+      if (command === "which" && args[0] === "engram") return { stdout: cellarBin, stderr: "" };
+      if (command === "brew" && args[0] === "--cellar") return { stdout: `${home}/.local/Cellar`, stderr: "" };
+      if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
+      if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
+      if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+      if (command === "opencode" && args[0] === "mcp" && args[1] === "add") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "--version") return { stdout: "1.3.1", stderr: "" };
+      if (command === "codegraph" && args[0] === "upgrade") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "install") return { stdout: "", stderr: "" };
+      if (command === "opencode" && args[0] === "--version") return { stdout: "1.18.15", stderr: "" };
+      if (command === "opencode" && args[0] === "mcp" && args[1] === "list") return { stdout: allHealthyMcpList(), stderr: "" };
+      throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+    };
+
+    const result = await depsSync(executor, configDir);
+    expect(result.context7.action).toBe("configured");
+    expect(calls).toContain("opencode mcp add context7 --global --url https://mcp.context7.com/mcp");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1220,7 +1312,7 @@ describe("depsSync -- failure propagation", () => {
       "engram version": { stdout: "engram 1.20.0" },
       ...brewMocks(cellarBin, `${home}/.local/Cellar`),
       "engram setup opencode": { stdout: "" },
-      "opencode mcp add context7 --url https://mcp.context7.com/mcp": { error: "opencode not found" },
+      "opencode mcp add context7 --global --url https://mcp.context7.com/mcp": { error: "opencode not found" },
       ...codegraphMocks,
       "opencode --version": { stdout: "1.18.15" },
       "opencode mcp list": { stdout: allHealthyMcpList() },

@@ -70,7 +70,7 @@ async function writeContext7Config(home: string): Promise<void> {
 function healthyExecutor(): Executor {
   return async (command, args) => {
     const invocation = `${command} ${args.join(" ")}`;
-    if (invocation === "opencode --version") return { stdout: "opencode v1.2.3", stderr: "" };
+    if (invocation === "opencode --version") return { stdout: "opencode 2.0.23", stderr: "" };
     if (invocation === "engram version") return { stdout: "engram v2.0.0", stderr: "" };
     if (invocation === "codegraph --version") return { stdout: "codegraph v1.0.0", stderr: "" };
     if (invocation === "opencode mcp list") {

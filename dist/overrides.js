@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { getPackageRoot, loadDefaultConfig } from "./defaults.js";
-const ROLES = [
+export const ROLES = [
     "coder",
     "explorer",
     "visualizer",
@@ -154,9 +154,13 @@ export function readGlobalAriaOverrides() {
  * on which project fields are pinned.
  *
  * Path discovery: an explicit `options.configPath` wins; otherwise prefer
- * `aria.json` and fall back to the legacy filename.
+ * `aria.json` and fall back to the legacy filename. `options.skipProject`
+ * (T008) returns {} without touching the filesystem, for global-only
+ * resolution.
  */
 export function readProjectAriaOverrides(worktree, options = {}) {
+    if (options.skipProject)
+        return {};
     const explicitPath = options.configPath ? resolve(worktree, options.configPath) : undefined;
     const discoveredAriaPath = resolve(worktree, "aria.json");
     const discoveredLegacyPath = resolve(worktree, "review-driven-code.json");

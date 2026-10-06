@@ -122,125 +122,26 @@ if (plugin?.id !== "aria") {
   console.error("smoke-package: expected plugin id aria, got", plugin?.id);
   process.exit(1);
 }
-if (typeof plugin?.server !== "function") {
-  console.error("smoke-package: plugin.server is not a function");
+// T002 native V2 foundation: setup/cleanup only with no V1 server shim.
+// Agent/permission/skill/plan wiring returns in T003+.
+if (typeof plugin?.setup !== "function") {
+  console.error("smoke-package: plugin.setup is not a function");
   process.exit(1);
 }
+if ("server" in plugin) {
+  console.error("smoke-package: V1 server shim must not be present");
+  process.exit(1);
+}
+const cleanup = await plugin.setup({});
+if (cleanup !== undefined && typeof cleanup !== "function") {
+  console.error("smoke-package: plugin.setup must resolve a cleanup function or void");
+  process.exit(1);
+}
+if (typeof cleanup === "function") await cleanup();
 
-const hooks = await plugin.server({ directory: process.cwd(), worktree: process.cwd() }, {});
-if (typeof hooks?.config !== "function") {
-  console.error("smoke-package: hooks.config is not a function");
-  process.exit(1);
-}
-if (typeof hooks?.tool?.plan !== "object" && typeof hooks?.tool?.plan !== "function") {
-  console.error("smoke-package: hooks.tool.plan is missing");
-  process.exit(1);
-}
+// T002: runtime agent wiring is unwired until T003+; file-content checks below still apply.
 
-const config = {};
-await hooks.config(config);
-const coder = config.agent?.coder;
-if (coder?.mode !== "all") {
-  console.error("smoke-package: coder.mode is not all");
-  process.exit(1);
-}
-if (coder?.hidden === true) {
-  console.error("smoke-package: coder must not be hidden");
-  process.exit(1);
-}
-if (config.agent?.writer?.mode !== "all") {
-  console.error("smoke-package: writer.mode is not all");
-  process.exit(1);
-}
-if (config.agent?.["archivist"]?.mode !== "all") {
-  console.error("smoke-package: archivist.mode is not all");
-  process.exit(1);
-}
-if (config.agent?.researcher?.mode !== "all") {
-  console.error("smoke-package: researcher.mode is not all");
-  process.exit(1);
-}
-if (config.agent?.researcher?.prompt?.includes("aria-research-evidence") !== true) {
-  console.error("smoke-package: researcher prompt does not reference its research skill");
-  process.exit(1);
-}
-if (config.agent?.researcher?.prompt?.includes("aria-zotero-tutor") !== true) {
-  console.error("smoke-package: researcher prompt does not reference the zotero tutor skill");
-  process.exit(1);
-}
-if (!(config.skills?.paths ?? []).some((value) => value.endsWith("/aria/skills") || value.endsWith("\\aria\\skills"))) {
-  console.error("smoke-package: package skill path is not registered", config.skills?.paths);
-  process.exit(1);
-}
-
-// Scientist model/variant/mode and prompt contract from the packed install.
-const scientist = config.agent?.scientist;
-if (!scientist) {
-  console.error("smoke-package: scientist agent is missing");
-  process.exit(1);
-}
-if (scientist.mode !== "all" || scientist.model !== "openai/gpt-5.6-sol" || scientist.variant !== "medium") {
-  console.error("smoke-package: scientist model/variant/mode mismatch", scientist.model, scientist.variant, scientist.mode);
-  process.exit(1);
-}
-const scientistPrompt = scientist.prompt ?? "";
-if (
-  !scientistPrompt.includes("scientific authority")
-  || !scientistPrompt.includes("aria-research-planning")
-  || !scientistPrompt.includes("aria-results-analysis")
-  || !scientistPrompt.includes("researcher")
-  || !scientistPrompt.includes("writer")
-  || !scientistPrompt.includes("coder")
-  || !scientistPrompt.includes("active ancestor")
-) {
-  console.error("smoke-package: scientist prompt contract mismatch");
-  process.exit(1);
-}
-
-// Bounded scientist ACL: deny-by-default tools, no MCP/persistence authority.
-const scientistPermission = scientist.permission ?? {};
-if (
-  scientistPermission.edit !== "deny"
-  || scientistPermission.bash !== "deny"
-  || scientistPermission.plan !== "deny"
-  || scientistPermission["engram_*"] !== undefined
-  || scientistPermission["context7_*"] !== undefined
-  || scientistPermission["codegraph_*"] !== undefined
-) {
-  console.error("smoke-package: scientist ACL grants unexpected authority");
-  process.exit(1);
-}
-const expectedScientistTask = { "*": "deny", researcher: "allow", writer: "allow", coder: "allow" };
-const expectedScientistSkill = { "*": "deny", "aria-research-planning": "allow", "aria-results-analysis": "allow" };
-if (JSON.stringify(scientistPermission.task) !== JSON.stringify(expectedScientistTask)) {
-  console.error("smoke-package: scientist task ACL mismatch", JSON.stringify(scientistPermission.task));
-  process.exit(1);
-}
-if (JSON.stringify(scientistPermission.skill) !== JSON.stringify(expectedScientistSkill)) {
-  console.error("smoke-package: scientist skill ACL mismatch", JSON.stringify(scientistPermission.skill));
-  process.exit(1);
-}
-
-// Runtime depth default: absent becomes 3; an explicit depth stays unchanged.
-if (config.subagent_depth !== 3) {
-  console.error("smoke-package: absent subagent_depth did not default to 3");
-  process.exit(1);
-}
-const explicitConfig = { subagent_depth: 2, skills: { paths: ["/custom/skills"] } };
-await hooks.config(explicitConfig);
-if (explicitConfig.subagent_depth !== 2) {
-  console.error("smoke-package: explicit subagent_depth was not preserved");
-  process.exit(1);
-}
-const explicitPaths = explicitConfig.skills?.paths ?? [];
-if (
-  explicitPaths.length !== 2
-  || explicitPaths[0] !== "/custom/skills"
-  || !(String(explicitPaths[1]).endsWith("/aria/skills") || String(explicitPaths[1]).endsWith("\\aria\\skills"))
-) {
-  console.error("smoke-package: explicit skill path was not preserved/appended", explicitPaths);
-  process.exit(1);
-}
+// T002: runtime depth/skill-path defaults are unwired until T003+; removed with the V1 entry probe.
 
 // Packed scientist prompt and both scientist method skills exist with the
 // standard ARIA frontmatter.
@@ -278,18 +179,9 @@ for (const name of ["aria-research-planning", "aria-results-analysis", "aria-zot
   }
 }
 
-const agents = Object.keys(config.agent ?? {});
-const expectedAgents = ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"];
-if (JSON.stringify(agents) !== JSON.stringify(expectedAgents)) {
-  console.error("smoke-package: expected the 11 canonical agents in canonical order", agents);
-  process.exit(1);
-}
-
 console.log("smoke-package: ok", {
   id: plugin.id,
   version: ${JSON.stringify(entry.version)},
-  agents: agents.length,
-  tools: Object.keys(hooks.tool ?? {}),
 });
 `,
   );
@@ -348,6 +240,9 @@ console.log("smoke-package: ok", {
   }
   if (!helpOutput.includes("--configure")) {
     fail("aria --help does not advertise setup --configure");
+  }
+  if (!helpOutput.includes("--plugin-spec")) {
+    fail("aria --help does not advertise setup --plugin-spec");
   }
   if (!helpOutput.includes("Register ARIA with OpenCode and synchronize dependencies")) {
     fail("aria --help does not describe setup as register plus sync");
@@ -436,7 +331,7 @@ exit 2
   writeFileSync(
     join(fakeBin, "opencode"),
     fakeScript("opencode", [
-      { match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "opencode 1.0.0" },
+      { match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "opencode 2.0.23" },
       { match: '[ "$#" -eq 1 ] && [ "$1" = "models" ]', file: "models.txt" },
       { match: '[ "$#" -eq 2 ] && [ "$1" = "models" ] && [ "$2" = "--verbose" ]', file: "models-verbose.txt" },
       { match: '[ "$#" -eq 2 ] && [ "$1" = "mcp" ] && [ "$2" = "list" ]', file: "mcp-list.txt" },
@@ -462,11 +357,11 @@ exit 2
   }
 
   // Temporary Context7 configuration in the isolated HOME, matching the
-  // canonical remote MCP server doctor expects.
+  // documented V2 global `mcp.servers.<name>` remote MCP shape doctor expects.
   mkdirSync(join(installRoot, ".config", "opencode"), { recursive: true });
   writeFileSync(
     join(installRoot, ".config", "opencode", "opencode.json"),
-    `${JSON.stringify({ mcp: { context7: { type: "remote", url: "https://mcp.context7.com/mcp" } } }, null, 2)}\n`,
+    `${JSON.stringify({ mcp: { servers: { context7: { type: "remote", url: "https://mcp.context7.com/mcp" } } } }, null, 2)}\n`,
   );
 
   const doctorEnv = {

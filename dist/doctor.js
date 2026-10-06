@@ -4,8 +4,12 @@ import { resolve } from "node:path";
 import { getPackageRoot } from "./defaults.js";
 import { defaultExecutor, doctor as dependencyDoctor, extractVersion, probeSubagentDepth, } from "./deps.js";
 import { discoverAvailableModels } from "./model-config.js";
+import { agentFileName, defaultAgentsDir, generateAgentFiles, parseManagedHeader, readPackageVersion, } from "./agents.js";
+import { PLAN_TOOL_NAME } from "./plan-tool.js";
 import { CODING_ROLES, PACKAGE_SKILL_NAMES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
 import { deriveRoutes, ROLES } from "./routes.js";
+import { resolveSetupAriaConfig } from "./setup-config.js";
+import { ARIA_SKILL_NAMES } from "./skills.js";
 const defaultFileOps = {
     readText: (path) => readFile(path, "utf8"),
     stat: (path) => fsStat(path),
@@ -240,18 +244,376 @@ function subagentDepthFinding(probe) {
     };
 }
 // ---------------------------------------------------------------------------
-// Composed dependency doctor (legacy deps.ts health probes)
+// T008 V2 runtime truth: plugin/agent/skill/tool lists + session inventory
 // ---------------------------------------------------------------------------
+/**
+ * Pinned `@opencode/plugin@2.0.23` Context domain inspection
+ * (`dist/promise/plugin.d.ts`):
+ * - `plugin: Pick<PluginApi, "list">` — V2 plugin inventory (used).
+ * - `agent: AgentDomain extends AgentApi` — `list()` carries full
+ *   `Agent.Info` (id/mode/model/permissions); per-agent `get()` adds
+ *   nothing, so only `list()` is used.
+ * - `skill: SkillDomain extends SkillApi` — `list()` carries `Skill.Info`
+ *   (id/name); used. `ctx.skill.transform` stays unused (T007 single
+ *   source is config discovery).
+ * - `tool: ToolDomain` — `list()` returns the effective post-transform
+ *   tools (plugin-local); used for the plan-tool-once check. There is no
+ *   `tool` HTTP client API, so this list is runtime-only.
+ * - `session: SessionDomain extends SessionApi` — `list()` observes live
+ *   sessions; informational only (sessions carry no ARIA registration
+ *   state), best-effort.
+ *
+ * Documented gaps (no guessing): Context has no `config` domain
+ * (`config.get` is unavailable to plugins), so merged-config state is
+ * verified through the global files setup wrote plus the advisory
+ * read-only `debug config` probe — never as authoritative truth. There is
+ * no `debug` domain. Permission saved/request lists add nothing beyond the
+ * agent permissions observed directly. `ctx.*.list` is unreachable from the
+ * standalone CLI, which reports SKIP (never FAIL) for runtime findings.
+ */
+/** Pinned OpenCode runtime target (plan T001 audit gate + exact dep pin). */
+export const SUPPORTED_OPENCODE_VERSION = "2.0.23";
+/** Shared gap wording when no live V2 list is available to the CLI. */
+const RUNTIME_LIST_GAP = "V2 runtime list unavailable outside a live OpenCode 2.0.23 session (ctx.*.list is runtime-only; the standalone CLI has no live-session access)";
+/** Quota v5 + Engram3 stay UNKNOWN until the T010 runtime gate tests them. */
+const COEXISTENCE_UNKNOWN = "quota v5 + Engram3 coexistence UNKNOWN until runtime-tested (T010); no plugin ordering assumed";
+function pluginRuntimeFinding(plugins) {
+    if (plugins === undefined) {
+        return { severity: "SKIP", area: "runtime", title: "plugin aria", detail: RUNTIME_LIST_GAP };
+    }
+    const aria = plugins.filter((plugin) => plugin.id === "aria");
+    if (aria.length === 0) {
+        return { severity: "FAIL", area: "runtime", title: "plugin aria", detail: "aria is not in the V2 plugin list" };
+    }
+    if (aria.length > 1) {
+        return { severity: "FAIL", area: "runtime", title: "plugin aria", detail: "aria is listed more than once (duplicate registration)" };
+    }
+    const state = aria[0]?.state;
+    const status = state && typeof state === "object" ? state.status : undefined;
+    if (status !== undefined && status !== "active") {
+        return {
+            severity: "FAIL",
+            area: "runtime",
+            title: "plugin aria",
+            detail: `aria plugin state is ${JSON.stringify(status) ?? typeof status} (expected "active")`,
+        };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "plugin aria",
+        detail: status === "active" ? "aria is listed and active" : "aria is listed (plugin state not reported)",
+    };
+}
+/** Legacy V2 permission actions that ARIA roles must never carry (T004). */
+const LEGACY_AGENT_ACTIONS = new Set(["bash", "task", "plan", "todowrite", "list", "lsp", "doom_loop"]);
+const AGENT_MODES = new Set(["primary", "subagent", "all"]);
+function agentEntryIssues(role, entry) {
+    const issues = [];
+    if (typeof entry.mode !== "string" || !AGENT_MODES.has(entry.mode)) {
+        issues.push(`${role}: mode is ${JSON.stringify(entry.mode) ?? typeof entry.mode} (expected "primary", "subagent", or "all")`);
+    }
+    const model = entry.model;
+    const modelPresent = typeof model === "string"
+        ? model.length > 0
+        : !!model && typeof model === "object";
+    if (!modelPresent)
+        issues.push(`${role}: model is missing (expected an explicit V2 model selector)`);
+    if (!Array.isArray(entry.permissions) || entry.permissions.length === 0) {
+        issues.push(`${role}: permissions are missing or empty (expected explicit V2 Rule[])`);
+        return issues;
+    }
+    const actions = [];
+    for (const rule of entry.permissions) {
+        if (!rule || typeof rule !== "object")
+            continue;
+        const action = rule.action;
+        if (typeof action === "string")
+            actions.push(action);
+    }
+    const legacy = actions.filter((action) => LEGACY_AGENT_ACTIONS.has(action));
+    if (legacy.length > 0)
+        issues.push(`${role}: legacy permission actions ${[...new Set(legacy)].join(", ")} (use V2 shell/subagent names)`);
+    const blanket = entry.permissions.some((rule) => {
+        if (!rule || typeof rule !== "object")
+            return false;
+        const record = rule;
+        return record.action === "*" && record.resource === "*" && record.effect === "allow";
+    });
+    if (blanket)
+        issues.push(`${role}: blanket allow {action:"*",resource:"*",effect:"allow"} overrides the native default unexpectedly`);
+    return issues;
+}
+function agentsRuntimeFinding(agents) {
+    if (agents === undefined) {
+        return { severity: "SKIP", area: "runtime", title: "agents (11)", detail: RUNTIME_LIST_GAP };
+    }
+    const counts = new Map();
+    for (const agent of agents)
+        counts.set(agent.id, (counts.get(agent.id) ?? 0) + 1);
+    const problems = [];
+    const missing = ROLES.filter((role) => !counts.has(role));
+    if (missing.length > 0)
+        problems.push(`missing: ${missing.join(", ")}`);
+    const duplicated = ROLES.filter((role) => (counts.get(role) ?? 0) > 1);
+    if (duplicated.length > 0)
+        problems.push(`listed more than once: ${duplicated.join(", ")}`);
+    // Live models are intentionally NOT compared to resolved routes: T005
+    // project overlays patch models at runtime via `agent.update`, so a
+    // difference is a legitimate overlay, not drift. Only presence,
+    // uniqueness, and explicit V2 shape are verified here.
+    for (const role of ROLES) {
+        if (!counts.has(role))
+            continue;
+        const entry = agents.find((agent) => agent.id === role);
+        if (entry)
+            problems.push(...agentEntryIssues(role, entry));
+    }
+    if (problems.length > 0) {
+        return { severity: "FAIL", area: "runtime", title: "agents (11)", detail: problems.join("; ") };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "agents (11)",
+        detail: "11 of 11 roles listed exactly once with explicit mode/model/permissions (V2 shell/subagent names)",
+    };
+}
+function skillsRuntimeFinding(skills) {
+    if (skills === undefined) {
+        return { severity: "SKIP", area: "runtime", title: "skills (21 live)", detail: RUNTIME_LIST_GAP };
+    }
+    const names = skills
+        .map((skill) => (typeof skill.name === "string" && skill.name.length > 0 ? skill.name : skill.id))
+        .filter((name) => typeof name === "string" && name.length > 0);
+    const problems = [];
+    const missing = ARIA_SKILL_NAMES.filter((name) => !names.includes(name));
+    if (missing.length > 0)
+        problems.push(`missing: ${missing.join(", ")}`);
+    const duplicated = ARIA_SKILL_NAMES.filter((name) => names.filter((seen) => seen === name).length > 1);
+    if (duplicated.length > 0)
+        problems.push(`listed more than once: ${duplicated.join(", ")}`);
+    if (problems.length > 0) {
+        return { severity: "FAIL", area: "runtime", title: "skills (21 live)", detail: problems.join("; ") };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "skills (21 live)",
+        detail: "21 of 21 packaged skills listed exactly once",
+    };
+}
+function planToolRuntimeFinding(tools) {
+    if (tools === undefined) {
+        return { severity: "SKIP", area: "runtime", title: "plan tool", detail: RUNTIME_LIST_GAP };
+    }
+    const matches = tools.filter((tool) => tool.name === PLAN_TOOL_NAME || tool.id === PLAN_TOOL_NAME);
+    if (matches.length === 0) {
+        return {
+            severity: "FAIL",
+            area: "runtime",
+            title: "plan tool",
+            detail: `plan tool "${PLAN_TOOL_NAME}" is not in the V2 tool list`,
+        };
+    }
+    if (matches.length > 1) {
+        return {
+            severity: "FAIL",
+            area: "runtime",
+            title: "plan tool",
+            detail: `plan tool "${PLAN_TOOL_NAME}" is listed more than once (conflicting registration)`,
+        };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "plan tool",
+        detail: `plan tool "${PLAN_TOOL_NAME}" present exactly once`,
+    };
+}
+/**
+ * Coexistence by generic rules only: duplicate IDs anywhere in the observed
+ * lists are collisions regardless of owner (no ordering assumed, no owner
+ * attributed), and observed ARIA agent permissions must stay explicit.
+ * Cleanup (setup cleanup + transform `Registration.dispose`) and transform
+ * ordering are code-owned and list-unobservable, so they are documented
+ * here, not asserted.
+ */
+function coexistenceFinding(snapshot) {
+    const { plugins, agents, skills, tools } = snapshot;
+    if (plugins === undefined && agents === undefined && skills === undefined && tools === undefined) {
+        return {
+            severity: "SKIP",
+            area: "runtime",
+            title: "coexistence",
+            detail: `${COEXISTENCE_UNKNOWN} (no V2 lists observed; CLI has no live-session access)`,
+        };
+    }
+    const problems = [];
+    const duplicates = (kind, ids) => {
+        const counts = new Map();
+        for (const id of ids) {
+            if (typeof id !== "string" || id.length === 0)
+                continue;
+            counts.set(id, (counts.get(id) ?? 0) + 1);
+        }
+        for (const [id, count] of counts) {
+            if (count > 1)
+                problems.push(`duplicate ${kind} id: ${id}`);
+        }
+    };
+    if (plugins !== undefined)
+        duplicates("plugin", plugins.map((plugin) => typeof plugin.id === "string" ? plugin.id : undefined));
+    if (agents !== undefined)
+        duplicates("agent", agents.map((agent) => agent.id));
+    if (skills !== undefined) {
+        duplicates("skill", skills.map((skill) => typeof skill.name === "string" && skill.name.length > 0 ? skill.name
+            : typeof skill.id === "string" ? skill.id : undefined));
+    }
+    if (tools !== undefined) {
+        duplicates("tool", tools.map((tool) => typeof tool.name === "string" && tool.name.length > 0 ? tool.name
+            : typeof tool.id === "string" ? tool.id : undefined));
+    }
+    if (agents !== undefined) {
+        for (const agent of agents) {
+            if (!ROLES.includes(agent.id))
+                continue;
+            problems.push(...agentEntryIssues(agent.id, agent));
+        }
+    }
+    const evaluated = [
+        plugins !== undefined ? "plugins" : "",
+        agents !== undefined ? "agents" : "",
+        skills !== undefined ? "skills" : "",
+        tools !== undefined ? "tools" : "",
+    ].filter(Boolean).join("/");
+    if (problems.length > 0) {
+        return {
+            severity: "FAIL",
+            area: "runtime",
+            title: "coexistence",
+            detail: `${COEXISTENCE_UNKNOWN}. Observed ${evaluated}: ${problems.join("; ")}`,
+        };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "coexistence",
+        detail: `${COEXISTENCE_UNKNOWN}. Observed ${evaluated}: no ID collisions and ARIA permissions stay explicit (cleanup/ordering are code-owned, list-unobservable)`,
+    };
+}
+function sessionRuntimeFinding(sessionsObserved) {
+    if (sessionsObserved === undefined) {
+        return {
+            severity: "SKIP",
+            area: "runtime",
+            title: "session/runtime inventory",
+            detail: "ctx.session.list/active is runtime-only; the standalone CLI has no live-session access; sessions carry no ARIA registration state",
+        };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "session/runtime inventory",
+        detail: `${sessionsObserved} live session(s) observed (informational; not setup truth)`,
+    };
+}
+function collectRuntimeFindings(snapshot) {
+    return [
+        pluginRuntimeFinding(snapshot?.plugins),
+        agentsRuntimeFinding(snapshot?.agents),
+        skillsRuntimeFinding(snapshot?.skills),
+        planToolRuntimeFinding(snapshot?.tools),
+        coexistenceFinding(snapshot ?? {}),
+        sessionRuntimeFinding(snapshot?.sessionsObserved),
+    ];
+}
+/**
+ * Build a V2 snapshot from a live plugin `Context`. Every domain list is
+ * attempted independently and defensively: a missing domain or a throwing
+ * list degrades that field to unobserved (SKIP downstream), never to a
+ * failure. Client lists return `{data: [...]}` while `ctx.tool.list()`
+ * returns the entry array directly; both shapes are accepted.
+ */
+export async function snapshotFromContext(ctx) {
+    const snapshot = {};
+    if (!ctx || typeof ctx !== "object")
+        return snapshot;
+    const domains = ctx;
+    const tryList = async (list) => {
+        if (typeof list !== "function")
+            return undefined;
+        try {
+            return await list();
+        }
+        catch {
+            return undefined;
+        }
+    };
+    const asEntries = (result) => {
+        if (Array.isArray(result))
+            return result;
+        if (result && typeof result === "object") {
+            const data = result.data;
+            if (Array.isArray(data))
+                return data;
+            const sessions = result.sessions;
+            if (Array.isArray(sessions))
+                return sessions;
+        }
+        return undefined;
+    };
+    const pluginEntries = asEntries(await tryList(domains.plugin?.list));
+    if (pluginEntries) {
+        snapshot.plugins = pluginEntries.map((entry) => ({ id: entry["id"], state: entry["state"] }));
+    }
+    const agentEntries = asEntries(await tryList(domains.agent?.list));
+    if (agentEntries) {
+        snapshot.agents = agentEntries
+            .filter((entry) => typeof entry["id"] === "string")
+            .map((entry) => ({
+            id: entry["id"],
+            mode: entry["mode"],
+            model: entry["model"],
+            permissions: entry["permissions"],
+        }));
+    }
+    const skillEntries = asEntries(await tryList(domains.skill?.list));
+    if (skillEntries) {
+        snapshot.skills = skillEntries.map((entry) => ({ id: entry["id"], name: entry["name"] }));
+    }
+    const toolEntries = asEntries(await tryList(domains.tool?.list));
+    if (toolEntries) {
+        snapshot.tools = toolEntries.map((entry) => ({ id: entry["id"], name: entry["name"] }));
+    }
+    const sessionEntries = asEntries(await tryList(domains.session?.list));
+    if (sessionEntries) {
+        snapshot.sessionsObserved = sessionEntries.length;
+    }
+    return snapshot;
+}
 /** Wording marking fresh CLI observations as distinct from live-session inventory. */
 const FRESH_CLI_OBSERVATION = "fresh standalone `opencode mcp list` CLI observation (not live-session inventory)";
+// ---------------------------------------------------------------------------
+// Composed dependency doctor (legacy deps.ts health probes)
+// ---------------------------------------------------------------------------
+function openCodeFinding(opencode) {
+    if (!opencode.found) {
+        return { severity: "FAIL", area: "dependencies", title: "OpenCode", detail: "not found" };
+    }
+    if (opencode.version === SUPPORTED_OPENCODE_VERSION) {
+        return { severity: "PASS", area: "dependencies", title: "OpenCode", detail: opencode.version };
+    }
+    return {
+        severity: "FAIL",
+        area: "dependencies",
+        title: "OpenCode",
+        detail: `expected OpenCode ${SUPPORTED_OPENCODE_VERSION}, found ${opencode.version ?? "unknown version"}`,
+    };
+}
 function dependencyFindings(deps) {
     return [
-        {
-            severity: deps.opencode.found ? "PASS" : "FAIL",
-            area: "dependencies",
-            title: "OpenCode",
-            detail: deps.opencode.found ? (deps.opencode.version ?? "version unknown") : "not found",
-        },
+        openCodeFinding(deps.opencode),
         {
             severity: deps.engram.found && deps.engram.connected ? "PASS" : "FAIL",
             area: "dependencies",
@@ -482,6 +844,84 @@ function rolePolicyFindings() {
     return findings;
 }
 // ---------------------------------------------------------------------------
+// Managed agent files: installed bytes match version + resolved config
+// ---------------------------------------------------------------------------
+/**
+ * Read-only verification that the eleven managed agent files setup installs
+ * match what the current install would generate (package version plus
+ * project-neutral resolved config: defaults + global overrides). A fully
+ * absent install is SKIP (setup has not run; `aria setup` generates them);
+ * any other mismatch is FAIL with the affected roles. Only the exact
+ * managed paths are read; unrelated user agents are never touched.
+ */
+async function collectAgentFileFindings(worktree, agentsDir, fileOps) {
+    let expected;
+    let version;
+    try {
+        version = readPackageVersion();
+        expected = generateAgentFiles(resolveSetupAriaConfig(worktree), version);
+    }
+    catch (error) {
+        return [{
+                severity: "FAIL",
+                area: "config",
+                title: "managed agent files",
+                detail: describeError(error),
+            }];
+    }
+    const missing = [];
+    const mismatched = [];
+    for (const role of ROLES) {
+        const skillPath = resolve(agentsDir, agentFileName(role));
+        let text;
+        try {
+            text = await fileOps.readText(skillPath);
+        }
+        catch {
+            missing.push(role);
+            continue;
+        }
+        if (text === expected[role])
+            continue;
+        const header = parseManagedHeader(text);
+        if (!header) {
+            mismatched.push(`${role} (unmanaged content; setup backs it up before regenerating)`);
+        }
+        else if (header.version !== version) {
+            mismatched.push(`${role} (version ${header.version}, expected ${version}; re-run setup)`);
+        }
+        else {
+            mismatched.push(`${role} (differs from resolved config; re-run setup)`);
+        }
+    }
+    if (missing.length === ROLES.length) {
+        return [{
+                severity: "SKIP",
+                area: "config",
+                title: "managed agent files",
+                detail: `not installed in ${agentsDir}; run aria setup to generate the 11 managed files`,
+            }];
+    }
+    const problems = [
+        ...missing.map((role) => `${role} (missing)`),
+        ...mismatched,
+    ];
+    if (problems.length > 0) {
+        return [{
+                severity: "FAIL",
+                area: "config",
+                title: "managed agent files",
+                detail: problems.join("; "),
+            }];
+    }
+    return [{
+            severity: "PASS",
+            area: "config",
+            title: "managed agent files",
+            detail: `11 of 11 match version ${version} and resolved config`,
+        }];
+}
+// ---------------------------------------------------------------------------
 // Wiki: packaged pipeline assets and optional WIKI_DIR accessibility
 // ---------------------------------------------------------------------------
 /** Packaged wiki-pipeline assets referenced by the archivist/package contract. */
@@ -610,8 +1050,12 @@ export async function runDoctor(options = {}) {
         });
     }
     // Effective cooperation depth: read-only `opencode debug config` probe of
-    // the merged config's own top-level subagent_depth (advisory, never FAIL).
+    // the merged config's own top-level subagent_depth (advisory, never FAIL
+    // and never authoritative: V2 list truth above owns setup verification).
     findings.push(subagentDepthFinding(await probeSubagentDepth(executor, worktree)));
+    // Installed managed agent files match the current version + resolved
+    // config (read-only; unrelated user agents never touched).
+    findings.push(...await collectAgentFileFindings(worktree, options.agentsDir ?? defaultAgentsDir(), fileOps));
     // Model discovery (failure is FAIL; nothing is guessed).
     let discovered;
     try {
@@ -663,6 +1107,10 @@ export async function runDoctor(options = {}) {
     findings.push(...zotPilotMcpFindings(deps));
     // Optional ZotPilot CLI availability/version (separate from MCP connectivity).
     findings.push(zotPilotCliFinding(await probeZotPilotCli(executor)));
+    // T008 V2 runtime truth (primary for setup verification): plugin, agents,
+    // skills, plan tool, coexistence, and session inventory from live lists.
+    // Absent outside a live session (SKIP with documented gaps, never FAIL).
+    findings.push(...collectRuntimeFindings(options.v2));
     // Packaged skills and canonical role/ZotPilot policy validation.
     findings.push(...await collectSkillFindings(getPackageRoot(), fileOps));
     findings.push(...rolePolicyFindings());

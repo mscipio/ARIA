@@ -17,8 +17,38 @@ export interface SetupResult {
         output?: string;
         error?: string;
     };
+    /**
+     * Outcome of the global V2 config phase (T008). Always present unless
+     * registration failed first.
+     */
+    config?: SetupConfigPhase;
+    /**
+     * Outcome of the managed agent-file phase (T008). Always present unless
+     * registration or config failed first.
+     */
+    agents?: SetupAgentsPhase;
     /** Outcome of the optional model-configuration phase; absent unless requested. */
     model?: ModelConfigurationResult;
+}
+/**
+ * T008 file-phase outcomes: global `opencode.json` (exact plugin URI,
+ * single skills root, depth default 3; unrelated user keys preserved,
+ * backup before replace, idempotent) and the eleven managed agent files
+ * (via T003 `installAgentFiles`, resolved project-neutral).
+ */
+export interface SetupConfigPhase {
+    path: string;
+    changed: boolean;
+    created: boolean;
+    backupPath?: string;
+    detail?: string;
+}
+export interface SetupAgentsPhase {
+    dir: string;
+    version: string;
+    written: number;
+    unchanged: number;
+    detail?: string;
 }
 /**
  * Model-configuration seam for `setup` (defaults to the real `configureModels`),
@@ -42,6 +72,35 @@ export interface SetupOptions {
     tty?: boolean;
     /** Model-configuration seam (defaults to the real `configureModels`). */
     configureModelsFn?: ConfigureModelsFn;
+    /**
+     * T012 Git-package source (`aria setup --plugin-spec <spec>`): explicit
+     * `opencode plugin add` package specifier (e.g.
+     * `github:mscipio/ARIA#<EXACT_SHA>`). Used verbatim as the registration
+     * argument and the config-file plugin identity — never rewritten to a
+     * `file://` URI, never given `--global` (2.0.23 documents no such flag for
+     * `plugin add`). Absent preserves the local-checkout behavior (absolute
+     * checkout path, no `file://` scheme, no invented flags).
+     */
+    pluginSpec?: string;
+    /**
+     * T008 file-phase path overrides (all optional; omitted values resolve to
+     * the production defaults: global `opencode.json`, global agents dir, and
+     * the installed package skills root). Tests point these at temp dirs; no
+     * workstation files are touched outside the resolved paths.
+     */
+    files?: SetupFilesOptions;
+}
+/**
+ * Path overrides for the T008 setup file phases. Every field is optional;
+ * omitted fields resolve to the production defaults.
+ */
+export interface SetupFilesOptions {
+    /** Global V2 config path (defaults to `~/.config/opencode/opencode.json`). */
+    globalConfigPath?: string;
+    /** Managed agent directory (defaults to `~/.config/opencode/agents/`). */
+    agentsDir?: string;
+    /** Version-locked skills root (defaults to the installed package `skills/`). */
+    skillsRoot?: string;
 }
 export interface CommandResult {
     ok: boolean;
@@ -69,9 +128,32 @@ export interface UpdateResult {
 declare function resolveCheckout(binaryUrl: string): Promise<string>;
 declare function run(executor: Executor, cwd: string, command: string, ...args: string[]): Promise<CommandResult>;
 /**
+ * V2 `opencode plugin list` table entry (ID/VERSION/SOURCE columns).
+ */
+export interface PluginListEntry {
+    id: string;
+    version: string;
+    /** SOURCE column: absolute local path for local plugins, package spec otherwise. */
+    target: string;
+}
+/**
+ * Parse V2 `opencode plugin list` output into table entries.
+ * Recognized shapes: the `ID  VERSION  SOURCE` header followed by rows, or
+ * the literal `No plugins found` (recognized empty). Anything else is
+ * unrecognized (never guessed).
+ */
+declare function parsePluginList(output: string): {
+    recognized: boolean;
+    entries: PluginListEntry[];
+};
+/**
  * Parse the `opencode debug info` output to find registered plugin URIs.
- * Returns the list of plugin specifier strings found in the plugins section
- * and whether a plugins section was recognized at all.
+ *
+ * @deprecated V1-only. `debug info` does not exist on pinned OpenCode 2.0.23
+ * (`debug --help` lists agents/config/paths only; `debug info` fails with
+ * `Unknown subcommand "info"`). Kept exported for existing unit coverage;
+ * setup now uses {@link parsePluginList} (`opencode plugin list`) plus
+ * direct config-file truth and never invokes `debug info`.
  */
 declare function parsePluginSpecifiers(output: string): {
     recognized: boolean;
@@ -79,5 +161,5 @@ declare function parsePluginSpecifiers(output: string): {
 };
 export declare function setup(binaryUrl: string, executor?: Executor, depsSyncFn?: typeof depsSync, options?: SetupOptions): Promise<LifecycleResult>;
 export declare function update(binaryUrl: string, executor?: Executor): Promise<LifecycleResult>;
-export { resolveCheckout, parsePluginSpecifiers, run as runInCheckout };
+export { resolveCheckout, parsePluginSpecifiers, parsePluginList, run as runInCheckout };
 //# sourceMappingURL=lifecycle.d.ts.map

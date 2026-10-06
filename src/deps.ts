@@ -699,11 +699,22 @@ async function detectContext7(executor: Executor, configDir?: string): Promise<{
     const raw = await readFile(configPath, "utf8");
     const stripped = configPath.endsWith(".jsonc") ? stripJsoncComments(raw) : raw;
     const config = JSON.parse(stripped);
-    const server = config?.mcp?.[CONTEXT7_NAME];
+    // Documented V2 global model (pinned 2.0.23 `opencode mcp add --global`
+    // writes `{ "mcp": { "servers": { "<name>": ... } } }` to the global
+    // `opencode.json`; verified live: `mcp add context7 --global --url
+    // https://mcp.context7.com/mcp` produces exactly
+    // `mcp.servers.context7 = { type: "remote", url: ... }`). The legacy
+    // `mcp.<name>` shape is accepted read-only for hand-written configs and
+    // is never emitted by setup.
+    const servers = config?.mcp?.servers;
+    const server = (servers !== undefined && typeof servers === "object" && !Array.isArray(servers)
+      ? (servers as Record<string, unknown>)[CONTEXT7_NAME]
+      : undefined) ?? config?.mcp?.[CONTEXT7_NAME];
     if (!server) return { configured: false, connected: false };
 
-    const isRemote = server.type === "remote" && server.url === CONTEXT7_REMOTE_URL;
-    const enabled = server.enabled !== false;
+    const isRemote = (server as { type?: unknown; url?: unknown }).type === "remote"
+      && (server as { url?: unknown }).url === CONTEXT7_REMOTE_URL;
+    const enabled = (server as { enabled?: unknown }).enabled !== false;
 
     return { configured: isRemote && enabled, connected: isRemote && enabled };
   } catch {
@@ -717,7 +728,14 @@ async function syncContext7(executor: Executor, configDir?: string): Promise<Syn
     return { action: "already-configured" };
   }
 
-  const result = await run(executor, "opencode", "mcp", "add", CONTEXT7_NAME, "--url", CONTEXT7_REMOTE_URL);
+  // Pinned 2.0.23 `opencode mcp add --help` documents `--global` ("Write to
+  // the global config instead of the project config"). It is required here:
+  // omitting it writes the server into the CWD project config (observed live:
+  // a bare `mcp add context7 --url ...` created `./opencode.json` in the
+  // invocation directory and left the global config untouched), which would
+  // leave setup and health observing different effective state. `mcp add`
+  // only adds the one named server, so unrelated MCP entries are preserved.
+  const result = await run(executor, "opencode", "mcp", "add", CONTEXT7_NAME, "--global", "--url", CONTEXT7_REMOTE_URL);
   if (!result.ok) {
     return { action: "add-failed", error: `opencode mcp add context7 failed: ${result.stderr}` };
   }

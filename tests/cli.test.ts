@@ -197,6 +197,26 @@ describe("bin/aria.mjs doctor dispatch", () => {
   });
 });
 
+describe("bin/aria.mjs setup dispatch", () => {
+  it("rejects an unknown setup option before registration work", async () => {
+    const result = await runCli(["setup", "--bogus"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown setup option");
+    expect(result.stderr).toContain("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+    // Rejected before the dynamic import/call: no setup phases ran.
+    expect(result.stdout).not.toContain("Registration:");
+  });
+
+  it("rejects a missing --plugin-spec value before registration work", async () => {
+    const result = await runCli(["setup", "--plugin-spec"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Missing value for --plugin-spec");
+    expect(result.stdout).not.toContain("Registration:");
+  });
+});
+
 describe("bin/aria.mjs configure dispatch", () => {
   it("rejects an unsupported trailing flag before doing configuration work", async () => {
     const result = await runCli(["configure", "--bogus"]);

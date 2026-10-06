@@ -25,6 +25,7 @@ function usage() {
 Usage:
   aria setup                 Register ARIA with OpenCode and synchronize dependencies
   aria setup --configure     Then interactively configure ARIA role models
+  aria setup --plugin-spec <spec>  Register a Git package specifier (e.g. github:mscipio/ARIA#<SHA>) instead of the local checkout
   aria configure             Interactively configure ARIA role models only (no registration or sync)
   aria update                Pull latest changes, reinstall, and re-sync dependencies
   aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
@@ -107,18 +108,49 @@ async function main() {
   }
 
   if (command === "setup") {
-    // Only the intended setup option is accepted: --configure
-    const unexpected = args.slice(1).filter((arg) => arg !== "--configure");
-    if (unexpected.length > 0) {
-      console.error(`Unknown setup option: ${unexpected.join(" ")}`);
-      console.error("Usage: aria setup [--configure]");
+    // Accepted setup options: --configure and --plugin-spec <spec> (T012
+    // Git-package source: passed verbatim to `opencode plugin add`, never
+    // rewritten to a file:// URI, never given --global). Anything else is
+    // rejected before any registration, file write, or sync.
+    const rest = args.slice(1);
+    let configureRequested = false;
+    let pluginSpec;
+    for (let index = 0; index < rest.length; index++) {
+      const arg = rest[index];
+      if (arg === "--configure") {
+        configureRequested = true;
+        continue;
+      }
+      if (arg === "--plugin-spec") {
+        const value = rest[index + 1];
+        if (value === undefined || value.startsWith("--")) {
+          console.error("Missing value for --plugin-spec (expected a Git package specifier such as github:mscipio/ARIA#<EXACT_SHA>)");
+          console.error("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+          return 1;
+        }
+        pluginSpec = value;
+        index++;
+        continue;
+      }
+      if (arg.startsWith("--plugin-spec=")) {
+        const value = arg.slice("--plugin-spec=".length);
+        if (value.length === 0) {
+          console.error("Missing value for --plugin-spec (expected a Git package specifier such as github:mscipio/ARIA#<EXACT_SHA>)");
+          console.error("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+          return 1;
+        }
+        pluginSpec = value;
+        continue;
+      }
+      console.error(`Unknown setup option: ${arg}`);
+      console.error("Usage: aria setup [--configure] [--plugin-spec <spec>]");
       return 1;
     }
-    const configureRequested = args.includes("--configure");
 
     const { setup } = await import("../dist/lifecycle.js");
     const result = await setup(import.meta.url, undefined, undefined, {
       configure: configureRequested,
+      pluginSpec,
       worktree: process.cwd(),
       input: process.stdin,
       output: process.stdout,
@@ -126,7 +158,7 @@ async function main() {
     });
 
     if (result.setup) {
-      const { registration, sync, model } = result.setup;
+      const { registration, sync, config, agents, model } = result.setup;
 
       // Registration
       if (registration.action === "registered") {
@@ -143,6 +175,27 @@ async function main() {
         console.log(`Sync: [OK] ${sync.output || "all dependencies synchronized"}`);
       } else if (sync.error) {
         console.error(`Sync: [FAIL] ${sync.error}`);
+      }
+
+      // Global V2 config (T008): exact plugin URI, single skills root,
+      // depth default 3; unrelated user keys preserved, backup on replace.
+      if (config) {
+        if (config.detail) {
+          console.error(`Config: [FAIL] ${config.detail}`);
+        } else if (config.changed) {
+          console.log(`Config: [OK] ${config.path}${config.backupPath ? ` (backup: ${config.backupPath})` : " (created)"}`);
+        } else {
+          console.log(`Config: unchanged (${config.path})`);
+        }
+      }
+
+      // Managed agent files (T008): eleven deterministic files.
+      if (agents) {
+        if (agents.detail) {
+          console.error(`Agents: [FAIL] ${agents.detail}`);
+        } else {
+          console.log(`Agents: [OK] ${agents.written} written, ${agents.unchanged} unchanged (${agents.dir})`);
+        }
       }
 
       // Model configuration (optional third phase, present only when requested)
