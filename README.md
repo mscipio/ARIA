@@ -428,7 +428,7 @@ The archivist does not reference, require, or support:
 npm run typecheck
 npm test
 npm run lint
-npm run build
+npm run compile
 npm run smoke:package
 ```
 
