@@ -2,11 +2,11 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDefaultConfig } from "./defaults.js";
 import { parseOverrides, readGlobalAriaOverrides, readProjectAriaOverrides, resolveAriaConfig } from "./overrides.js";
+import { openCodeGlobalDir } from "./paths.js";
 /**
  * Discovery failed; no configuration has been written or changed.
  */
@@ -179,8 +179,8 @@ const ROLES = [
 ];
 const ROLE_SET = new Set(ROLES);
 const MAX_PROMPT_ATTEMPTS = 3;
-function canonicalGlobalConfigPath() {
-    return resolve(homedir(), ".config", "opencode", "aria.json");
+function canonicalGlobalConfigPath(explicit) {
+    return join(openCodeGlobalDir(explicit), "aria.json");
 }
 function cloneGlobalRoles(roles) {
     const clone = {};
@@ -613,7 +613,7 @@ export async function configureModels(worktree, options = {}) {
     }
     const canonicalPath = canonicalGlobalConfigPath();
     const canonicalExisted = existsSync(canonicalPath);
-    const legacyExisted = existsSync(resolve(homedir(), ".config", "opencode", "review-driven-code.json"));
+    const legacyExisted = existsSync(join(openCodeGlobalDir(), "review-driven-code.json"));
     let defaults;
     let resolved;
     let seeded;

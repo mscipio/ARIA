@@ -991,8 +991,9 @@ describe("depsSync -- Context7", () => {
 
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
-    let addCalled = false;
+    const calls: string[] = [];
     const executor: Executor = async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
       if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
       if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
       if (command === "which" && args[0] === "engram") return { stdout: cellarBin, stderr: "" };
@@ -1000,14 +1001,6 @@ describe("depsSync -- Context7", () => {
       if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
       if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
       if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
-      if (command === "opencode" && args[0] === "mcp" && args[1] === "add") {
-        // Simulate opencode mcp add writing to the config file
-        addCalled = true;
-        await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({
-          mcp: { context7: { type: "remote", url: "https://mcp.context7.com/mcp", enabled: true } },
-        }));
-        return { stdout: "", stderr: "" };
-      }
       if (command === "codegraph" && args[0] === "--version") return { stdout: "1.3.1", stderr: "" };
       if (command === "codegraph" && args[0] === "upgrade") return { stdout: "", stderr: "" };
       if (command === "codegraph" && args[0] === "install") return { stdout: "", stderr: "" };
@@ -1017,9 +1010,12 @@ describe("depsSync -- Context7", () => {
     };
 
     const result = await depsSync(executor, configDir);
-    expect(addCalled).toBe(true);
     expect(result.context7.action).toBe("configured");
     expect(result.ok).toBe(true);
+    // File-based write honors the resolved explicit root: no shell.
+    expect(calls.some((call) => call.includes("mcp add"))).toBe(false);
+    const written = JSON.parse(await readFile(resolve(configDir, "opencode.json"), "utf8"));
+    expect(written?.mcp?.servers?.context7).toEqual({ type: "remote", url: "https://mcp.context7.com/mcp" });
   });
 
   it("context7 already configured skips add", async () => {
@@ -1138,7 +1134,7 @@ describe("depsSync -- Context7", () => {
     expect(after).toEqual(before);
   });
 
-  it("writes missing context7 to the global config via mcp add --global", async () => {
+  it("writes missing context7 to the resolved explicit root file (no shell)", async () => {
     const configDir = await makeEmptyConfigDir();
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
@@ -1152,7 +1148,6 @@ describe("depsSync -- Context7", () => {
       if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
       if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
       if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
-      if (command === "opencode" && args[0] === "mcp" && args[1] === "add") return { stdout: "", stderr: "" };
       if (command === "codegraph" && args[0] === "--version") return { stdout: "1.3.1", stderr: "" };
       if (command === "codegraph" && args[0] === "upgrade") return { stdout: "", stderr: "" };
       if (command === "codegraph" && args[0] === "install") return { stdout: "", stderr: "" };
@@ -1163,7 +1158,10 @@ describe("depsSync -- Context7", () => {
 
     const result = await depsSync(executor, configDir);
     expect(result.context7.action).toBe("configured");
-    expect(calls).toContain("opencode mcp add context7 --global --url https://mcp.context7.com/mcp");
+    expect(calls.some((call) => call.includes("mcp add"))).toBe(false);
+    // Actual destination holds the V2 entry.
+    const written = JSON.parse(await readFile(resolve(configDir, "opencode.json"), "utf8"));
+    expect(written?.mcp?.servers?.context7).toEqual({ type: "remote", url: "https://mcp.context7.com/mcp" });
   });
 });
 
@@ -1305,14 +1303,17 @@ describe("depsSync -- failure propagation", () => {
   });
 
   it("reports context7 add failure", async () => {
-    const configDir = await makeEmptyConfigDir();
+    const root = await mkdtemp(resolve(tmpdir(), "rdc-config-"));
+    tempDirs.push(root);
+    const configDir = resolve(root, ".config", "opencode");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(resolve(configDir, "opencode.json"), "{ invalid json");
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
     const executor = mockExecutor({
       "engram version": { stdout: "engram 1.20.0" },
       ...brewMocks(cellarBin, `${home}/.local/Cellar`),
       "engram setup opencode": { stdout: "" },
-      "opencode mcp add context7 --global --url https://mcp.context7.com/mcp": { error: "opencode not found" },
       ...codegraphMocks,
       "opencode --version": { stdout: "1.18.15" },
       "opencode mcp list": { stdout: allHealthyMcpList() },
@@ -1320,7 +1321,7 @@ describe("depsSync -- failure propagation", () => {
 
     const result = await depsSync(executor, configDir);
     expect(result.ok).toBe(false);
-    expect(result.context7.error).toContain("opencode mcp add context7");
+    expect(result.context7.error).toContain("invalid JSON");
   });
 
   it("continues to later deps after earlier failure", async () => {

@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { getPackageRoot } from "./defaults.js";
 import { ROLES } from "./overrides.js";
+import { openCodeGlobalDir } from "./paths.js";
 import { getPermissionsForRole } from "./permissions.js";
 import type { AgentRule } from "./permissions.js";
 import type { ResolvedAriaConfig, ResolvedRoleConfig, RoleName } from "./types.js";
@@ -135,9 +135,9 @@ export function agentFileName(role: RoleName): string {
   return `${role}.md`;
 }
 
-/** Global V2 agent location (`~/.config/opencode/agents/`). */
-export function defaultAgentsDir(): string {
-  return join(homedir(), ".config", "opencode", "agents");
+/** Global V2 agent location (`$XDG_CONFIG_HOME/opencode/agents/` or `~/.config/opencode/agents/`). */
+export function defaultAgentsDir(explicit?: string): string {
+  return join(openCodeGlobalDir(explicit), "agents");
 }
 
 export function readPackageVersion(metaUrl: string = import.meta.url): string {

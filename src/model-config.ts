@@ -2,12 +2,12 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 
 import { loadDefaultConfig } from "./defaults.js";
 import { parseOverrides, readGlobalAriaOverrides, readProjectAriaOverrides, resolveAriaConfig } from "./overrides.js";
+import { openCodeGlobalDir } from "./paths.js";
 import type {
   AriaDefaults,
   AriaProjectOverrides,
@@ -298,8 +298,8 @@ type GlobalRoles = Partial<Record<RoleName, RoleOverride>>;
 type TopChoice = "current" | "configure";
 type AskResult<T> = { value: T } | { cancelled: true } | { failed: true };
 
-function canonicalGlobalConfigPath(): string {
-  return resolve(homedir(), ".config", "opencode", "aria.json");
+function canonicalGlobalConfigPath(explicit?: string): string {
+  return join(openCodeGlobalDir(explicit), "aria.json");
 }
 
 function cloneGlobalRoles(roles: GlobalRoles): GlobalRoles {
@@ -824,7 +824,7 @@ export async function configureModels(
 
   const canonicalPath = canonicalGlobalConfigPath();
   const canonicalExisted = existsSync(canonicalPath);
-  const legacyExisted = existsSync(resolve(homedir(), ".config", "opencode", "review-driven-code.json"));
+  const legacyExisted = existsSync(join(openCodeGlobalDir(), "review-driven-code.json"));
 
   let defaults: AriaDefaults;
   let resolved: ResolvedAriaConfig;

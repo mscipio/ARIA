@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { getPackageRoot, loadDefaultConfig } from "./defaults.js";
+import { openCodeGlobalDir } from "./paths.js";
 import type {
   AriaPluginOptions,
   AriaProjectOverrides,
@@ -148,22 +148,23 @@ function generateRouting(resolved: ResolvedAriaConfig): string {
 }
 
 /**
- * Canonical global config path: ~/.config/opencode/aria.json first, with the
- * pre-ARIA legacy filename as a read-only fallback. Returns undefined when
- * neither file exists.
+ * Canonical global config path: `$XDG_CONFIG_HOME/opencode/aria.json` (else
+ * `~/.config/opencode/aria.json`) first, with the pre-ARIA legacy filename
+ * as a read-only fallback. Returns undefined when neither file exists.
  */
-export function globalAriaConfigPath(): string | undefined {
-  const ariaPath = resolve(homedir(), ".config", "opencode", "aria.json");
+export function globalAriaConfigPath(explicit?: string): string | undefined {
+  const base = openCodeGlobalDir(explicit);
+  const ariaPath = join(base, "aria.json");
   if (existsSync(ariaPath)) return ariaPath;
-  const legacyPath = resolve(homedir(), ".config", "opencode", "review-driven-code.json");
+  const legacyPath = join(base, "review-driven-code.json");
   return existsSync(legacyPath) ? legacyPath : undefined;
 }
 
 /**
  * Validated read of the global overrides, or {} when no global config exists.
  */
-export function readGlobalAriaOverrides(): AriaProjectOverrides {
-  const globalPath = globalAriaConfigPath();
+export function readGlobalAriaOverrides(explicit?: string): AriaProjectOverrides {
+  const globalPath = globalAriaConfigPath(explicit);
   return globalPath
     ? parseOverrides(parseJSON(readFileSync(globalPath, "utf8"), globalPath), globalPath)
     : {};

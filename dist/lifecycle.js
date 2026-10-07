@@ -360,9 +360,14 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
     // Phase 2 — Sync dependencies (always invoked exactly once after the
     // registration and file phases above)
     // -----------------------------------------------------------------------
+    // T003 effective-root forwarding: setup, sync, and doctor share one root.
+    // The effective global config dir is dirname(globalConfigPath): explicit
+    // SetupFilesOptions stays authoritative, otherwise env defaults via
+    // defaultGlobalConfigPath() (XDG_CONFIG_HOME or ~/.config). No CLI flags.
+    const effectiveConfigDir = dirname(globalConfigPath);
     let syncResult;
     try {
-        syncResult = await depsSyncFn(executor);
+        syncResult = await depsSyncFn(executor, effectiveConfigDir);
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);

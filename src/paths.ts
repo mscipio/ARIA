@@ -1,9 +1,23 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import properLockfile from "proper-lockfile";
 
 const LOCK_TIMEOUT_MS = 10_000;
 const STALE_LOCK_MS = 5_000;
+
+/**
+ * Canonical OpenCode global directory: `$XDG_CONFIG_HOME/opencode` when
+ * XDG_CONFIG_HOME is set, else `~/.config/opencode`. An explicit non-empty
+ * directory wins over both; empty/whitespace values count as unset.
+ */
+export function openCodeGlobalDir(explicit?: string): string {
+  const override = explicit?.trim();
+  if (override) return override;
+  const xdg = process.env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(xdg, "opencode");
+  return join(homedir(), ".config", "opencode");
+}
 
 function isOutside(root: string, candidate: string): boolean {
   const child = relative(root, candidate);

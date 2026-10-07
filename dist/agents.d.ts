@@ -16,8 +16,8 @@ export declare function generateAgentFile(role: RoleName, resolved: ResolvedRole
 /** Render all eleven managed agent files in canonical role order. */
 export declare function generateAgentFiles(resolved: ResolvedAriaConfig, version: string): Record<RoleName, string>;
 export declare function agentFileName(role: RoleName): string;
-/** Global V2 agent location (`~/.config/opencode/agents/`). */
-export declare function defaultAgentsDir(): string;
+/** Global V2 agent location (`$XDG_CONFIG_HOME/opencode/agents/` or `~/.config/opencode/agents/`). */
+export declare function defaultAgentsDir(explicit?: string): string;
 export declare function readPackageVersion(metaUrl?: string): string;
 export interface ManagedHeader {
     version: string;

@@ -5,15 +5,15 @@ declare class ConfigValidationError extends Error {
 }
 export declare function parseOverrides(raw: unknown, filePath?: string): AriaProjectOverrides;
 /**
- * Canonical global config path: ~/.config/opencode/aria.json first, with the
- * pre-ARIA legacy filename as a read-only fallback. Returns undefined when
- * neither file exists.
+ * Canonical global config path: `$XDG_CONFIG_HOME/opencode/aria.json` (else
+ * `~/.config/opencode/aria.json`) first, with the pre-ARIA legacy filename
+ * as a read-only fallback. Returns undefined when neither file exists.
  */
-export declare function globalAriaConfigPath(): string | undefined;
+export declare function globalAriaConfigPath(explicit?: string): string | undefined;
 /**
  * Validated read of the global overrides, or {} when no global config exists.
  */
-export declare function readGlobalAriaOverrides(): AriaProjectOverrides;
+export declare function readGlobalAriaOverrides(explicit?: string): AriaProjectOverrides;
 /**
  * Validated read of the project-local overrides, or {} when no project config
  * exists. Shared by `resolveAriaConfig` and model configuration so both agree

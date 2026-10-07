@@ -107,8 +107,8 @@ export declare function validateAriaSetupConfig(config: unknown, targets: {
  * for API compatibility but project reads are skipped.
  */
 export declare function resolveSetupAriaConfig(worktree: string): ResolvedAriaConfig;
-/** Default global V2 config path (`~/.config/opencode/opencode.json`). */
-export declare function defaultGlobalConfigPath(): string;
+/** Default global V2 config path (`$XDG_CONFIG_HOME/opencode/opencode.json`, else `~/.config/opencode/opencode.json`). */
+export declare function defaultGlobalConfigPath(explicit?: string): string;
 export interface SetupConfigFileResult {
     path: string;
     changed: boolean;

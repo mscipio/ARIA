@@ -261,9 +261,9 @@ export function resolveSetupAriaConfig(worktree) {
 // ---------------------------------------------------------------------------
 // File IO with backup/rollback/idempotence
 // ---------------------------------------------------------------------------
-/** Default global V2 config path (`~/.config/opencode/opencode.json`). */
-export function defaultGlobalConfigPath() {
-    return opencodeConfigPath();
+/** Default global V2 config path (`$XDG_CONFIG_HOME/opencode/opencode.json`, else `~/.config/opencode/opencode.json`). */
+export function defaultGlobalConfigPath(explicit) {
+    return opencodeConfigPath(explicit);
 }
 function backupStamp() {
     return new Date().toISOString().replace(/[:.]/g, "-");

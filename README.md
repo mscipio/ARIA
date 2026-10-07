@@ -1,4 +1,4 @@
-# ARIA v1.0.5 — Native OpenCode 2
+# ARIA v1.0.6 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -154,10 +154,10 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Install
 
-Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.5`:
+Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.6`:
 
 ```sh
-SPEC='github:mscipio/ARIA#v1.0.5'
+SPEC='github:mscipio/ARIA#v1.0.6'
 npx --yes --package="$SPEC" aria setup --plugin-spec "$SPEC"
 npx --yes --package="$SPEC" aria doctor
 ```
@@ -175,7 +175,7 @@ node ./bin/aria.mjs doctor
 
 Restart OpenCode after setup to load the registered plugin.
 
-Tags v1.0.0–v1.0.4 predate the current 1.x line and are retained unchanged.
+Tags v1.0.0–v1.0.5 predate the current 1.x line and are retained unchanged.
 
 ## Configuration
 

@@ -1,3 +1,9 @@
+/**
+ * Canonical OpenCode global directory: `$XDG_CONFIG_HOME/opencode` when
+ * XDG_CONFIG_HOME is set, else `~/.config/opencode`. An explicit non-empty
+ * directory wins over both; empty/whitespace values count as unset.
+ */
+export declare function openCodeGlobalDir(explicit?: string): string;
 export declare function assertContained(root: string, candidate: string, label: string): void;
 export declare function canonicalWorktree(worktree: string): Promise<string>;
 export declare function ensureSafeDirectory(root: string, target: string, create: boolean): Promise<string>;

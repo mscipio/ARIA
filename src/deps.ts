@@ -1,10 +1,12 @@
 import { execFile as nodeExecFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { readFile, mkdtemp, realpath, rm } from "node:fs/promises";
+import { readFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+
+import { openCodeGlobalDir } from "./paths.js";
 
 const execFileAsync = promisify(nodeExecFile);
 
@@ -226,7 +228,7 @@ async function run(executor: Executor, command: string, ...args: string[]): Prom
 // ---------------------------------------------------------------------------
 
 function discoverConfigPath(configDir?: string): string | null {
-  const base = configDir ?? join(homedir(), ".config", "opencode");
+  const base = openCodeGlobalDir(configDir);
   const jsonPath = join(base, "opencode.json");
   if (existsSync(jsonPath)) return jsonPath;
   const jsoncPath = join(base, "opencode.jsonc");
@@ -235,7 +237,7 @@ function discoverConfigPath(configDir?: string): string | null {
 }
 
 export function opencodeConfigPath(configDir?: string): string {
-  const base = configDir ?? join(homedir(), ".config", "opencode");
+  const base = openCodeGlobalDir(configDir);
   return join(base, "opencode.json");
 }
 
@@ -728,18 +730,49 @@ async function syncContext7(executor: Executor, configDir?: string): Promise<Syn
     return { action: "already-configured" };
   }
 
-  // Pinned 2.0.23 `opencode mcp add --help` documents `--global` ("Write to
-  // the global config instead of the project config"). It is required here:
-  // omitting it writes the server into the CWD project config (observed live:
-  // a bare `mcp add context7 --url ...` created `./opencode.json` in the
-  // invocation directory and left the global config untouched), which would
-  // leave setup and health observing different effective state. `mcp add`
-  // only adds the one named server, so unrelated MCP entries are preserved.
-  const result = await run(executor, "opencode", "mcp", "add", CONTEXT7_NAME, "--global", "--url", CONTEXT7_REMOTE_URL);
-  if (!result.ok) {
-    return { action: "add-failed", error: `opencode mcp add context7 failed: ${result.stderr}` };
+  // File-based write honors the resolved explicit root (explicit injection
+  // or env defaults via openCodeGlobalDir): the pinned 2.0.23
+  // `opencode mcp add --global` shell targets the env-derived global root
+  // and cannot honor an explicit dir that diverges from env (Executor
+  // carries no env seam), which left detection and writes observing
+  // different effective state. Writing here reuses the existing configDir
+  // seam, targets the discovered `.json`/`.jsonc` file (or creates
+  // `opencode.json` when absent), preserves unrelated keys/servers, and
+  // performs no shell invocation (no CLI flags, no second root arg).
+  const base = openCodeGlobalDir(configDir);
+  const existingPath = discoverConfigPath(configDir);
+  const targetPath = existingPath ?? opencodeConfigPath(configDir);
+  try {
+    let config: Record<string, unknown> = {};
+    if (existingPath) {
+      const raw = await readFile(existingPath, "utf8");
+      const stripped = existingPath.endsWith(".jsonc") ? stripJsoncComments(raw) : raw;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(stripped);
+      } catch {
+        return { action: "add-failed", error: `${existingPath}: invalid JSON` };
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return { action: "add-failed", error: `${existingPath}: expected a JSON object at the config root` };
+      }
+      config = parsed as Record<string, unknown>;
+    }
+    const mcpValue = (config as Record<string, unknown>).mcp;
+    const mcp = (mcpValue !== undefined && typeof mcpValue === "object" && mcpValue !== null && !Array.isArray(mcpValue)
+      ? mcpValue as Record<string, unknown>
+      : ((config as Record<string, unknown>).mcp = {} as Record<string, unknown>)) as Record<string, unknown>;
+    const serversValue = mcp.servers;
+    const servers = (serversValue !== undefined && typeof serversValue === "object" && serversValue !== null && !Array.isArray(serversValue)
+      ? serversValue as Record<string, unknown>
+      : (mcp.servers = {} as Record<string, unknown>)) as Record<string, unknown>;
+    servers[CONTEXT7_NAME] = { type: "remote", url: CONTEXT7_REMOTE_URL };
+    await mkdir(base, { recursive: true });
+    await writeFile(targetPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+    return { action: "configured" };
+  } catch (error) {
+    return { action: "add-failed", error: `context7 config write failed: ${error instanceof Error ? error.message : String(error)}` };
   }
-  return { action: "configured" };
 }
 
 // ---------------------------------------------------------------------------
