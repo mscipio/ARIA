@@ -157,12 +157,21 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.5`:
 
 ```sh
-opencode plugin add github:mscipio/ARIA#v1.0.5
+SPEC='github:mscipio/ARIA#v1.0.5'
+npx --yes --package="$SPEC" aria setup --plugin-spec "$SPEC"
+npx --yes --package="$SPEC" aria doctor
+```
+
+`aria setup --plugin-spec` registers the plugin and must run from the executable packaged CLI via `npx` as above; a bare `opencode plugin add` alone does not substitute for setup.
+
+If npm reports `EALLOWGIT` because a local policy disables Git dependencies, rerun the same commands with that policy explicitly enabled as appropriate for your environment.
+
+From a cloned checkout:
+
+```sh
 node ./bin/aria.mjs setup
 node ./bin/aria.mjs doctor
 ```
-
-The `node ./bin/aria.mjs` form works from the cloned checkout without requiring the package bin to be on `PATH`. If you have installed or linked ARIA, the shorter `aria setup` / `aria doctor` forms are equivalent.
 
 Restart OpenCode after setup to load the registered plugin.
 
