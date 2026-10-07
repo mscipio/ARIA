@@ -1,4 +1,4 @@
-# ARIA
+# ARIA v1.0.5 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -99,7 +99,7 @@ Approval lifecycle:
 - `update`, `close` require `approval: approved`
 
 ```md
-<!-- code-ensemble-plan
+<!-- aria-rdc-plan
 {"version":3,"id":"7e3f1a92-...","revision":4,"status":"active","approval":"approved","title":"Dashboard","createdAt":"2026-07-20T12:00:00.000Z","updatedAt":"2026-07-20T12:05:00.000Z","tasks":[{"id":"T001","text":"Define the data model; schema tests pass","status":"completed","evidence":"schema tests pass"},{"id":"T002","text":"Implement the dashboard; renders without errors","status":"in_progress"},{"id":"T003","text":"Review responsive behavior; no layout regressions at common breakpoints","status":"pending"}]}
 -->
 
@@ -154,10 +154,10 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Install
 
+Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.5`:
+
 ```sh
-git clone https://github.com/mscipio/ARIA.git
-cd aria
-npm ci --omit=dev
+opencode plugin add github:mscipio/ARIA#v1.0.5
 node ./bin/aria.mjs setup
 node ./bin/aria.mjs doctor
 ```
@@ -165,6 +165,8 @@ node ./bin/aria.mjs doctor
 The `node ./bin/aria.mjs` form works from the cloned checkout without requiring the package bin to be on `PATH`. If you have installed or linked ARIA, the shorter `aria setup` / `aria doctor` forms are equivalent.
 
 Restart OpenCode after setup to load the registered plugin.
+
+Tags v1.0.0–v1.0.4 predate the current 1.x line and are retained unchanged.
 
 ## Configuration
 
