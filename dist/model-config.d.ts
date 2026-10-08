@@ -1,3 +1,4 @@
+import { installAgentFiles } from "./agents.js";
 import type { RoleName } from "./types.js";
 /**
  * An available model, normalized to ARIA's providerID/modelID identifier.
@@ -40,6 +41,9 @@ export declare function parseModelList(stdout: string): AvailableModel[];
  * Parse `opencode models --verbose` output: each model identifier line is
  * followed by its JSON metadata block, whose `variants` object keys are the
  * reported variant IDs.
+ *
+ * Retained as a tested parser only: pinned OpenCode 2.0.23 discovery uses
+ * plain `opencode models` and never assumes `--verbose` support.
  */
 export declare function parseModelVerbose(stdout: string): AvailableModel[];
 /**
@@ -47,9 +51,11 @@ export declare function parseModelVerbose(stdout: string): AvailableModel[];
  * worktree.
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
- * shells out to `opencode models` for the usable identifier list and to
- * `opencode models --verbose` for metadata (names and reported variants),
- * merging the two by identifier.
+ * shells out to plain `opencode models` for the usable identifier list.
+ * Pinned OpenCode 2.0.23 has no supported `--verbose` variant-metadata
+ * surface, so variant capability stays unestablished here (`variants` is
+ * empty and `variantsObservable` is absent); doctor reports a configured
+ * variant as unknown rather than verified or failed.
  *
  * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
  * configuration untouched.
@@ -99,6 +105,19 @@ export interface ModelConfigurationResult {
     /** Error detail, when status is "failed". */
     error?: string;
 }
+/**
+ * T003 — Regenerate managed agent files from freshly resolved routes.
+ *
+ * Project-neutral (packaged defaults plus global overrides only, never
+ * CWD project models) so global files never bake in project state; the
+ * worktree argument only anchors project-neutral resolution. Unmanaged
+ * pre-existing files are backed up and unrelated files untouched via
+ * `installAgentFiles`. Callers invoke this only after a successful route
+ * write; failed writes must never rewrite agents.
+ */
+export declare function regenerateManagedAgents(worktree: string, options?: {
+    dir?: string;
+}): ReturnType<typeof installAgentFiles>;
 /**
  * Lightweight interactive model configuration for `aria setup --configure`.
  *

@@ -173,16 +173,16 @@ describe("ariaPlugin", () => {
       "scientist",
     ]);
     expect(config.agent?.coder?.mode).toBe("all");
-    expect(config.agent?.planner?.model).toBe("openai/gpt-5.6-terra");
+    expect(config.agent?.planner?.model).toBe("openai/gpt-6-luna");
     expect(config.agent?.planner?.mode).toBe("subagent");
     expect(config.agent?.architect?.mode).toBe("subagent");
     expect(config.agent?.researcher?.mode).toBe("all");
-    expect(config.agent?.researcher?.model).toBe("openai/gpt-5.6-sol");
+    expect(config.agent?.researcher?.model).toBe("openai/gpt-6.1-sol");
     expect(config.agent?.researcher?.variant).toBe("medium");
     expect(config.agent?.["archivist"]?.mode).toBe("all");
     expect(config.agent?.writer?.mode).toBe("all");
     expect(config.agent?.scientist?.mode).toBe("all");
-    expect(config.agent?.scientist?.model).toBe("openai/gpt-5.6-sol");
+    expect(config.agent?.scientist?.model).toBe("openai/gpt-6.1-sol");
     expect(config.agent?.scientist?.variant).toBe("medium");
     expect(config.agent?.researcher?.description).toBe(
       "Direct or delegated specialist for external literature and evidence research.",

@@ -75,11 +75,9 @@ function githubFileOps(checksums: string, hash = "abc123"): DependencyFileOps {
   };
 }
 
-/** Common codegraph mock entries. */
+/** Common codegraph mock entries (T006 gate: observe-only via --version; no installer). */
 const codegraphMocks: Record<string, { stdout: string }> = {
   "codegraph --version": { stdout: "1.3.1" },
-  "codegraph upgrade": { stdout: "" },
-  "codegraph install --target opencode --location global --yes": { stdout: "" },
 };
 
 function allHealthyMcpList(): string {
@@ -1170,14 +1168,15 @@ describe("depsSync -- Context7", () => {
 // ---------------------------------------------------------------------------
 
 describe("depsSync -- CodeGraph", () => {
-  it("installs codegraph via npm when missing", async () => {
+  it("T006 gate: missing codegraph is report-only, never npm-installed", async () => {
     const configDir = await makeConfigDirWith({
       context7: { type: "remote", url: "https://mcp.context7.com/mcp", enabled: true },
     });
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
-    let codegraphVersionCalls = 0;
+    const calls: string[] = [];
     const executor: Executor = async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
       if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
       if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
       if (command === "which" && args[0] === "engram") return { stdout: cellarBin, stderr: "" };
@@ -1185,24 +1184,23 @@ describe("depsSync -- CodeGraph", () => {
       if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
       if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
       if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
-      if (command === "codegraph" && args[0] === "--version") {
-        codegraphVersionCalls++;
-        if (codegraphVersionCalls === 1) throw new Error("not found");
-        return { stdout: "1.3.1", stderr: "" };
-      }
-      if (command === "npm" && args[0] === "install") return { stdout: "", stderr: "" };
-      if (command === "codegraph" && args[0] === "install") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "--version") throw new Error("not found");
       if (command === "opencode" && args[0] === "--version") return { stdout: "1.18.15", stderr: "" };
       if (command === "opencode" && args[0] === "mcp" && args[1] === "list") return { stdout: allHealthyMcpList(), stderr: "" };
       throw new Error(`unexpected: ${command} ${args.join(" ")}`);
     };
 
     const result = await depsSync(executor, configDir);
-    expect(result.ok).toBe(true);
-    expect(result.codegraph.action).toBe("synced");
+    expect(result.codegraph.action).toBe("observed-not-managed");
+    expect(result.codegraph.error).toBeUndefined();
+    expect(result.codegraph.version).toBeUndefined();
+    // The legacy-writing upstream installer path is never invoked.
+    expect(calls.some((call) => call.startsWith("npm install"))).toBe(false);
+    expect(calls).not.toContain("codegraph upgrade");
+    expect(calls.some((call) => call.startsWith("codegraph install"))).toBe(false);
   });
 
-  it("upgrades codegraph via codegraph upgrade when present", async () => {
+  it("T006 gate: present codegraph is observed, never upgraded/reconciled", async () => {
     const configDir = await makeConfigDirWith({
       context7: { type: "remote", url: "https://mcp.context7.com/mcp", enabled: true },
     });
@@ -1228,30 +1226,54 @@ describe("depsSync -- CodeGraph", () => {
 
     const result = await depsSync(executor, configDir);
     expect(result.ok).toBe(true);
-    expect(calls).toContain("codegraph upgrade");
-    expect(calls).toContain("codegraph install --target opencode --location global --yes");
-    expect(calls).not.toContain("npm install -g @colbymchenry/codegraph@latest");
+    expect(result.codegraph.action).toBe("observed-not-managed");
+    expect(result.codegraph.version).toBe("1.3.1");
+    expect(result.codegraph.error).toBeUndefined();
+    expect(calls).not.toContain("codegraph upgrade");
+    expect(calls.some((call) => call.startsWith("codegraph install"))).toBe(false);
+    expect(calls.some((call) => call.startsWith("npm install"))).toBe(false);
   });
 
-  it("codegraph upgrade failure is reported", async () => {
+  it("T006 gate: no legacy-writing reconciler runs even when the mcp list is unhealthy", async () => {
     const configDir = await makeConfigDirWith({
       context7: { type: "remote", url: "https://mcp.context7.com/mcp", enabled: true },
     });
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
-    const executor = mockExecutor({
-      "engram version": { stdout: "engram 1.20.0" },
-      ...brewMocks(cellarBin, `${home}/.local/Cellar`),
-      "codegraph --version": { stdout: "1.3.1" },
-      "codegraph upgrade": { error: "upgrade failed" },
-      "codegraph install --target opencode --location global --yes": { stdout: "" },
-      "opencode --version": { stdout: "1.18.15" },
-      "opencode mcp list": { stdout: allHealthyMcpList() },
-    });
+    const calls: string[] = [];
+    const executor: Executor = async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
+      if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
+      if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
+      if (command === "which" && args[0] === "engram") return { stdout: cellarBin, stderr: "" };
+      if (command === "brew" && args[0] === "--cellar") return { stdout: `${home}/.local/Cellar`, stderr: "" };
+      if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
+      if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
+      if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "--version") return { stdout: "1.3.1", stderr: "" };
+      if (command === "opencode" && args[0] === "--version") return { stdout: "1.18.15", stderr: "" };
+      if (command === "opencode" && args[0] === "mcp" && args[1] === "list") {
+        return {
+          stdout: [
+            "MCP Servers",
+            "engram connected", "engram mcp --tools=agent",
+            "context7 connected", "https://mcp.context7.com/mcp",
+            "codegraph disconnected", "codegraph serve --mcp",
+            "3 server(s)",
+          ].join("\n"),
+          stderr: "",
+        };
+      }
+      throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+    };
 
     const result = await depsSync(executor, configDir);
+    // Disconnected codegraph surfaces via health, not via a reconciler run.
     expect(result.ok).toBe(false);
-    expect(result.codegraph.action).toBe("upgrade-failed");
+    expect(result.codegraph.action).toBe("observed-not-managed");
+    expect(result.codegraph.error).toBeUndefined();
+    expect(calls.some((call) => call.startsWith("codegraph install"))).toBe(false);
+    expect(calls).not.toContain("codegraph upgrade");
   });
 });
 
@@ -1280,26 +1302,32 @@ describe("depsSync -- failure propagation", () => {
     expect(result.engram.error).toContain("setup failed");
   });
 
-  it("reports codegraph npm install failure", async () => {
+  it("T006 gate: missing codegraph is report-only, never npm-installed", async () => {
     const configDir = await makeConfigDirWith({
       context7: { type: "remote", url: "https://mcp.context7.com/mcp", enabled: true },
     });
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
-    const executor = mockExecutor({
-      "engram version": { stdout: "engram 1.20.0" },
-      ...brewMocks(cellarBin, `${home}/.local/Cellar`),
-      "engram setup opencode": { stdout: "" },
-      "codegraph --version": { error: "not found" },
-      "npm install -g @colbymchenry/codegraph@latest": { error: "permission denied" },
-      "opencode --version": { stdout: "1.18.15" },
-      "opencode mcp list": { stdout: allHealthyMcpList() },
-    });
+    const calls: string[] = [];
+    const executor: Executor = async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
+      if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
+      if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
+      if (command === "which" && args[0] === "engram") return { stdout: cellarBin, stderr: "" };
+      if (command === "brew" && args[0] === "--cellar") return { stdout: `${home}/.local/Cellar`, stderr: "" };
+      if (command === "brew" && args[0] === "update") return { stdout: "", stderr: "" };
+      if (command === "brew" && args[0] === "upgrade") return { stdout: "", stderr: "" };
+      if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+      if (command === "codegraph" && args[0] === "--version") throw new Error("not found");
+      if (command === "opencode" && args[0] === "--version") return { stdout: "1.18.15", stderr: "" };
+      if (command === "opencode" && args[0] === "mcp" && args[1] === "list") return { stdout: allHealthyMcpList(), stderr: "" };
+      throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+    };
 
     const result = await depsSync(executor, configDir);
-    expect(result.ok).toBe(false);
-    expect(result.codegraph.error).toContain("npm install");
-    expect(result.codegraph.error).toContain("permission denied");
+    expect(result.codegraph.action).toBe("observed-not-managed");
+    expect(result.codegraph.error).toBeUndefined();
+    expect(calls.some((call) => call.startsWith("npm install"))).toBe(false);
   });
 
   it("reports context7 add failure", async () => {
@@ -1342,7 +1370,7 @@ describe("depsSync -- failure propagation", () => {
     const result = await depsSync(executor, configDir);
     expect(result.engram.error).toContain("setup failed");
     expect(result.context7.action).toBe("already-configured");
-    expect(result.codegraph.action).toBe("synced");
+    expect(result.codegraph.action).toBe("observed-not-managed");
   });
 });
 

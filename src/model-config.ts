@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 
 import { loadDefaultConfig } from "./defaults.js";
+import { defaultAgentsDir, installAgentFiles } from "./agents.js";
 import { parseOverrides, readGlobalAriaOverrides, readProjectAriaOverrides, resolveAriaConfig } from "./overrides.js";
 import { openCodeGlobalDir } from "./paths.js";
 import type {
@@ -65,9 +66,10 @@ function describeDiscoveryError(error: unknown): string {
   }
 }
 
-// `opencode models` prints one usable model identifier per line; `opencode
-// models --verbose` follows each identifier with its pretty-printed JSON
-// metadata block (indented, so identifier lines start at column 0).
+// `opencode models` prints one usable model identifier per line. Pinned
+// OpenCode 2.0.23 offers no supported `--verbose` variant-metadata surface,
+// so discovery never assumes one: variant capability stays unestablished
+// (see `discoverAvailableModels`).
 const MODEL_ID_PATTERN = /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/;
 
 function splitModelIdentifier(id: string): { providerID: string; modelID: string } {
@@ -142,6 +144,9 @@ function verboseModelFromBlock(id: string, jsonText: string): AvailableModel | u
  * Parse `opencode models --verbose` output: each model identifier line is
  * followed by its JSON metadata block, whose `variants` object keys are the
  * reported variant IDs.
+ *
+ * Retained as a tested parser only: pinned OpenCode 2.0.23 discovery uses
+ * plain `opencode models` and never assumes `--verbose` support.
  */
 export function parseModelVerbose(stdout: string): AvailableModel[] {
   const lines = stdout.split("\n");
@@ -183,42 +188,28 @@ export function parseModelVerbose(stdout: string): AvailableModel[] {
  * worktree.
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
- * shells out to `opencode models` for the usable identifier list and to
- * `opencode models --verbose` for metadata (names and reported variants),
- * merging the two by identifier.
+ * shells out to plain `opencode models` for the usable identifier list.
+ * Pinned OpenCode 2.0.23 has no supported `--verbose` variant-metadata
+ * surface, so variant capability stays unestablished here (`variants` is
+ * empty and `variantsObservable` is absent); doctor reports a configured
+ * variant as unknown rather than verified or failed.
  *
  * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
  * configuration untouched.
  */
 export async function discoverAvailableModels(worktree: string): Promise<ModelDiscovery> {
-  const [listResult, verboseResult] = await Promise.all([
-    runOpencode(["models"], worktree).catch((error: unknown) => {
-      throw new ModelDiscoveryError(
-        `opencode models failed: ${describeDiscoveryError(error)}`,
-        { cause: error },
-      );
-    }),
-    runOpencode(["models", "--verbose"], worktree).catch((error: unknown) => {
-      throw new ModelDiscoveryError(
-        `opencode models --verbose failed: ${describeDiscoveryError(error)}`,
-        { cause: error },
-      );
-    }),
-  ]);
+  const listResult = await runOpencode(["models"], worktree).catch((error: unknown) => {
+    throw new ModelDiscoveryError(
+      `opencode models failed: ${describeDiscoveryError(error)}`,
+      { cause: error },
+    );
+  });
 
   const models = parseModelList(listResult.stdout);
   if (models.length === 0) {
     throw new ModelDiscoveryError("opencode models returned no usable models");
   }
-  if (verboseResult.stdout.trim().length === 0) {
-    throw new ModelDiscoveryError("opencode models --verbose returned no output");
-  }
-  const verboseModels = new Map(
-    parseModelVerbose(verboseResult.stdout).map((model) => [model.id, model]),
-  );
-  return {
-    models: models.map((model) => verboseModels.get(model.id) ?? model),
-  };
+  return { models };
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +770,26 @@ async function finalizeGlobalConfiguration(params: FinalizeParameters): Promise<
 }
 
 /**
+ * T003 — Regenerate managed agent files from freshly resolved routes.
+ *
+ * Project-neutral (packaged defaults plus global overrides only, never
+ * CWD project models) so global files never bake in project state; the
+ * worktree argument only anchors project-neutral resolution. Unmanaged
+ * pre-existing files are backed up and unrelated files untouched via
+ * `installAgentFiles`. Callers invoke this only after a successful route
+ * write; failed writes must never rewrite agents.
+ */
+export async function regenerateManagedAgents(
+  worktree: string,
+  options: { dir?: string } = {},
+): ReturnType<typeof installAgentFiles> {
+  const dir = options.dir ?? defaultAgentsDir();
+  // Fresh read after the route write: defaults + global overrides only.
+  const fresh = resolveAriaConfig(worktree, { skipProject: true });
+  return installAgentFiles(fresh, { dir });
+}
+
+/**
  * Lightweight interactive model configuration for `aria setup --configure`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
@@ -939,6 +950,23 @@ export async function configureModels(
   // ANSI styling is enabled); the result object itself stays unstyled.
   if (result.maskedRoles && result.maskedRoles.length > 0) {
     output(ansiRed(maskingWarning(masks), tty));
+  }
+  // T003 ordering: only a successful route write regenerates managed agents,
+  // from freshly resolved routes in this same invocation. Unchanged, skipped,
+  // and failed outcomes leave agent files untouched; unmanaged/user files
+  // survive via installAgentFiles backups.
+  if (result.status !== "configured") return result;
+  try {
+    await regenerateManagedAgents(worktree);
+  } catch (error) {
+    return {
+      status: "failed",
+      wrotePath: result.wrotePath,
+      changedRoles: result.changedRoles,
+      maskedRoles: result.maskedRoles,
+      error: `model routes written to ${result.wrotePath} but managed agents could not be regenerated: ${describeDiscoveryError(error)}`,
+      message: "Model routes were written but managed agents could not be regenerated; re-run `aria setup` to regenerate agents.",
+    };
   }
   return result;
 }

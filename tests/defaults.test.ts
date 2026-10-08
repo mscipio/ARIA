@@ -33,13 +33,13 @@ describe("ARIA defaults", () => {
     expect(defaults.roles.planner).not.toHaveProperty("fallbacks");
     expect(defaults.roles.architect).not.toHaveProperty("fallbacks");
     expect(defaults.roles.researcher).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6.1-sol",
       variant: "medium",
       mode: "all",
       promptFile: "prompts/researcher.md",
     });
     expect(defaults.roles.scientist).toEqual({
-      model: "openai/gpt-5.6-sol",
+      model: "openai/gpt-6.1-sol",
       variant: "medium",
       mode: "all",
       promptFile: "prompts/scientist.md",
@@ -66,19 +66,20 @@ describe("ARIA defaults", () => {
     });
   });
 
-  it("keeps every pre-existing model and variant pair unchanged", () => {
+  it("matches the production baseline model and variant pairs", () => {
     const defaults = loadDefaultConfig();
     expect(defaults.roles).toMatchObject({
-      coder: { model: "opencode-go/deepseek-v4-pro" },
-      explorer: { model: "opencode-go/deepseek-v4-flash", variant: "high" },
-      visualizer: { model: "opencode-go/kimi-k2.7-code" },
-      planner: { model: "openai/gpt-5.6-terra", variant: "xhigh" },
-      architect: { model: "openai/gpt-5.6-sol", variant: "xhigh" },
-      implementer: { model: "opencode-go/glm-5.2" },
-      reviewer: { model: "opencode-go/deepseek-v4-pro" },
-      researcher: { model: "openai/gpt-5.6-sol", variant: "medium" },
-      archivist: { model: "opencode-go/deepseek-v4-pro" },
-      writer: { model: "openai/gpt-5.6-sol", variant: "medium" },
+      coder: { model: "opencode-go/muse-spark-1.3-contributor", variant: "xhigh" },
+      explorer: { model: "opencode-go/muse-spark-1.3-contributor", variant: "high" },
+      visualizer: { model: "opencode-go/muse-spark-1.3-contributor", variant: "xhigh" },
+      planner: { model: "openai/gpt-6-luna", variant: "xhigh" },
+      architect: { model: "openai/gpt-6.1-sol", variant: "high" },
+      implementer: { model: "opencode-go/muse-spark-1.3-contributor", variant: "xhigh" },
+      reviewer: { model: "openai/gpt-6.1-sol", variant: "medium" },
+      researcher: { model: "openai/gpt-6.1-sol", variant: "medium" },
+      archivist: { model: "opencode-go/muse-spark-1.3-contributor", variant: "high" },
+      writer: { model: "openai/gpt-6-luna", variant: "xhigh" },
+      scientist: { model: "openai/gpt-6.1-sol", variant: "medium" },
     });
   });
 
@@ -104,7 +105,7 @@ describe("ARIA defaults", () => {
   it("ships defaults and package-owned skills", () => {
     const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
     expect(packageJson.name).toBe("aria");
-    expect(packageJson.version).toBe("1.0.6");
+    expect(packageJson.version).toBe("1.0.7");
     expect(packageJson.files).toContain("defaults");
     expect(packageJson.files).toContain("skills");
   });

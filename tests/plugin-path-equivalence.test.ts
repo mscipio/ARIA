@@ -145,6 +145,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        default_agent: "coder",
         plugins: [pathForm],
         skills: [SKILLS_ROOT],
         experimental: { subagent_depth: 3 },
@@ -204,6 +205,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
     await writeFile(
       configPath,
       JSON.stringify({
+        default_agent: "coder",
         plugins: [pluginUri],
         skills: [SKILLS_ROOT],
         experimental: { subagent_depth: 3 },

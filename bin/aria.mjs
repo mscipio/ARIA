@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // ARIA CLI — dependency-free, Node standard library only.
-// Supported: aria setup [--configure], aria configure, aria update, aria deps sync, aria doctor, aria routes, aria --help
+// Supported: aria setup [--configure], aria configure, aria update, aria upgrade [--check] [--yes], aria deps sync, aria doctor, aria routes, aria --help
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -28,7 +28,9 @@ Usage:
   aria setup --plugin-spec <spec>  Register a Git package specifier (e.g. github:mscipio/ARIA#<SHA>) instead of the local checkout
   aria configure             Interactively configure ARIA role models only (no registration or sync)
   aria update                Pull latest changes, reinstall, and re-sync dependencies
-  aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
+  aria upgrade               Show upgrade inventory (requires --yes to approve any mutation)
+  aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)
+  aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope  aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria routes                Print resolved model routes for each ARIA role
   aria --help                Show this help message
@@ -148,6 +150,7 @@ async function main() {
     }
 
     const { setup } = await import("../dist/lifecycle.js");
+    const { runSetupDependencies } = await import("../dist/dependencies.js");
     const result = await setup(import.meta.url, undefined, undefined, {
       configure: configureRequested,
       pluginSpec,
@@ -155,10 +158,13 @@ async function main() {
       input: process.stdin,
       output: process.stdout,
       tty: process.stdin.isTTY === true,
+      // T017: invoke the shared dependency lifecycle directly (no ARIA
+      // self-upgrade handoff on the setup path).
+      dependenciesFn: async (executor, configDir) => runSetupDependencies(executor, { configDir }),
     });
 
     if (result.setup) {
-      const { registration, sync, config, agents, model } = result.setup;
+      const { registration, sync, config, agents, dependencies, model } = result.setup;
 
       // Registration
       if (registration.action === "registered") {
@@ -175,6 +181,25 @@ async function main() {
         console.log(`Sync: [OK] ${sync.output || "all dependencies synchronized"}`);
       } else if (sync.error) {
         console.error(`Sync: [FAIL] ${sync.error}`);
+      }
+
+      // Shared dependency lifecycle (T017): direct adapter invocation, no handoff.
+      if (dependencies) {
+        if (dependencies.ok) {
+          console.log(`Dependencies: [OK] shared lifecycle completed`);
+        } else {
+          console.error(`Dependencies: [FAIL] shared lifecycle reported failures`);
+        }
+        for (const outcome of dependencies.outcomes ?? []) {
+          const flag = outcome.status === "completed" ? "[OK]" : outcome.status === "skipped" ? "[SKIP]" : "[FAIL]";
+          if (outcome.status === "completed") {
+            console.log(`  ${outcome.component}: ${flag} ${outcome.detail}`);
+          } else if (outcome.status === "skipped") {
+            console.log(`  ${outcome.component}: ${flag} ${outcome.detail}`);
+          } else {
+            console.error(`  ${outcome.component}: ${flag} ${outcome.detail}`);
+          }
+        }
       }
 
       // Global V2 config (T008): exact plugin URI, single skills root,
@@ -261,6 +286,118 @@ async function main() {
       console.error(`Stage failed: ${result.stage}`);
     }
     return result.ok ? 0 : 1;
+  }
+
+  if (command === "upgrade") {
+    // T010: only --check (strictly read-only inventory) and --yes (explicit
+    // approval) are accepted. There is intentionally no --aria-only or
+    // --deps-only in v1.0.7: approval covers the whole inventoried scope and
+    // the bounded handoff binds it. Anything else is rejected before any
+    // probe, registration, file write, or sync.
+    //
+    // T011: --handoff-json <payload> receives an approved upgrade handoff in
+    // the new release (the old release's one-shot spawn invokes it; it is not
+    // run by hand). It carries its own approval via the handoff payload and
+    // never combines with --check/--yes.
+    const rest = args.slice(1);
+    let check = false;
+    let yes = false;
+    let handoffJson;
+    for (let index = 0; index < rest.length; index++) {
+      const arg = rest[index];
+      if (arg === "--check") {
+        check = true;
+        continue;
+      }
+      if (arg === "--yes") {
+        yes = true;
+        continue;
+      }
+      if (arg === "--handoff-json") {
+        const value = rest[index + 1];
+        if (value === undefined) {
+          console.error("Missing value for --handoff-json (expected the JSON handoff payload from the approved upgrade)");
+          console.error("Usage: aria upgrade [--check] [--yes]");
+          return 1;
+        }
+        handoffJson = value;
+        index++;
+        continue;
+      }
+      if (arg.startsWith("--handoff-json=")) {
+        const value = arg.slice("--handoff-json=".length);
+        if (value.length === 0) {
+          console.error("Missing value for --handoff-json (expected the JSON handoff payload from the approved upgrade)");
+          console.error("Usage: aria upgrade [--check] [--yes]");
+          return 1;
+        }
+        handoffJson = value;
+        continue;
+      }
+      console.error(`Unknown upgrade option: ${arg}`);
+      console.error("Usage: aria upgrade [--check] [--yes]");
+      return 1;
+    }
+    if (check && yes) {
+      console.error("Options --check and --yes cannot be combined (--check is strictly read-only)");
+      console.error("Usage: aria upgrade [--check] [--yes]");
+      return 1;
+    }
+    if (handoffJson !== undefined && (check || yes)) {
+      console.error("Option --handoff-json cannot be combined with --check or --yes (the handoff carries its own approval)");
+      console.error("Usage: aria upgrade [--check] [--yes]");
+      return 1;
+    }
+
+    if (handoffJson !== undefined) {
+      try {
+        const { receiveUpgradeHandoff } = await import("../dist/aria-upgrade.js");
+        const result = await receiveUpgradeHandoff(handoffJson, loadVersion());
+        if (result.report) console.log(result.report);
+        console.log(result.stage === "complete" ? "Upgrade: complete" : `Upgrade: stopped (${result.stage})`);
+        console.log(result.detail);
+        return result.ok ? 0 : 1;
+      } catch (err) {
+        console.error(`Upgrade: [FAIL] ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+    }
+
+    const {
+      checkUpgradeInventory,
+      formatUpgradeCheck,
+      formatUpgradeResult,
+      runUpgrade,
+      upgradeExitCode,
+    } = await import("../dist/upgrade.js");
+
+    if (check) {
+      try {
+        const result = await checkUpgradeInventory();
+        console.log(formatUpgradeCheck(result));
+        return 0;
+      } catch (err) {
+        console.error(`Upgrade check: [FAIL] ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+    }
+
+    try {
+      const { selfUpgradeAria } = await import("../dist/aria-upgrade.js");
+      const { runUpgradeDependencies } = await import("../dist/dependencies.js");
+      const result = await runUpgrade(undefined, {
+        approval: { yes },
+        selfUpgradeFn: (target, handoff) => selfUpgradeAria(target, handoff),
+        // T017: already-current ARIA runs the approved dependency updates
+        // directly under this release (no self-replacement/handoff).
+        dependenciesFn: async (executor, configDir) => runUpgradeDependencies(executor, { configDir }),
+      });
+      console.log(formatUpgradeResult(result));
+      return upgradeExitCode(result);
+    } catch (err) {
+      console.error(`Upgrade: [FAIL] ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
   }
 
   if (command === "routes") {

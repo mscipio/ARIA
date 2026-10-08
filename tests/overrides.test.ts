@@ -124,9 +124,9 @@ describe("ARIA overrides", () => {
       tempDirs.push(root);
       await writeFile(resolve(root, "aria.json"), "{}");
       const config = resolveAriaConfig(root);
-      expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.planner.model).toBe("openai/gpt-6-luna");
       expect(config.roles.planner.variant).toBe("xhigh");
-      expect(config.roles.reviewer.model).toBe("opencode-go/deepseek-v4-pro");
+      expect(config.roles.reviewer.model).toBe("openai/gpt-6.1-sol");
     });
 
     it("inherits defaults with { roles: {} }", async () => {
@@ -134,7 +134,7 @@ describe("ARIA overrides", () => {
       tempDirs.push(root);
       await writeFile(resolve(root, "aria.json"), JSON.stringify({ roles: {} }));
       const config = resolveAriaConfig(root);
-      expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.planner.model).toBe("openai/gpt-6-luna");
     });
 
     it("resolves scientist overrides like the other durable roles", async () => {
@@ -168,7 +168,7 @@ describe("ARIA overrides", () => {
         roles: { planner: { variant: "high" } },
       }));
       const config = resolveAriaConfig(root);
-      expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.planner.model).toBe("openai/gpt-6-luna");
       expect(config.roles.planner.variant).toBe("high");
     });
 
@@ -195,7 +195,7 @@ describe("ARIA overrides", () => {
         roles: { planner: {} },
       }));
       const config = resolveAriaConfig(root);
-      expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.planner.model).toBe("openai/gpt-6-luna");
       expect(config.roles.planner.variant).toBe("xhigh");
     });
 
@@ -255,17 +255,17 @@ describe("ARIA overrides", () => {
     it("injects resolved routing into coder prompt", () => {
       const config = resolveAriaConfig(tmpdir());
       expect(config.roles.coder.promptText).toContain("Configured routes:");
-      expect(config.roles.coder.promptText).toContain("coder: `coder` → opencode-go/deepseek-v4-pro");
-      expect(config.roles.coder.promptText).toContain("explorer: `explorer` → opencode-go/deepseek-v4-flash [high]");
-      expect(config.roles.coder.promptText).toContain("planner: `planner` → openai/gpt-5.6-terra [xhigh]");
-      expect(config.roles.coder.promptText).toContain("architect: `architect` → openai/gpt-5.6-sol [xhigh]");
-      expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2");
-      expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro");
-      expect(config.roles.coder.promptText).toContain("researcher: `researcher` → openai/gpt-5.6-sol [medium]");
-      expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code");
+      expect(config.roles.coder.promptText).toContain("coder: `coder` → opencode-go/muse-spark-1.3-contributor [xhigh]");
+      expect(config.roles.coder.promptText).toContain("explorer: `explorer` → opencode-go/muse-spark-1.3-contributor [high]");
+      expect(config.roles.coder.promptText).toContain("planner: `planner` → openai/gpt-6-luna [xhigh]");
+      expect(config.roles.coder.promptText).toContain("architect: `architect` → openai/gpt-6.1-sol [high]");
+      expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/muse-spark-1.3-contributor [xhigh]");
+      expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → openai/gpt-6.1-sol [medium]");
+      expect(config.roles.coder.promptText).toContain("researcher: `researcher` → openai/gpt-6.1-sol [medium]");
+      expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/muse-spark-1.3-contributor [xhigh]");
       expect(config.roles.coder.promptText).toContain("writer: `writer`");
-      expect(config.roles.coder.promptText).toContain("openai/gpt-5.6-sol [medium]");
-      expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/deepseek-v4-pro");
+      expect(config.roles.coder.promptText).toContain("openai/gpt-6.1-sol [medium]");
+      expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/muse-spark-1.3-contributor [high]");
     });
 
     it("routing reflects project model override and drops the cleared variant", async () => {
@@ -286,7 +286,7 @@ describe("ARIA overrides", () => {
         roles: { explorer: { variant: "xhigh" } },
       }));
       const config = resolveAriaConfig(root);
-      expect(config.roles.coder.promptText).toContain("explorer: `explorer` → opencode-go/deepseek-v4-flash [xhigh]");
+      expect(config.roles.coder.promptText).toContain("explorer: `explorer` → opencode-go/muse-spark-1.3-contributor [xhigh]");
     });
 
     it("researcher model override resolves and clears the inherited variant", async () => {
@@ -302,13 +302,14 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).not.toContain("researcher: `researcher` → openai/gpt-5.6-terra [medium]");
     });
 
-    it("roles without variants render cleanly without fake variant text", () => {
+    it("every baseline role renders its variant in brackets, never fake variant text", () => {
       const config = resolveAriaConfig(tmpdir());
-      expect(config.roles.coder.promptText).toContain("coder: `coder` → opencode-go/deepseek-v4-pro\n");
-      expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/glm-5.2\n");
-      expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → opencode-go/deepseek-v4-pro\n- researcher:");
-      expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/kimi-k2.7-code\n");
-      expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/deepseek-v4-pro\n");
+      expect(config.roles.coder.promptText).toContain("coder: `coder` → opencode-go/muse-spark-1.3-contributor [xhigh]\n");
+      expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/muse-spark-1.3-contributor [xhigh]\n");
+      expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → openai/gpt-6.1-sol [medium]\n- researcher:");
+      expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/muse-spark-1.3-contributor [xhigh]\n");
+      expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/muse-spark-1.3-contributor [high]\n");
+      expect(config.roles.coder.promptText).not.toContain("()");
     });
 
     it("archivist model and variant overrides resolve correctly", async () => {
@@ -326,7 +327,7 @@ describe("ARIA overrides", () => {
     it("archivist defaults resolve without WIKI_DIR env (missing env does not break startup)", () => {
       delete process.env.WIKI_DIR;
       const config = resolveAriaConfig(tmpdir());
-      expect(config.roles["archivist"].model).toBe("opencode-go/deepseek-v4-pro");
+      expect(config.roles["archivist"].model).toBe("opencode-go/muse-spark-1.3-contributor");
       expect(config.roles["archivist"].promptText).toBeDefined();
       expect(config.roles["archivist"].promptText.length).toBeGreaterThan(0);
       // Coder prompt must never contain packageRoot or WIKI_DIR paths.
@@ -365,7 +366,7 @@ describe("ARIA overrides", () => {
       tempDirs.push(root);
       process.env.HOME = root;
       const config = resolveAriaConfig(resolve(root, "worktree"));
-      expect(config.roles.planner.model).toBe("openai/gpt-5.6-terra");
+      expect(config.roles.planner.model).toBe("openai/gpt-6-luna");
       expect(config.roles.planner.variant).toBe("xhigh");
     });
 

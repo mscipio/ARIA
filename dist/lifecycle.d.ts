@@ -1,5 +1,6 @@
 import type { Readable, Writable } from "node:stream";
 import { depsSync, type Executor } from "./deps.js";
+import type { DependencyLifecycleResult, DependencyOutcome } from "./dependencies.js";
 import { type ModelConfigurationResult, type ModelConfigureOptions } from "./model-config.js";
 export interface LifecycleResult {
     ok: boolean;
@@ -27,14 +28,25 @@ export interface SetupResult {
      * registration or config failed first.
      */
     agents?: SetupAgentsPhase;
+    /**
+     * Outcome of the shared dependency lifecycle (T017). Present only when a
+     * `dependenciesFn` seam was provided (the `aria setup` CLI always provides
+     * the real `runSetupDependencies`; omitted preserves the pre-T017
+     * registration/config/agents/sync behavior for existing callers/tests).
+     * The lifecycle invokes the shared adapters directly with no ARIA
+     * self-upgrade handoff.
+     */
+    dependencies?: SetupDependenciesPhase;
     /** Outcome of the optional model-configuration phase; absent unless requested. */
     model?: ModelConfigurationResult;
 }
 /**
- * T008 file-phase outcomes: global `opencode.json` (exact plugin URI,
+ * T008 file-phase outcomes: global `opencode.json(c)` (exact plugin URI,
  * single skills root, depth default 3; unrelated user keys preserved,
  * backup before replace, idempotent) and the eleven managed agent files
- * (via T003 `installAgentFiles`, resolved project-neutral).
+ * (via T003 `installAgentFiles`, resolved project-neutral). T002 discovery
+ * selects which of `opencode.json` / `opencode.jsonc` is the target and
+ * `path` always reports the resolved file.
  */
 export interface SetupConfigPhase {
     path: string;
@@ -55,6 +67,23 @@ export interface SetupAgentsPhase {
  * so tests can inject a mock without touching discovery or the interactive UI.
  */
 export type ConfigureModelsFn = (worktree: string, options?: ModelConfigureOptions) => Promise<ModelConfigurationResult>;
+/**
+ * Shared dependency lifecycle seam for `setup` (T017). Receives the same
+ * executor plus the effective global config dir (`dirname(globalConfigPath)`,
+ * shared with `depsSync`) and returns the shared lifecycle result. The
+ * `aria setup` CLI always provides the real `runSetupDependencies` (direct
+ * adapter invocation, no handoff); omitted preserves the pre-T017 behavior
+ * for existing callers/tests.
+ */
+export type SetupDependenciesFn = (executor: Executor, configDir: string) => Promise<DependencyLifecycleResult>;
+/**
+ * Setup-visible projection of the shared dependency lifecycle outcome.
+ */
+export interface SetupDependenciesPhase {
+    ok: boolean;
+    outcomes: DependencyOutcome[];
+    report: string;
+}
 /**
  * Options for `setup`. All fields are optional: omitting them preserves the
  * fully non-interactive `setup(binaryUrl, executor, depsSyncFn)` behavior.
@@ -89,6 +118,14 @@ export interface SetupOptions {
      * workstation files are touched outside the resolved paths.
      */
     files?: SetupFilesOptions;
+    /**
+     * Shared dependency lifecycle seam (T017). When provided, `setup` invokes
+     * it directly after the agent-file phase and before `depsSync` (install
+     * if missing OR update if safely owned/outdated → normalize → validate,
+     * no ARIA self-upgrade handoff). When omitted the phase is skipped and
+     * `setup.dependencies` stays absent (pre-T017 behavior preserved).
+     */
+    dependenciesFn?: SetupDependenciesFn;
 }
 /**
  * Path overrides for the T008 setup file phases. Every field is optional;

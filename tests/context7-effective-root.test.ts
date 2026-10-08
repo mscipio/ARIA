@@ -9,6 +9,7 @@ import { depsSync, detectContext7, doctor, type Executor } from "../src/deps.js"
 import { setup } from "../src/lifecycle.js";
 import { openCodeGlobalDir } from "../src/paths.js";
 import { defaultGlobalConfigPath } from "../src/setup-config.js";
+import { assertNotCallerGlobalPath } from "./test-isolation.js";
 
 const tempDirs: string[] = [];
 let originalHome: string | undefined;
@@ -32,6 +33,9 @@ async function isolateXdg() {
   const fakeHome = await mkdtemp(resolve(tmpdir(), "t003-home-"));
   const xdgRoot = await mkdtemp(resolve(tmpdir(), "t003-xdg-"));
   tempDirs.push(fakeHome, xdgRoot);
+  // T019 guard: the isolated roots must not be caller global paths.
+  assertNotCallerGlobalPath(fakeHome, "isolated HOME");
+  assertNotCallerGlobalPath(xdgRoot, "isolated XDG root");
   process.env.HOME = fakeHome;
   process.env.XDG_CONFIG_HOME = xdgRoot;
   return { fakeHome, xdgRoot, xdgGlobal: join(xdgRoot, "opencode") };
@@ -259,6 +263,10 @@ describe("T003 effective root: Context7 detect/sync/doctor share one root", () =
     const result = await setup(binaryUrl, executor, depsSyncFn, {});
     expect(result.ok).toBe(true);
     // Env defaults: dirname(defaultGlobalConfigPath()) === openCodeGlobalDir().
+    // T019: this no-files call is the single intentional env-default probe;
+    // it runs under isolateXdg() above, so the default resolves to the
+    // isolated root — the guard proves it is not a caller global path.
+    assertNotCallerGlobalPath(seenDir as string, "env-derived setup dir");
     expect(seenDir).toBe(xdgGlobal);
     expect(seenDir).toBe(openCodeGlobalDir());
     expect(seenDir).toBe(dirname(defaultGlobalConfigPath()));

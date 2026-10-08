@@ -305,10 +305,10 @@ describe("parseModelVerbose", () => {
 // ---------------------------------------------------------------------------
 
 describe("discoverAvailableModels", () => {
-  it("merges opencode models with --verbose metadata", async () => {
+  it("discovers models with plain opencode models and leaves variant capability unknown", async () => {
     execMocks.execFile.mockImplementation(
-      (_file: string, args: string[], _options: unknown, callback: ExecCallback) => {
-        callback(null, args.includes("--verbose") ? VERBOSE_MODELS_OUTPUT : PLAIN_MODELS_OUTPUT, "");
+      (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+        callback(null, PLAIN_MODELS_OUTPUT, "");
       },
     );
 
@@ -318,21 +318,22 @@ describe("discoverAvailableModels", () => {
       "opencode-go/deepseek-v4-pro",
       "openai/gpt-5.6-terra",
     ]);
-    expect(discovered.models[0]?.variants).toEqual(["low", "high"]);
-    expect(discovered.models[0]?.name).toBe("DeepSeek V4 Pro");
-    expect(execMocks.execFile).toHaveBeenCalledTimes(2);
+    // Pinned 2.0.23 has no supported --verbose surface: plain discovery
+    // establishes no variant metadata, so doctor reports variants as unknown.
+    for (const model of discovered.models) {
+      expect(model.variants).toEqual([]);
+      expect(model.variantsObservable).toBeUndefined();
+    }
+    expect(execMocks.execFile).toHaveBeenCalledTimes(1);
     expect(execMocks.execFile).toHaveBeenCalledWith(
       "opencode",
       ["models"],
       expect.objectContaining({ cwd: "/tmp/example-worktree" }),
       expect.any(Function),
     );
-    expect(execMocks.execFile).toHaveBeenCalledWith(
-      "opencode",
-      ["models", "--verbose"],
-      expect.objectContaining({ cwd: "/tmp/example-worktree" }),
-      expect.any(Function),
-    );
+    for (const call of execMocks.execFile.mock.calls) {
+      expect(call[1]).toEqual(["models"]);
+    }
   });
 
   it("fails cleanly when the opencode CLI exits non-zero", async () => {
@@ -353,8 +354,8 @@ describe("discoverAvailableModels", () => {
 
   it("fails cleanly when opencode models lists nothing", async () => {
     execMocks.execFile.mockImplementation(
-      (_file: string, args: string[], _options: unknown, callback: ExecCallback) => {
-        callback(null, args.includes("--verbose") ? VERBOSE_MODELS_OUTPUT : "", "");
+      (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+        callback(null, "", "");
       },
     );
 
@@ -399,23 +400,23 @@ describe("configureModels", () => {
     // researcher appears between reviewer and archivist with its packaged
     // sol/medium default (absent global/project layers render as dashes).
     expect(text).toContain(
-      "  researcher\n    default:   openai/gpt-5.6-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-5.6-sol (medium)\x1b[0m [not listed by OpenCode]",
+      "  researcher\n    default:   openai/gpt-6.1-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-6.1-sol (medium)\x1b[0m [not listed by OpenCode]",
     );
     // scientist closes the overview with the same sol/medium default.
     expect(text).toContain(
-      "  scientist\n    default:   openai/gpt-5.6-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-5.6-sol (medium)\x1b[0m [not listed by OpenCode]",
+      "  scientist\n    default:   openai/gpt-6.1-sol (medium)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopenai/gpt-6.1-sol (medium)\x1b[0m [not listed by OpenCode]",
     );
     // Absent layers render as plain hyphens; coder resolves to its ARIA
     // default, whose value is bolded in TTY output.
     expect(text).toContain(
-      "  coder\n    default:   opencode-go/deepseek-v4-pro\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopencode-go/deepseek-v4-pro\x1b[0m",
+      "  coder\n    default:   opencode-go/muse-spark-1.3-contributor (xhigh)\n    global:    -\n    project:   -\n    resolved:  \x1b[1mopencode-go/muse-spark-1.3-contributor (xhigh)\x1b[0m [not listed by OpenCode]",
     );
     // Resolved models the CLI did not list are flagged; listed ones are not
     // labeled available/unavailable.
     expect(text).toContain(
-      "resolved:  \x1b[1mopencode-go/deepseek-v4-flash (high)\x1b[0m [not listed by OpenCode]",
+      "resolved:  \x1b[1mopencode-go/muse-spark-1.3-contributor (high)\x1b[0m [not listed by OpenCode]",
     );
-    expect(text).toContain("resolved:  \x1b[1mopenai/gpt-5.6-terra (xhigh)\x1b[0m\n");
+    expect(text).toContain("resolved:  \x1b[1mopenai/gpt-6-luna (xhigh)\x1b[0m [not listed by OpenCode]\n");
     expect(text).not.toContain("[available]");
     expect(text).not.toContain("[unavailable]");
   });
@@ -439,7 +440,7 @@ describe("configureModels", () => {
 
     expect(lines.join("\n")).toContain(
       "  planner\n"
-      + "    default:   openai/gpt-5.6-terra (xhigh)\n"
+      + "    default:   openai/gpt-6-luna (xhigh)\n"
       + "    global:    opencode-go/deepseek-v4-flash\n"
       + "    project:   openai/gpt-5.6-luna (xhigh)\n"
       + "    resolved:  \x1b[1mopenai/gpt-5.6-luna (xhigh)\x1b[0m [not listed by OpenCode]",
@@ -555,7 +556,7 @@ describe("configureModels", () => {
     const resolved = resolveAriaConfig(worktree);
     expect(resolved.roles.researcher.model).toBe("opencode-go/deepseek-v4-pro");
     expect(resolved.roles.researcher.variant).toBeUndefined();
-    expect(resolved.roles.writer.variant).toBe("medium");
+    expect(resolved.roles.writer.variant).toBe("xhigh");
   });
 
   it("shows numbered choices for a substring search and honors no-variant", async () => {
@@ -649,7 +650,7 @@ describe("configureModels", () => {
     // The single-role view renders the absent project layer as a plain hyphen.
     expect(lines.join("\n")).toContain(
       "  planner\n"
-      + "    default:   openai/gpt-5.6-terra (xhigh)\n"
+      + "    default:   openai/gpt-6-luna (xhigh)\n"
       + "    global:    openai/gpt-5.4-mini (high)\n"
       + "    project:   -\n"
       + "    resolved:  \x1b[1mopenai/gpt-5.4-mini (high)\x1b[0m [not listed by OpenCode]",
@@ -860,7 +861,7 @@ describe("configureModels", () => {
     expect(lines.join("\n")).toContain("aria routes");
     expect(lines.join("\n")).toContain(
       "  planner\n"
-      + "    default:   openai/gpt-5.6-terra (xhigh)\n"
+      + "    default:   openai/gpt-6-luna (xhigh)\n"
       + "    global:    openai/gpt-5.4-mini\n"
       + "    project:   openai/gpt-5.4-mini\n"
       + "    resolved:  \x1b[1mopenai/gpt-5.4-mini\x1b[0m [not listed by OpenCode]",
@@ -1016,7 +1017,7 @@ describe("configureModels", () => {
     });
 
     const text = lines.join("\n");
-    expect(text).toContain("resolved:  \x1b[1mopencode-go/deepseek-v4-pro\x1b[0m");
+    expect(text).toContain("resolved:  \x1b[1mopencode-go/muse-spark-1.3-contributor (xhigh)\x1b[0m [not listed by OpenCode]");
     // Exactly one bold segment per role (the resolved value); labels and other
     // layers stay unbolded, and no warnings render here.
     expect(text.split("\x1b[1m").length - 1).toBe(11);
@@ -1102,7 +1103,7 @@ describe("configureModels", () => {
     expect(text).not.toContain("\x1b[");
     // Content is still present, just unstyled.
     expect(text).toContain("WARNING: Project-local aria.json pins the model field for planner");
-    expect(text).toContain("resolved:  opencode-go/deepseek-v4-pro");
+    expect(text).toContain("resolved:  opencode-go/muse-spark-1.3-contributor (xhigh)");
   });
 
   it("emits plain text without ANSI escapes when NO_COLOR is an empty string", async () => {
@@ -1129,6 +1130,6 @@ describe("configureModels", () => {
     expect(text).not.toContain("\x1b[");
     // Content is still present, just unstyled.
     expect(text).toContain("WARNING: Project-local aria.json pins the model field for planner");
-    expect(text).toContain("resolved:  opencode-go/deepseek-v4-pro");
+    expect(text).toContain("resolved:  opencode-go/muse-spark-1.3-contributor (xhigh)");
   });
 });

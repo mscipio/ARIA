@@ -102,7 +102,16 @@ describe("T008 V2 registration command shape (A)", () => {
     const result = await setup(binaryUrl(checkout), executor, async () => {
       syncCalled = true;
       return okSync();
-    }, { worktree: await tempDir() });
+    }, {
+      worktree: await tempDir(),
+      // T019: explicit temp paths even on the registration-failure path so
+      // no phase can fall through to caller global paths.
+      files: {
+        globalConfigPath: join(await tempDir(), "opencode.json"),
+        agentsDir: join(await tempDir(), "agents"),
+        skillsRoot: SKILLS_ROOT,
+      },
+    });
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("registration");
     expect(syncCalled).toBe(false);

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { opencodeConfigPath, stripJsoncComments } from "./deps.js";
@@ -15,9 +15,13 @@ import type { ResolvedAriaConfig } from "./types.js";
  *
  * Supported V2 surface only (verified against `@opencode/schema@2.0.23`
  * `Config.Info`: `plugins` is `(string | Entry)[]`, `skills` is `string[]`,
- * `experimental.subagent_depth` is an int; `docs/config` describes `skills`
+ * `experimental.subagent_depth` is an int, `default_agent` is a string
+ * ("Default primary agent to use when no session agent is selected");
+ * `docs/config` describes `skills`
  * as "Additional paths or URLs to discover skills from"). This module writes
- * exactly three things:
+ * exactly four things:
+ * - `default_agent`: `"coder"` only when unconfigured (absent, null, or
+ *   blank) — an explicit user value is always preserved verbatim;
  * - `plugins`: the ARIA plugin identity (absolute path ≡ corresponding
  *   `file://` URI, one consistent local rule), appended once only when no
  *   equivalent is present and never rewriting an existing equivalent
@@ -54,12 +58,15 @@ import type { ResolvedAriaConfig } from "./types.js";
 
 /** Minimal structural config surface this module reads/writes. */
 export interface SetupConfig {
+  default_agent?: unknown;
   plugins?: unknown;
   skills?: unknown;
   experimental?: { subagent_depth?: number | null | undefined } | undefined;
 }
 
 export interface ApplySetupResult {
+  /** True when `default_agent` was absent/null/blank and defaulted to `coder`. */
+  defaultAgentFilled: boolean;
   pluginsAdded: boolean;
   skillsAdded: boolean;
   /** True when `experimental.subagent_depth` was absent/null and defaulted to 3. */
@@ -136,21 +143,29 @@ export function applyAriaPluginToConfig<T extends SetupConfig>(
 }
 
 /**
- * Apply the full ARIA V2 setup (plugins + skills + depth default) to an
- * already-parsed config object. Returns per-key outcomes; never emits V1
- * keys (no singular `plugin`, no `skills.paths`/`urls`, no top-level
- * `subagent_depth`).
+ * Apply the full ARIA V2 setup (default agent + plugins + skills + depth
+ * default) to an already-parsed config object. Returns per-key outcomes;
+ * never emits V1 keys (no singular `plugin`, no `skills.paths`/`urls`, no
+ * top-level `subagent_depth`).
  */
 export function applyAriaSetupToConfig<T extends SetupConfig>(
   config: T,
   targets: { pluginUri: string; skillsRoot?: string },
 ): ApplySetupResult {
   const skillsRoot = targets.skillsRoot ?? getPackageSkillsRoot();
+  const defaultAgentBefore = config.default_agent;
+  const defaultAgentFilled = defaultAgentBefore === undefined
+    || defaultAgentBefore === null
+    || (typeof defaultAgentBefore === "string" && defaultAgentBefore.trim().length === 0);
+  if (defaultAgentFilled) {
+    config.default_agent = "coder";
+  }
   const pluginsAdded = applyAriaPluginToConfig(config, targets.pluginUri).added;
   const skillsAdded = applyAriaSkillsToConfig(config, skillsRoot).added;
   const depthBefore = config.experimental?.subagent_depth;
   applyExperimentalSubagentDepthDefault(config);
   return {
+    defaultAgentFilled,
     pluginsAdded,
     skillsAdded,
     depthFilled: depthBefore === undefined || depthBefore === null,
@@ -331,11 +346,92 @@ export function defaultGlobalConfigPath(explicit?: string): string {
   return opencodeConfigPath(explicit);
 }
 
+// ---------------------------------------------------------------------------
+// Canonical global config discovery (T002)
+// ---------------------------------------------------------------------------
+
+/** Pure existence outcome for the two pinned global config names. */
+export type SetupConfigFileKind = "json" | "jsonc" | "missing" | "ambiguous";
+
+/**
+ * Pure T002 selection among the pinned names from existence alone: exactly
+ * one existing file wins, none means the canonical creation target, and both
+ * existing is ambiguous. Parseability and extension order never decide —
+ * callers must fail closed on `"ambiguous"`.
+ */
+export function selectSetupConfigKind(jsonExists: boolean, jsoncExists: boolean): SetupConfigFileKind {
+  if (jsonExists && jsoncExists) return "ambiguous";
+  if (jsonExists) return "json";
+  if (jsoncExists) return "jsonc";
+  return "missing";
+}
+
+async function configFileExists(path: string): Promise<boolean> {
+  try {
+    const info = await stat(path);
+    return info.isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function ambiguousConfigError(jsonPath: string, jsoncPath: string): Error {
+  return new Error(
+    `Ambiguous global OpenCode config: both ${jsonPath} and ${jsoncPath} exist. ` +
+      `OpenCode reads ${jsonPath} (opencode.json) when both are present, so changing either file alone ` +
+      `could shadow user-owned settings in the other, and nothing proves which file is redundant: ` +
+      `ARIA writes no ownership marker into this config and ownership is never inferred from keys or values. ` +
+      `No file was created, modified, or backed up. Keep the single file OpenCode should read ` +
+      `(merging any settings worth keeping into it), remove the redundant file, then re-run setup.`,
+  );
+}
+
+/**
+ * Resolve the requested global config path to the canonical discovery
+ * target. For the pinned `opencode.json` / `opencode.jsonc` basenames the
+ * sibling directory is inspected: a single existing file is updated in
+ * place (so a pre-existing `.jsonc` is never shadowed by a newly created
+ * `.json`), absence creates the canonical `opencode.json` — or the
+ * explicitly requested sibling when the caller named one — and both
+ * existing fails closed before any mutation (never by parseability or
+ * extension order).
+ *
+ * No safe automatic repair exists: pinned precedence says which file is
+ * *effective*, not which is *redundant*, and this config carries no
+ * durable ARIA ownership marker (agent files have one; config keys such as
+ * `plugins`/`skills` are explicitly not ownership evidence). In
+ * particular the v1.0.6 state — a pre-existing `opencode.jsonc` plus the
+ * `opencode.json` the old setup path created alongside it — fails closed
+ * here even when one file looks ARIA-shaped. Non-`opencode.json(c)`
+ * basenames (explicit test seams) resolve to the requested path unchanged.
+ */
+async function resolveSetupConfigPath(requestedPath: string, explicit: boolean): Promise<string> {
+  const base = basename(requestedPath);
+  if (base !== "opencode.json" && base !== "opencode.jsonc") return requestedPath;
+  const dir = dirname(requestedPath);
+  const jsonPath = join(dir, "opencode.json");
+  const jsoncPath = join(dir, "opencode.jsonc");
+  const [jsonExists, jsoncExists] = await Promise.all([configFileExists(jsonPath), configFileExists(jsoncPath)]);
+  switch (selectSetupConfigKind(jsonExists, jsoncExists)) {
+    case "ambiguous":
+      throw ambiguousConfigError(jsonPath, jsoncPath);
+    case "json":
+      return jsonPath;
+    case "jsonc":
+      return jsoncPath;
+    case "missing":
+      return explicit ? requestedPath : jsonPath;
+  }
+}
+
 export interface SetupConfigFileResult {
   path: string;
   changed: boolean;
   /** True when no config file existed before this call. */
   created: boolean;
+  /** True when `default_agent` was absent/null/blank and defaulted to `coder`. */
+  defaultAgentFilled: boolean;
   pluginsAdded: boolean;
   skillsAdded: boolean;
   depthFilled: boolean;
@@ -390,8 +486,14 @@ async function writeFileAtomic(path: string, content: string): Promise<void> {
 }
 
 /**
- * Ensure the global V2 config carries the ARIA setup (exact plugin URI,
- * single skills root, depth default 3). Unrelated user keys are preserved;
+ * Ensure the global V2 config carries the ARIA setup (`default_agent`
+ * default `coder` only when unconfigured, exact plugin URI,
+ * single skills root, depth default 3). The target is the canonical
+ * discovery selection: a single existing `opencode.json` or
+ * `opencode.jsonc` is updated in place (parsed JSONC-tolerantly, written
+ * back to the same path), absence creates the canonical `opencode.json`,
+ * and both existing fails closed with neither file touched. Unrelated user
+ * keys are preserved;
  * a replaced file is backed up first (as a copy, so the live path is never
  * missing); no write happens when nothing changed. ARIA-relevant V1 keys
  * (`plugin` singular, top-level `subagent_depth`) migrate forward with
@@ -405,7 +507,8 @@ export async function ensureAriaSetupConfigFile(options: {
   pluginUri: string;
   skillsRoot?: string;
 }): Promise<SetupConfigFileResult> {
-  const path = options.configPath ?? defaultGlobalConfigPath();
+  const requestedPath = options.configPath ?? defaultGlobalConfigPath();
+  const path = await resolveSetupConfigPath(requestedPath, options.configPath !== undefined);
   const skillsRoot = options.skillsRoot ?? getPackageSkillsRoot();
   const existing = await readExistingConfig(path);
   const parsed: Record<string, unknown> = existing === undefined ? {} : parseConfigFile(existing, path);
@@ -438,6 +541,7 @@ export async function ensureAriaSetupConfigFile(options: {
       path,
       changed: false,
       created: false,
+      defaultAgentFilled: false,
       pluginsAdded: false,
       skillsAdded: false,
       depthFilled: false,
@@ -453,6 +557,7 @@ export async function ensureAriaSetupConfigFile(options: {
       path,
       changed: true,
       created: true,
+      defaultAgentFilled: applied.defaultAgentFilled,
       pluginsAdded: applied.pluginsAdded,
       skillsAdded: applied.skillsAdded,
       depthFilled: applied.depthFilled,
@@ -474,6 +579,7 @@ export async function ensureAriaSetupConfigFile(options: {
     path,
     changed: true,
     created: false,
+    defaultAgentFilled: applied.defaultAgentFilled,
     pluginsAdded: applied.pluginsAdded,
     skillsAdded: applied.skillsAdded,
     depthFilled: applied.depthFilled,

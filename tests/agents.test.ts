@@ -101,11 +101,11 @@ describe("T003 agent installation", () => {
     expect(files.archivist).toContain("mode: all");
     expect(files.scientist).toContain("mode: all");
     // V2 model selector: provider/model with #variant appended.
-    expect(files.coder).toContain('model: "opencode-go/deepseek-v4-pro"');
-    expect(files.explorer).toContain('model: "opencode-go/deepseek-v4-flash#high"');
-    expect(files.planner).toContain('model: "openai/gpt-5.6-terra#xhigh"');
-    expect(files.researcher).toContain('model: "openai/gpt-5.6-sol#medium"');
-    expect(files.scientist).toContain('model: "openai/gpt-5.6-sol#medium"');
+    expect(files.coder).toContain('model: "opencode-go/muse-spark-1.3-contributor#xhigh"');
+    expect(files.explorer).toContain('model: "opencode-go/muse-spark-1.3-contributor#high"');
+    expect(files.planner).toContain('model: "openai/gpt-6-luna#xhigh"');
+    expect(files.researcher).toContain('model: "openai/gpt-6.1-sol#medium"');
+    expect(files.scientist).toContain('model: "openai/gpt-6.1-sol#medium"');
     // Preserved V1 description intent.
     expect(files.coder).toContain("Coordinates planning, implementation, and review.");
     expect(files.researcher).toContain("external literature and evidence research");
@@ -373,7 +373,7 @@ describe("T003 agent installation", () => {
     // our explicit rules rather than the builtin permissive defaults.
     const modelRef = Model.Ref.parse(model);
     expect(modelRef.providerID).toBe("opencode-go");
-    expect(modelRef.id).toBe("deepseek-v4-flash");
+    expect(modelRef.id).toBe("muse-spark-1.3-contributor");
     const loaded = Agent.Info.make({
       id: Agent.ID.make("explorer"),
       name: Agent.Name.make("explorer"),

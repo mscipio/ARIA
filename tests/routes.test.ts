@@ -17,17 +17,17 @@ describe("formatRoutes", () => {
     tempDirs.push(root);
     const output = formatRoutes(root);
     expect(output).toBe(`Resolved ARIA role routes:
-coder  opencode-go/deepseek-v4-pro
-explorer  opencode-go/deepseek-v4-flash (high)
-visualizer  opencode-go/kimi-k2.7-code
-planner  openai/gpt-5.6-terra (xhigh)
-architect  openai/gpt-5.6-sol (xhigh)
-implementer  opencode-go/glm-5.2
-reviewer  opencode-go/deepseek-v4-pro
-researcher  openai/gpt-5.6-sol (medium)
-archivist  opencode-go/deepseek-v4-pro
-writer  openai/gpt-5.6-sol (medium)
-scientist  openai/gpt-5.6-sol (medium)`);
+coder  opencode-go/muse-spark-1.3-contributor (xhigh)
+explorer  opencode-go/muse-spark-1.3-contributor (high)
+visualizer  opencode-go/muse-spark-1.3-contributor (xhigh)
+planner  openai/gpt-6-luna (xhigh)
+architect  openai/gpt-6.1-sol (high)
+implementer  opencode-go/muse-spark-1.3-contributor (xhigh)
+reviewer  openai/gpt-6.1-sol (medium)
+researcher  openai/gpt-6.1-sol (medium)
+archivist  opencode-go/muse-spark-1.3-contributor (high)
+writer  openai/gpt-6-luna (xhigh)
+scientist  openai/gpt-6.1-sol (medium)`);
   });
 
   it("reflects scientist model override and clears the inherited default variant", async () => {
@@ -61,7 +61,7 @@ scientist  openai/gpt-5.6-sol (medium)`);
       roles: { researcher: { variant: "xhigh" } },
     }));
     const output = formatRoutes(root);
-    expect(output).toContain("researcher  openai/gpt-5.6-sol (xhigh)");
+    expect(output).toContain("researcher  openai/gpt-6.1-sol (xhigh)");
   });
 
   it("reflects model override and clears the inherited default variant", async () => {
@@ -73,7 +73,7 @@ scientist  openai/gpt-5.6-sol (medium)`);
     const output = formatRoutes(root);
     expect(output).toContain("planner  openai/gpt-5.4-mini");
     expect(output).not.toContain("planner  openai/gpt-5.4-mini (xhigh)");
-    expect(output).toContain("architect  openai/gpt-5.6-sol (xhigh)");
+    expect(output).toContain("architect  openai/gpt-6.1-sol (high)");
   });
 
   it("reflects variant override while inheriting model from defaults", async () => {
@@ -83,17 +83,17 @@ scientist  openai/gpt-5.6-sol (medium)`);
       roles: { explorer: { variant: "xhigh" } },
     }));
     const output = formatRoutes(root);
-    expect(output).toContain("explorer  opencode-go/deepseek-v4-flash (xhigh)");
+    expect(output).toContain("explorer  opencode-go/muse-spark-1.3-contributor (xhigh)");
   });
 
-  it("renders roles with no variant without parentheses", async () => {
+  it("renders every baseline role with its variant in parentheses", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
     tempDirs.push(root);
     const output = formatRoutes(root);
-    expect(output).toContain("coder  opencode-go/deepseek-v4-pro\n");
-    expect(output).toContain("implementer  opencode-go/glm-5.2\n");
-    expect(output).toContain("reviewer  opencode-go/deepseek-v4-pro");
-    expect(output).not.toContain("coder  opencode-go/deepseek-v4-pro ()");
+    expect(output).toContain("coder  opencode-go/muse-spark-1.3-contributor (xhigh)\n");
+    expect(output).toContain("implementer  opencode-go/muse-spark-1.3-contributor (xhigh)\n");
+    expect(output).toContain("reviewer  openai/gpt-6.1-sol (medium)");
+    expect(output).not.toContain(" ()");
   });
 
   it("does not use Markdown backticks around model identifiers", async () => {

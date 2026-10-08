@@ -14,6 +14,7 @@ import {
   findLegacySetupKeys,
   resolveSetupAriaConfig,
   rollbackSetupConfigFile,
+  selectSetupConfigKind,
   validateAriaSetupConfig,
 } from "../src/setup-config.js";
 
@@ -70,12 +71,13 @@ function introspected(uri: string): Record<string, { stdout: string }> {
 const okSync = async () => ({ ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
 
 describe("T008 V2 setup appliers (pure)", () => {
-  it("writes only supported V2 keys: exact plugin URI, skills root, depth default 3", () => {
+  it("writes only supported V2 keys: coder default agent, exact plugin URI, skills root, depth default 3", () => {
     const config: Record<string, unknown> = {};
     const result = applyAriaSetupToConfig(config, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT });
 
-    expect(result).toEqual({ pluginsAdded: true, skillsAdded: true, depthFilled: true });
+    expect(result).toEqual({ defaultAgentFilled: true, pluginsAdded: true, skillsAdded: true, depthFilled: true });
     expect(config).toEqual({
+      default_agent: "coder",
       plugins: [PLUGIN_URI],
       skills: [SKILLS_ROOT],
       experimental: { subagent_depth: 3 },
@@ -84,6 +86,27 @@ describe("T008 V2 setup appliers (pure)", () => {
     expect(config).not.toHaveProperty("plugin");
     expect(config).not.toHaveProperty("subagent_depth");
     expect(validateAriaSetupConfig(config, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT })).toEqual([]);
+  });
+
+  it("defaults default_agent to coder only when unconfigured, preserving explicit values", () => {
+    const fresh: Record<string, unknown> = {};
+    expect(
+      applyAriaSetupToConfig(fresh, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT }).defaultAgentFilled,
+    ).toBe(true);
+    expect(fresh.default_agent).toBe("coder");
+
+    for (const explicit of ["custom/agent", "coder"]) {
+      const config: Record<string, unknown> = { default_agent: explicit };
+      const result = applyAriaSetupToConfig(config, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT });
+      expect(result.defaultAgentFilled).toBe(false);
+      expect(config.default_agent).toBe(explicit);
+    }
+
+    const blank: Record<string, unknown> = { default_agent: "  " };
+    expect(
+      applyAriaSetupToConfig(blank, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT }).defaultAgentFilled,
+    ).toBe(true);
+    expect(blank.default_agent).toBe("coder");
   });
 
   it("preserves unrelated user config and user entries; second run changes nothing", () => {
@@ -97,16 +120,18 @@ describe("T008 V2 setup appliers (pure)", () => {
     const first = applyAriaSetupToConfig(config, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT });
 
     // Explicit depth (including 0) is preserved, never overwritten.
-    expect(first).toEqual({ pluginsAdded: true, skillsAdded: true, depthFilled: false });
+    expect(first).toEqual({ defaultAgentFilled: true, pluginsAdded: true, skillsAdded: true, depthFilled: false });
     expect(config.plugins).toEqual(["file:///user/plugin", PLUGIN_URI]);
     expect(config.skills).toEqual(["/user/skills", SKILLS_ROOT]);
     expect((config.experimental as { subagent_depth?: number }).subagent_depth).toBe(0);
     expect((config.experimental as { portable_shell_scanner?: boolean }).portable_shell_scanner).toBe(true);
     expect(config.model).toBe("custom/default");
+    // An unconfigured default_agent is defaulted to coder alongside the rest.
+    expect(config.default_agent).toBe("coder");
 
     const snapshot = JSON.stringify(config);
     const second = applyAriaSetupToConfig(config, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT });
-    expect(second).toEqual({ pluginsAdded: false, skillsAdded: false, depthFilled: false });
+    expect(second).toEqual({ defaultAgentFilled: false, pluginsAdded: false, skillsAdded: false, depthFilled: false });
     expect(JSON.stringify(config)).toBe(snapshot);
   });
 
@@ -149,6 +174,7 @@ describe("T008 global config file (backup/rollback/idempotence)", () => {
     expect(written.plugins).toEqual(["file:///user/plugin", PLUGIN_URI]);
     expect(written.skills).toEqual([SKILLS_ROOT]);
     expect((written.experimental as { subagent_depth?: number }).subagent_depth).toBe(3);
+    expect(written.default_agent).toBe("coder");
     expect(written).not.toHaveProperty("plugin");
     expect(written).not.toHaveProperty("subagent_depth");
 
@@ -160,6 +186,20 @@ describe("T008 global config file (backup/rollback/idempotence)", () => {
     const entries = (await readdir(dir)).sort();
     expect(entries.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
     expect(entries.some((entry) => entry.includes(".aria-backup-"))).toBe(true);
+  });
+
+  it("preserves an explicit default_agent while still applying the remaining setup", async () => {
+    const dir = await tempDir();
+    const configPath = join(dir, "opencode.json");
+    await writeFile(configPath, JSON.stringify({ default_agent: "custom/agent" }));
+
+    const result = await ensureAriaSetupConfigFile({ configPath, pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT });
+    expect(result.changed).toBe(true);
+    expect(result.defaultAgentFilled).toBe(false);
+
+    const written = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    expect(written.default_agent).toBe("custom/agent");
+    expect(validateAriaSetupConfig(written, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT })).toEqual([]);
   });
 
   it("migrates a legacy skills object forward with backup, preserving string entries", async () => {
@@ -304,6 +344,180 @@ describe("T008 global config file (backup/rollback/idempotence)", () => {
   });
 });
 
+describe("T002 canonical JSON/JSONC discovery", () => {
+  it("selects purely by existence: a single file wins, none is missing, both is ambiguous", () => {
+    expect(selectSetupConfigKind(true, false)).toBe("json");
+    expect(selectSetupConfigKind(false, true)).toBe("jsonc");
+    expect(selectSetupConfigKind(false, false)).toBe("missing");
+    expect(selectSetupConfigKind(true, true)).toBe("ambiguous");
+  });
+
+  it("updates a single pre-existing JSONC in place with byte-exact backup/rollback", async () => {
+    const dir = await tempDir();
+    const jsonPath = join(dir, "opencode.json");
+    const jsoncPath = join(dir, "opencode.jsonc");
+    const original =
+      `{\n` +
+      `  // user comment that must survive rollback byte-exact\n` +
+      `  "mcp": { "keep": true },\n` +
+      `  "plugins": ["file:///user/plugin"],\n` +
+      `}\n`;
+    await writeFile(jsoncPath, original);
+
+    // Production shape: the caller requests the canonical .json path while
+    // only .jsonc exists — discovery must update the .jsonc in place.
+    const result = await ensureAriaSetupConfigFile({ configPath: jsonPath, pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT });
+    expect(result.path).toBe(jsoncPath);
+    expect(result.changed).toBe(true);
+    expect(result.created).toBe(false);
+    expect(result.backupPath).toBeDefined();
+    expect(await readFile(result.backupPath as string, "utf8")).toBe(original);
+    // No shadow .json created alongside the pre-existing .jsonc.
+    await expect(readFile(jsonPath, "utf8")).rejects.toThrow();
+
+    const written = JSON.parse(await readFile(jsoncPath, "utf8")) as Record<string, unknown>;
+    expect(written.mcp).toEqual({ keep: true });
+    expect(written.plugins).toEqual(["file:///user/plugin", PLUGIN_URI]);
+    expect(validateAriaSetupConfig(written, { pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT })).toEqual([]);
+
+    await rollbackSetupConfigFile(jsoncPath, result);
+    expect(await readFile(jsoncPath, "utf8")).toBe(original);
+  });
+
+  it("fails closed when both files are parseable, leaving both byte-identical", async () => {
+    const dir = await tempDir();
+    const jsonPath = join(dir, "opencode.json");
+    const jsoncPath = join(dir, "opencode.jsonc");
+    const jsonOriginal = JSON.stringify({ model: "custom/from-json", plugins: [] }, null, 2);
+    const jsoncOriginal = `{\n  // user-owned jsonc\n  "model": "custom/from-jsonc"\n}\n`;
+    await writeFile(jsonPath, jsonOriginal);
+    await writeFile(jsoncPath, jsoncOriginal);
+
+    // Neither parseability nor extension order may pick a winner: both
+    // entry points reject.
+    await expect(
+      ensureAriaSetupConfigFile({ configPath: jsonPath, pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT }),
+    ).rejects.toThrow(/both .*opencode\.json/);
+    await expect(
+      ensureAriaSetupConfigFile({ configPath: jsoncPath, pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT }),
+    ).rejects.toThrow(/both .*opencode\.json/);
+    expect(await readFile(jsonPath, "utf8")).toBe(jsonOriginal);
+    expect(await readFile(jsoncPath, "utf8")).toBe(jsoncOriginal);
+    const entries = await readdir(dir);
+    expect(entries.some((entry) => entry.includes(".aria-backup-"))).toBe(false);
+    expect(entries.filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("fails closed on the exact v1.0.6-bug state even though the JSON looks ARIA-created", async () => {
+    // Pre-existing user JSONC plus the JSON the old setup path created
+    // alongside it. ARIA-shaped keys in the JSON are explicitly NOT
+    // ownership evidence, so this stays fail-closed with zero mutation.
+    const dir = await tempDir();
+    const jsonPath = join(dir, "opencode.json");
+    const jsoncPath = join(dir, "opencode.jsonc");
+    const jsoncOriginal = JSON.stringify(
+      { mcp: { servers: { mine: { type: "local", command: "x" } } }, model: "custom/user-model" },
+      null,
+      2,
+    );
+    const jsonOriginal = JSON.stringify(
+      {
+        default_agent: "coder",
+        plugins: [PLUGIN_URI],
+        skills: [SKILLS_ROOT],
+        experimental: { subagent_depth: 3 },
+      },
+      null,
+      2,
+    );
+    await writeFile(jsoncPath, jsoncOriginal);
+    await writeFile(jsonPath, jsonOriginal);
+
+    await expect(
+      ensureAriaSetupConfigFile({ configPath: jsonPath, pluginUri: PLUGIN_URI, skillsRoot: SKILLS_ROOT }),
+    ).rejects.toThrow(/both .*opencode\.json/);
+    expect(await readFile(jsonPath, "utf8")).toBe(jsonOriginal);
+    expect(await readFile(jsoncPath, "utf8")).toBe(jsoncOriginal);
+    expect((await readdir(dir)).some((entry) => entry.includes(".aria-backup-"))).toBe(false);
+  });
+});
+
+describe("T002 setup lifecycle discovery wiring", () => {
+  it("updates a lone JSONC through the requested JSON path and reports the resolved file", async () => {
+    const { binaryUrl, pluginUri } = await fixtureSetup();
+    const dir = await tempDir();
+    const jsonPath = join(dir, "opencode.json");
+    const jsoncPath = join(dir, "opencode.jsonc");
+    await writeFile(jsoncPath, `{\n  // user jsonc\n  "model": "custom/keep"\n}\n`);
+    const worktree = await tempDir();
+
+    const result = await setup(binaryUrl, mockExecutor(introspected(pluginUri)), okSync, {
+      worktree,
+      files: { globalConfigPath: jsonPath, agentsDir: join(dir, "agents"), skillsRoot: SKILLS_ROOT },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.setup?.config?.path).toBe(jsoncPath);
+    // The pre-existing .jsonc was updated in place; no shadow .json exists.
+    await expect(readFile(jsonPath, "utf8")).rejects.toThrow();
+    const written = JSON.parse(await readFile(jsoncPath, "utf8")) as Record<string, unknown>;
+    expect(validateAriaSetupConfig(written, { pluginUri, skillsRoot: SKILLS_ROOT })).toEqual([]);
+  });
+
+  it("fails the config stage with neither file mutated when both exist", async () => {
+    const { binaryUrl, pluginUri } = await fixtureSetup();
+    const dir = await tempDir();
+    const jsonPath = join(dir, "opencode.json");
+    const jsoncPath = join(dir, "opencode.jsonc");
+    const jsonOriginal = JSON.stringify({ model: "custom/json" });
+    const jsoncOriginal = JSON.stringify({ model: "custom/jsonc" });
+    await writeFile(jsonPath, jsonOriginal);
+    await writeFile(jsoncPath, jsoncOriginal);
+    const worktree = await tempDir();
+
+    let syncCalled = false;
+    const result = await setup(
+      binaryUrl,
+      mockExecutor(introspected(pluginUri)),
+      async () => {
+        syncCalled = true;
+        return okSync();
+      },
+      { worktree, files: { globalConfigPath: jsonPath, agentsDir: join(dir, "agents"), skillsRoot: SKILLS_ROOT } },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("config");
+    expect(syncCalled).toBe(false);
+    expect(result.setup?.config?.detail).toMatch(/both .*opencode\.json/);
+    expect(await readFile(jsonPath, "utf8")).toBe(jsonOriginal);
+    expect(await readFile(jsoncPath, "utf8")).toBe(jsoncOriginal);
+  });
+
+  it("rolls back the resolved JSONC write when agent installation fails", async () => {
+    const { binaryUrl, pluginUri } = await fixtureSetup();
+    const dir = await tempDir();
+    const jsonPath = join(dir, "opencode.json");
+    const jsoncPath = join(dir, "opencode.jsonc");
+    const original = `{\n  // user jsonc\n  "user": "kept"\n}\n`;
+    await writeFile(jsoncPath, original);
+    // An existing regular file where the agents directory must go.
+    const agentsBlocker = join(dir, "blocker");
+    await writeFile(agentsBlocker, "not a directory");
+    const worktree = await tempDir();
+
+    const result = await setup(binaryUrl, mockExecutor(introspected(pluginUri)), okSync, {
+      worktree,
+      files: { globalConfigPath: jsonPath, agentsDir: agentsBlocker, skillsRoot: SKILLS_ROOT },
+    });
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("agents");
+    // Resolved-path rollback: user bytes restored, backup consumed, and no
+    // shadow .json left behind.
+    expect(await readFile(jsoncPath, "utf8")).toBe(original);
+    await expect(readFile(jsonPath, "utf8")).rejects.toThrow();
+    expect((await readdir(dir)).some((entry) => entry.includes(".aria-backup-"))).toBe(false);
+  });
+});
+
 describe("T008 setup lifecycle file phases", () => {
   it("writes config + agent files with temp paths; second run is idempotent", async () => {
     const { binaryUrl, pluginUri } = await fixtureSetup();
@@ -335,6 +549,41 @@ describe("T008 setup lifecycle file phases", () => {
     expect(second.setup?.config?.changed).toBe(false);
     expect(second.setup?.agents?.written).toBe(0);
     expect(second.setup?.agents?.unchanged).toBe(11);
+  });
+
+  it("fresh setup applies the coder default_agent and the production baseline agent routes", async () => {
+    const { binaryUrl, pluginUri } = await fixtureSetup();
+    const dir = await tempDir();
+    const configPath = join(dir, "opencode.json");
+    const agentsDir = join(dir, "agents");
+    const worktree = await tempDir();
+
+    const result = await setup(binaryUrl, mockExecutor(introspected(pluginUri)), okSync, {
+      worktree,
+      files: { globalConfigPath: configPath, agentsDir, skillsRoot: SKILLS_ROOT },
+    });
+    expect(result.ok).toBe(true);
+
+    const written = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
+    expect(written.default_agent).toBe("coder");
+    expect(validateAriaSetupConfig(written, { pluginUri, skillsRoot: SKILLS_ROOT })).toEqual([]);
+
+    const expectedModels: Record<string, string> = {
+      coder: "opencode-go/muse-spark-1.3-contributor#xhigh",
+      explorer: "opencode-go/muse-spark-1.3-contributor#high",
+      visualizer: "opencode-go/muse-spark-1.3-contributor#xhigh",
+      planner: "openai/gpt-6-luna#xhigh",
+      architect: "openai/gpt-6.1-sol#high",
+      implementer: "opencode-go/muse-spark-1.3-contributor#xhigh",
+      reviewer: "openai/gpt-6.1-sol#medium",
+      researcher: "openai/gpt-6.1-sol#medium",
+      archivist: "opencode-go/muse-spark-1.3-contributor#high",
+      writer: "openai/gpt-6-luna#xhigh",
+      scientist: "openai/gpt-6.1-sol#medium",
+    };
+    for (const [role, model] of Object.entries(expectedModels)) {
+      expect(await readFile(join(agentsDir, `${role}.md`), "utf8")).toContain(`model: "${model}"`);
+    }
   });
 
   it("resolves agent files project-neutral: CWD project overrides never bake into global files", async () => {

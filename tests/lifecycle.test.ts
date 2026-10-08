@@ -14,6 +14,7 @@ import {
   runInCheckout,
   type CommandResult,
 } from "../src/lifecycle.js";
+import { assertNotCallerGlobalPath } from "./test-isolation.js";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -94,6 +95,26 @@ async function makeFixtureCheckout(name?: string): Promise<string> {
 /** Build a file:// URL for a fixture binary */
 function binaryUrl(checkout: string): string {
   return pathToFileURL(resolve(checkout, "bin", "aria.mjs")).href;
+}
+
+/**
+ * T019 — isolated `setup()` file paths. Every `setup()` call that may write
+ * (past the registration phase into the global config + agent file phases)
+ * must name explicit temp paths so it can never fall through to the caller
+ * global config. The guard fails the test if a temp path ever resolves
+ * under a caller global root.
+ */
+async function tempSetupFiles(): Promise<{ globalConfigPath: string; agentsDir: string; skillsRoot: string }> {
+  const root = await mkdtemp(resolve(tmpdir(), "rdc-lifecycle-files-"));
+  tempDirs.push(root);
+  const files = {
+    globalConfigPath: resolve(root, "opencode.json"),
+    agentsDir: resolve(root, "agents"),
+    skillsRoot: resolve(root, "skills"),
+  };
+  assertNotCallerGlobalPath(files.globalConfigPath, "setup files.globalConfigPath");
+  assertNotCallerGlobalPath(files.agentsDir, "setup files.agentsDir");
+  return files;
 }
 
 /** V2 `plugin list` output with the given target registered (real 2.0.23 table format) */
@@ -244,7 +265,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { stdout: "plugin registered" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.stage).toBe("complete");
@@ -272,7 +293,7 @@ describe("setup", () => {
       "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.stage).toBe("complete");
@@ -306,7 +327,7 @@ describe("setup", () => {
       "opencode plugin list": { stdout: debugOutput },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.stage).toBe("complete");
@@ -329,7 +350,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { error: "permission denied" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("registration");
@@ -352,7 +373,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { error: "Error: plugin already registered" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("already registered");
@@ -374,7 +395,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { error: "unknown error" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("registration");
@@ -398,7 +419,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { stdout: "plugin registered via fallback" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("registered");
@@ -420,7 +441,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { error: "Error: plugin already configured" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("already registered");
@@ -442,7 +463,7 @@ describe("setup", () => {
       "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("sync");
@@ -462,7 +483,7 @@ describe("setup", () => {
       "opencode plugin list": { stdout: pluginListWithTarget(checkout) },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("sync");
@@ -485,7 +506,7 @@ describe("setup", () => {
       engram: { action: "ok" },
       context7: { action: "ok" },
       codegraph: { action: "ok" },
-    }));
+    }), { files: await tempSetupFiles() });
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("already registered");
   });
@@ -512,7 +533,7 @@ describe("setup", () => {
       [`opencode plugin add ${checkout}`]: { stdout: "plugin registered via fallback" },
     });
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("registered");
@@ -552,7 +573,7 @@ describe("setup", () => {
       throw new Error(`Unexpected command: ${key}`);
     };
 
-    const result = await setup(binaryUrl(checkout), executor, mockDepsSync);
+    const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("already registered");
@@ -667,7 +688,7 @@ describe("setup return values for CLI formatting", () => {
       [`opencode plugin add ${checkout}`]: { stdout: "plugin registered" },
     });
     const mockSync = async () => ({ ok: true, engram: { action: "synced" }, context7: { action: "configured" }, codegraph: { action: "synced" } });
-    const result = await setup(binaryUrl(checkout), executor, mockSync);
+    const result = await setup(binaryUrl(checkout), executor, mockSync, { files: await tempSetupFiles() });
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("registered");
     expect(result.setup!.sync.ok).toBe(true);
@@ -677,7 +698,7 @@ describe("setup return values for CLI formatting", () => {
     const checkout = await makeFixtureCheckout();
     const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
     const mockSync = async () => ({ ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
-    const result = await setup(binaryUrl(checkout), executor, mockSync);
+    const result = await setup(binaryUrl(checkout), executor, mockSync, { files: await tempSetupFiles() });
     expect(result.ok).toBe(true);
     expect(result.setup!.registration.action).toBe("already registered");
     expect(result.setup!.sync.ok).toBe(true);
@@ -690,7 +711,7 @@ describe("setup return values for CLI formatting", () => {
       [`opencode plugin add ${checkout}`]: { error: "permission denied" },
     });
     const mockSync = async () => { throw new Error("should not be called"); };
-    const result = await setup(binaryUrl(checkout), executor, mockSync);
+    const result = await setup(binaryUrl(checkout), executor, mockSync, { files: await tempSetupFiles() });
     expect(result.ok).toBe(false);
     expect(result.setup!.registration.action).toBe("failed");
     expect(result.setup!.sync.ok).toBe(false);
@@ -700,7 +721,7 @@ describe("setup return values for CLI formatting", () => {
     const checkout = await makeFixtureCheckout();
     const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
     const mockSync = async () => ({ ok: false, engram: { action: "failed", error: "timeout" }, context7: { action: "ok" }, codegraph: { action: "ok" } });
-    const result = await setup(binaryUrl(checkout), executor, mockSync);
+    const result = await setup(binaryUrl(checkout), executor, mockSync, { files: await tempSetupFiles() });
     expect(result.ok).toBe(false);
     expect(result.setup!.registration.action).toBe("already registered");
     expect(result.setup!.sync.ok).toBe(false);
@@ -722,7 +743,7 @@ describe("setup optional model configuration phase", () => {
     });
     const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
-    const result = await setup(binaryUrl(checkout), executor, okSync, { configureModelsFn });
+    const result = await setup(binaryUrl(checkout), executor, okSync, { files: await tempSetupFiles(), configureModelsFn });
 
     expect(result.ok).toBe(true);
     expect(result.stage).toBe("complete");
@@ -742,6 +763,7 @@ describe("setup optional model configuration phase", () => {
     const registrationResult = await setup(binaryUrl(checkout), failingRegistration, okSync, {
       configure: true,
       configureModelsFn,
+      files: await tempSetupFiles(),
     });
     expect(registrationResult.stage).toBe("registration");
 
@@ -752,7 +774,7 @@ describe("setup optional model configuration phase", () => {
       engram: { action: "install-failed", error: "download failed" },
       context7: { action: "ok" },
       codegraph: { action: "ok" },
-    }), { configure: true, configureModelsFn });
+    }), { configure: true, configureModelsFn, files: await tempSetupFiles() });
     expect(syncResult.stage).toBe("sync");
 
     expect(configureModelsFn).not.toHaveBeenCalled();
@@ -769,6 +791,7 @@ describe("setup optional model configuration phase", () => {
       configure: true,
       worktree,
       configureModelsFn,
+      files: await tempSetupFiles(),
     });
 
     expect(result.ok).toBe(true);
@@ -790,7 +813,7 @@ describe("setup optional model configuration phase", () => {
     }));
     const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
-    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn, files: await tempSetupFiles() });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("model_configuration");
@@ -808,7 +831,7 @@ describe("setup optional model configuration phase", () => {
     });
     const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
-    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn, files: await tempSetupFiles() });
 
     expect(result.ok).toBe(false);
     expect(result.stage).toBe("model_configuration");
@@ -827,7 +850,7 @@ describe("setup optional model configuration phase", () => {
     }));
     const executor = mockExecutor({ "opencode plugin list": { stdout: pluginListWithTarget(checkout) } });
 
-    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn });
+    const result = await setup(binaryUrl(checkout), executor, okSync, { configure: true, configureModelsFn, files: await tempSetupFiles() });
 
     expect(result.ok).toBe(true);
     expect(result.stage).toBe("complete");

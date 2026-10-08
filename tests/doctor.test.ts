@@ -92,12 +92,9 @@ function healthyExecutor(): Executor {
 /** Every packaged default route model, with observable variant metadata. */
 const DEFAULT_MODELS: ModelDiscovery = {
   models: [
-    { id: "opencode-go/deepseek-v4-pro", providerID: "opencode-go", modelID: "deepseek-v4-pro", name: "DeepSeek V4 Pro", variants: [], variantsObservable: true },
-    { id: "opencode-go/deepseek-v4-flash", providerID: "opencode-go", modelID: "deepseek-v4-flash", name: "DeepSeek V4 Flash", variants: ["high", "low"], variantsObservable: true },
-    { id: "opencode-go/kimi-k2.7-code", providerID: "opencode-go", modelID: "kimi-k2.7-code", name: "Kimi K2.7 Code", variants: [], variantsObservable: true },
-    { id: "openai/gpt-5.6-terra", providerID: "openai", modelID: "gpt-5.6-terra", name: "GPT 5.6 Terra", variants: ["xhigh", "high"], variantsObservable: true },
-    { id: "openai/gpt-5.6-sol", providerID: "openai", modelID: "gpt-5.6-sol", name: "GPT 5.6 Sol", variants: ["medium", "xhigh"], variantsObservable: true },
-    { id: "opencode-go/glm-5.2", providerID: "opencode-go", modelID: "glm-5.2", name: "GLM 5.2", variants: [], variantsObservable: true },
+    { id: "opencode-go/muse-spark-1.3-contributor", providerID: "opencode-go", modelID: "muse-spark-1.3-contributor", name: "Muse Spark 1.3 Contributor", variants: ["xhigh", "high"], variantsObservable: true },
+    { id: "openai/gpt-6-luna", providerID: "openai", modelID: "gpt-6-luna", name: "GPT 6 Luna", variants: ["xhigh"], variantsObservable: true },
+    { id: "openai/gpt-6.1-sol", providerID: "openai", modelID: "gpt-6.1-sol", name: "GPT 6.1 Sol", variants: ["high", "medium"], variantsObservable: true },
   ],
 };
 
@@ -156,11 +153,11 @@ describe("runDoctor", () => {
     expect(report.findings.filter((finding) => finding.area === "routes/models" && (ROLES as string[]).includes(finding.title))
       .every((finding) => finding.severity === "PASS")).toBe(true);
     // Observable supported variants render their variant text in the report.
-    expect(routeFinding(report, "explorer")?.detail).toBe("opencode-go/deepseek-v4-flash (high)");
-    expect(routeFinding(report, "planner")?.detail).toBe("openai/gpt-5.6-terra (xhigh)");
-    expect(routeFinding(report, "researcher")?.detail).toBe("openai/gpt-5.6-sol (medium)");
-    // Variant-less routes render the bare model.
-    expect(routeFinding(report, "coder")?.detail).toBe("opencode-go/deepseek-v4-pro");
+    expect(routeFinding(report, "explorer")?.detail).toBe("opencode-go/muse-spark-1.3-contributor (high)");
+    expect(routeFinding(report, "planner")?.detail).toBe("openai/gpt-6-luna (xhigh)");
+    expect(routeFinding(report, "researcher")?.detail).toBe("openai/gpt-6.1-sol (medium)");
+    // Every baseline route carries a variant, so all render with variant text.
+    expect(routeFinding(report, "coder")?.detail).toBe("opencode-go/muse-spark-1.3-contributor (xhigh)");
     expect(report.findings.filter((finding) => finding.area === "dependencies")
       .every((finding) => finding.severity === "PASS")).toBe(true);
     expect(doctorExitCode(report.findings)).toBe(0);
@@ -169,13 +166,13 @@ describe("runDoctor", () => {
   it("reports a model-only override with the inherited variant cleared", async () => {
     const options = await healthyOptions();
     await writeFile(resolve(options.worktree, "aria.json"), JSON.stringify({
-      roles: { researcher: { model: "openai/gpt-5.6-terra" } },
+      roles: { researcher: { model: "openai/gpt-6-luna" } },
     }));
     const report = await runDoctor(options);
 
     const researcher = routeFinding(report, "researcher");
     expect(researcher?.severity).toBe("PASS");
-    expect(researcher?.detail).toBe("openai/gpt-5.6-terra");
+    expect(researcher?.detail).toBe("openai/gpt-6-luna");
     expect(researcher?.detail).not.toContain("(medium)");
     expect(doctorExitCode(report.findings)).toBe(0);
   });
@@ -196,7 +193,7 @@ describe("runDoctor", () => {
   it("FAILs a listed model with an observably unsupported configured variant", async () => {
     const options = await healthyOptions();
     await writeFile(resolve(options.worktree, "aria.json"), JSON.stringify({
-      roles: { planner: { model: "openai/gpt-5.6-terra", variant: "turbo" } },
+      roles: { planner: { model: "openai/gpt-6.1-sol", variant: "turbo" } },
     }));
     const report = await runDoctor(options);
 
@@ -209,11 +206,11 @@ describe("runDoctor", () => {
   it("WARNs (never guesses) when variant metadata is not observable, exit 0 without other FAILs", async () => {
     const options = await healthyOptions();
     await writeFile(resolve(options.worktree, "aria.json"), JSON.stringify({
-      roles: { planner: { model: "openai/gpt-5.6-terra", variant: "xhigh" } },
+      roles: { planner: { model: "openai/gpt-6.1-sol", variant: "high" } },
     }));
     const unobservable: ModelDiscovery = {
       models: DEFAULT_MODELS.models.map((model) => (
-        model.id === "openai/gpt-5.6-terra"
+        model.id === "openai/gpt-6.1-sol"
           ? { ...model, variantsObservable: undefined }
           : model
       )),
@@ -223,6 +220,29 @@ describe("runDoctor", () => {
     const planner = routeFinding(report, "planner");
     expect(planner?.severity).toBe("WARN");
     expect(planner?.detail).toContain("not observable");
+    expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
+    expect(doctorExitCode(report.findings)).toBe(0);
+  });
+
+  it("reports variant support as explicitly unknown when metadata is not observable", async () => {
+    const options = await healthyOptions();
+    await writeFile(resolve(options.worktree, "aria.json"), JSON.stringify({
+      roles: { planner: { model: "openai/gpt-6.1-sol", variant: "high" } },
+    }));
+    const unobservable: ModelDiscovery = {
+      models: DEFAULT_MODELS.models.map((model) => (
+        model.id === "openai/gpt-6.1-sol"
+          ? { ...model, variants: [], variantsObservable: undefined }
+          : model
+      )),
+    };
+    // Plain `opencode models` (pinned 2.0.23) establishes no variant metadata.
+    const report = await runDoctor({ ...options, discovery: async () => unobservable });
+
+    const planner = routeFinding(report, "planner");
+    expect(planner?.severity).toBe("WARN");
+    expect(planner?.detail).toContain("unknown");
+    expect(planner?.detail).toContain("not verified");
     expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
     expect(doctorExitCode(report.findings)).toBe(0);
   });
@@ -462,6 +482,62 @@ describe("runDoctor subagent depth findings", () => {
     expect(failed?.detail).toContain("ENOENT");
     expect(report.findings.filter((item) => item.severity === "FAIL")).toHaveLength(0);
     expect(doctorExitCode(report.findings)).toBe(0);
+  });
+
+  it("PASSes a 2.0.23 array-of-source-documents depth reporting the effective value only", async () => {
+    const options = await healthyOptions();
+    const output = JSON.stringify([
+      { source: "global:~/.config/opencode/opencode.json", config: { subagent_depth: 5 } },
+      { source: "project:./opencode.json", config: {} },
+    ]);
+    const report = await runDoctor({ ...options, executor: depthExecutor(output) });
+
+    const finding = depthFinding(report);
+    expect(finding?.severity).toBe("PASS");
+    expect(finding?.detail).toContain("effective value 5 is sufficient for nested ARIA cooperation");
+    expect(finding?.detail).not.toContain("user");
+    expect(doctorExitCode(report.findings)).toBe(0);
+  });
+
+  it("reads array documents carrying a top-level depth as well as nested config documents", async () => {
+    const options = await healthyOptions();
+
+    const direct = depthFinding(
+      await runDoctor({ ...options, executor: depthExecutor('[{"source": "global", "subagent_depth": 2}]') }),
+    );
+    expect(direct?.severity).toBe("WARN");
+    expect(direct?.detail).toContain("effective value 2");
+    expect(direct?.detail).toContain("may be degraded");
+
+    const absent = depthFinding(
+      await runDoctor({ ...options, executor: depthExecutor('[{}, {"source": "project", "config": {}}]') }),
+    );
+    expect(absent?.severity).toBe("PASS");
+    expect(absent?.detail).toContain("absent from merged debug config");
+  });
+
+  it("WARNs nonfatally on conflicting or malformed array-document depths", async () => {
+    const options = await healthyOptions();
+
+    const conflicting = depthFinding(
+      await runDoctor({
+        ...options,
+        executor: depthExecutor('[{"subagent_depth": 2}, {"source": "project", "config": {"subagent_depth": 5}}]'),
+      }),
+    );
+    expect(conflicting?.severity).toBe("WARN");
+    expect(conflicting?.detail).toContain("effective value not identified");
+    expect(conflicting?.detail).toContain("conflicting");
+
+    const malformed = depthFinding(
+      await runDoctor({
+        ...options,
+        executor: depthExecutor('[{"source": "global", "config": {"subagent_depth": "high"}}]'),
+      }),
+    );
+    expect(malformed?.severity).toBe("WARN");
+    expect(malformed?.detail).toContain("effective value not identified");
+    expect(malformed?.detail).toContain("not a finite number");
   });
 });
 

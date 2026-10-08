@@ -10,7 +10,16 @@ import { openCodeGlobalDir } from "./paths.js";
 
 const execFileAsync = promisify(nodeExecFile);
 
-export type ExecutorOptions = { cwd?: string };
+export type ExecutorOptions = {
+  cwd?: string;
+  /**
+   * Per-call environment additions for the spawned process. Merged over a
+   * copy of `process.env` only for that call (T011: `NPM_CONFIG_ALLOW_GIT`
+   * travels this way; it is never assigned to `process.env` and never
+   * persisted to any file). Absent means inherit the ambient environment.
+   */
+  env?: NodeJS.ProcessEnv;
+};
 export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{ stdout: string; stderr: string }>;
 
 export interface DependencyFileOps {
@@ -162,7 +171,14 @@ const comSpec = process.env.ComSpec || "cmd.exe";
 
 const defaultExecutor: Executor = async (command, args, options) => {
   const resolved = resolveCommand(command);
-  const opts = { timeout: 120_000, cwd: options?.cwd, shell: false };
+  const opts = {
+    timeout: 120_000,
+    cwd: options?.cwd,
+    shell: false,
+    // Per-call additions only (never assigned to `process.env`); inherit the
+    // ambient environment untouched when no additions are given.
+    ...(options?.env ? { env: { ...process.env, ...options.env } } : {}),
+  };
 
   if (resolved.useComSpec) {
     const comSpecArgs = buildComSpecArgs(resolved.command, args);
@@ -182,6 +198,22 @@ const defaultExecutor: Executor = async (command, args, options) => {
  * Optional ZotPilot MCP server presence observed by a fresh `opencode mcp
  * list` CLI run. ZotPilot is optional at runtime but expected for the
  * advertised researcher capability.
+ *
+ * T006 shared evidence gate (recorded 2026-10-08; feeds T014): installed
+ * zotpilot 0.5.3 lives in a shared conda env
+ * (`.../miniforge3/envs/zotpilot/bin/zotpilot`, not user-owned; `pip show`
+ * confirms the install), so ownership is unknown/unsupported and `pip
+ * install --upgrade` (previewed via read-only `zotpilot upgrade --dry-run`)
+ * would mutate that shared env. `zotpilot upgrade --check` (read-only)
+ * reports installed 0.5.3 == latest 0.5.3; register/install auto-detects
+ * platforms with unknown side effects, and ZotPilot's own config
+ * (`~/.config/zotpilot/config.json`, holds API secrets) plus ChromaDB state
+ * (`~/.local/share/zotpilot/chroma`) are never ARIA-managed. No safe
+ * V2/XDG-aware managed path is demonstrated, so ZotPilot stays non-managed:
+ * this interface is detection-only (`opencode mcp list` parse here,
+ * `zotpilot --version` probe in doctor.ts); `depsSync` never invokes a
+ * `zotpilot` command. Unknown/uncertain ownership or safety stays
+ * report-only with zero mutation.
  */
 export interface ZotPilotMcpPresence {
   /** Server appears in `opencode mcp list` output. */
@@ -430,13 +462,151 @@ async function detectEngramSource(executor: Executor, fileOps: DependencyFileOps
 // Engram -- detect / sync
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Engram -- incompatible statusline integration cleanup (single owner)
+// ---------------------------------------------------------------------------
+
+/**
+ * Plugin ID registered by `engram setup opencode` as a UI side effect.
+ * It is incompatible with the managed ARIA flow and must not remain
+ * registered in the active OpenCode config after Engram handling.
+ *
+ * Single owner: this module. The upgrade adapter (T012) reuses
+ * {@link cleanupIncompatibleStatusline} instead of duplicating logic.
+ */
+export const INCOMPATIBLE_STATUSLINE_PLUGIN = "opencode-subagent-statusline";
+
+/** True only for the exact incompatible statusline entry; never matches objects or similar names. */
+export function isIncompatibleStatuslineEntry(entry: unknown): boolean {
+  return entry === INCOMPATIBLE_STATUSLINE_PLUGIN;
+}
+
+/**
+ * Pure list normalization: remove exact statusline entries, preserve order
+ * and every unrelated entry (including non-string values).
+ */
+export function stripIncompatibleStatusline(entries: unknown): { filtered: unknown[]; removed: boolean } {
+  if (!Array.isArray(entries)) return { filtered: [], removed: false };
+  const filtered = entries.filter((entry) => !isIncompatibleStatuslineEntry(entry));
+  return { filtered, removed: filtered.length !== entries.length };
+}
+
+export interface StatuslineCleanupResult {
+  /** True when at least one file lost the incompatible entry. */
+  removed: boolean;
+  /** Absolute paths rewritten. */
+  removedFrom: string[];
+}
+
+/**
+ * Reusable detection: report which active-config plugin files still register
+ * the incompatible statusline integration. Read-only, XDG-contained to
+ * `openCodeGlobalDir(configDir)`. Parse failures and missing files count as
+ * absent (fail-closed for detection: no mutation, no throw).
+ */
+export async function detectIncompatibleStatusline(configDir?: string): Promise<{ present: boolean; files: string[] }> {
+  const base = openCodeGlobalDir(configDir);
+  const targets = [
+    { path: join(base, "cli.json"), key: "plugins" },
+    { path: join(base, "tui.json"), key: "plugin" },
+  ];
+  const files: string[] = [];
+  for (const target of targets) {
+    let raw: string;
+    try {
+      raw = await readFile(target.path, "utf8");
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+    const list = (parsed as Record<string, unknown>)[target.key];
+    if (!Array.isArray(list)) continue;
+    if (list.some(isIncompatibleStatuslineEntry)) files.push(target.path);
+  }
+  return { present: files.length > 0, files };
+}
+
+/**
+ * Reusable normalization: remove the incompatible statusline entry from the
+ * active OpenCode plugin files (`cli.json` `plugins`, `tui.json` `plugin`)
+ * under `openCodeGlobalDir(configDir)`.
+ *
+ * - Only exact `"opencode-subagent-statusline"` string entries are removed;
+ *   unrelated plugins, `$schema`, and all other keys are preserved.
+ * - Missing files, non-object roots, non-array plugin fields, and invalid
+ *   JSON are left untouched (fail-closed per file).
+ * - Never touches `opencode.json`/`opencode.jsonc` (dual-file ambiguity is
+ *   owned by setup-config T002) and never resolves outside the XDG-contained
+ *   global dir.
+ */
+export async function cleanupIncompatibleStatusline(configDir?: string): Promise<StatuslineCleanupResult> {
+  const base = openCodeGlobalDir(configDir);
+  const targets = [
+    { path: join(base, "cli.json"), key: "plugins" },
+    { path: join(base, "tui.json"), key: "plugin" },
+  ];
+  const removedFrom: string[] = [];
+  for (const target of targets) {
+    let raw: string;
+    try {
+      raw = await readFile(target.path, "utf8");
+    } catch {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+    const record = parsed as Record<string, unknown>;
+    const list = record[target.key];
+    if (!Array.isArray(list)) continue;
+    const { filtered, removed } = stripIncompatibleStatusline(list);
+    if (!removed) continue;
+    record[target.key] = filtered;
+    try {
+      await writeFile(target.path, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    } catch {
+      continue;
+    }
+    removedFrom.push(target.path);
+  }
+  return { removed: removedFrom.length > 0, removedFrom };
+}
+
+/**
+ * Run `engram setup opencode`, then best-effort normalize the incompatible
+ * statusline side effect in the active (possibly isolated) global config.
+ * Cleanup failures never mask the setup result.
+ */
+async function runEngramSetup(executor: Executor, configDir?: string): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  const setup = await run(executor, "engram", "setup", "opencode");
+  if (setup.ok) {
+    try {
+      await cleanupIncompatibleStatusline(configDir);
+    } catch {
+      // Best-effort: setup already succeeded; a cleanup failure must not
+      // convert it into a setup failure. Files are left fail-closed per file.
+    }
+  }
+  return setup;
+}
+
 async function detectEngram(executor: Executor): Promise<{ found: boolean; version: string | null }> {
   const result = await run(executor, "engram", "version");
   if (!result.ok) return { found: false, version: null };
   return { found: true, version: extractVersion(result.stdout) };
 }
 
-async function syncEngramHomebrew(executor: Executor): Promise<SyncResult["engram"]> {
+async function syncEngramHomebrew(executor: Executor, configDir?: string): Promise<SyncResult["engram"]> {
   const update = await run(executor, "brew", "update");
   if (!update.ok) {
     return { action: "brew-update-failed", error: `brew update failed: ${update.stderr}` };
@@ -447,7 +617,7 @@ async function syncEngramHomebrew(executor: Executor): Promise<SyncResult["engra
     return { action: "upgrade-failed", error: `brew upgrade engram failed: ${upgrade.stderr}` };
   }
 
-  const setup = await run(executor, "engram", "setup", "opencode");
+  const setup = await runEngramSetup(executor, configDir);
   if (!setup.ok) {
     return { action: "setup-failed", error: `engram setup opencode failed: ${setup.stderr}` };
   }
@@ -459,7 +629,7 @@ async function syncEngramHomebrew(executor: Executor): Promise<SyncResult["engra
   return { action: "synced (homebrew)", version: verify.version ?? undefined };
 }
 
-async function syncEngramGitHub(executor: Executor, fileOps: DependencyFileOps = defaultFileOps): Promise<SyncResult["engram"]> {
+async function syncEngramGitHub(executor: Executor, fileOps: DependencyFileOps = defaultFileOps, configDir?: string): Promise<SyncResult["engram"]> {
   const platform = platformArch();
   if (!platform) {
     return { action: "unsupported-platform", error: `Unsupported platform: ${process.platform}/${process.arch}` };
@@ -507,7 +677,7 @@ async function syncEngramGitHub(executor: Executor, fileOps: DependencyFileOps =
   const selectedVersion = selectedTag.replace(/^v/, "");
   if (current.version && current.version === selectedVersion) {
     // Already on latest -- just run setup
-    const setup = await run(executor, "engram", "setup", "opencode");
+    const setup = await runEngramSetup(executor, configDir);
     if (!setup.ok) {
       return { action: "setup-failed", error: `engram setup opencode failed: ${setup.stderr}` };
     }
@@ -639,7 +809,7 @@ async function syncEngramGitHub(executor: Executor, fileOps: DependencyFileOps =
     }
 
     // Setup OpenCode integration
-    const setup = await run(executor, "engram", "setup", "opencode");
+    const setup = await runEngramSetup(executor, configDir);
     if (!setup.ok) {
       return { action: "setup-failed", error: `engram setup opencode failed: ${setup.stderr}` };
     }
@@ -656,7 +826,7 @@ async function syncEngramGitHub(executor: Executor, fileOps: DependencyFileOps =
   }
 }
 
-async function syncEngram(executor: Executor, fileOps: DependencyFileOps): Promise<SyncResult["engram"]> {
+async function syncEngram(executor: Executor, fileOps: DependencyFileOps, configDir?: string): Promise<SyncResult["engram"]> {
   const detected = await detectEngram(executor);
   if (!detected.found) {
     // Not installed -- try Homebrew first, then GitHub
@@ -664,7 +834,7 @@ async function syncEngram(executor: Executor, fileOps: DependencyFileOps): Promi
     if (brewPath.ok && brewPath.stdout) {
       const brewInstall = await run(executor, "brew", "install", "gentleman-programming/tap/engram");
       if (brewInstall.ok) {
-        const setup = await run(executor, "engram", "setup", "opencode");
+        const setup = await runEngramSetup(executor, configDir);
         if (!setup.ok) {
           return { action: "setup-failed", error: `engram setup opencode failed: ${setup.stderr}` };
         }
@@ -676,71 +846,185 @@ async function syncEngram(executor: Executor, fileOps: DependencyFileOps): Promi
       }
     }
     // Fallback to GitHub release
-    return syncEngramGitHub(executor, fileOps);
+    return syncEngramGitHub(executor, fileOps, configDir);
   }
 
   const source = await detectEngramSource(executor, fileOps);
   if (source === "homebrew") {
-    return syncEngramHomebrew(executor);
+    return syncEngramHomebrew(executor, configDir);
   }
-  return syncEngramGitHub(executor, fileOps);
+  return syncEngramGitHub(executor, fileOps, configDir);
 }
 
 // ---------------------------------------------------------------------------
-// Context7
+// Context7 -- remote-only adapter (T009 single owner)
 // ---------------------------------------------------------------------------
+//
+// Context7 is a remote MCP endpoint (`https://mcp.context7.com/mcp`); this
+// adapter never installs or upgrades a local package (no npm install, no
+// local binary, no `opencode mcp add` shell -- the pinned 2.0.23 shell cannot
+// honor an explicit configDir that diverges from env, so all writes are
+// file-based through the configDir seam). It discovers the single remote
+// registration, normalizes a wrong URL/type to the canonical
+// `mcp.servers.context7 = { type: "remote", url: ... }` entry in the
+// canonical global config file, and reports configured status; connected
+// status is validated where the adapter result meets live `opencode mcp
+// list` output (`doctor` reports `connected = configured && mcp.context7`).
+//
+// Discovery shapes: the documented V2 `mcp.servers.context7` (the only shape
+// ever emitted) plus the legacy hand-written `mcp.context7` accepted
+// read-only when canonical. Fail closed (mutate neither file, report
+// `add-failed`): both `opencode.json` and `opencode.jsonc` exist
+// (dual-file ambiguity -- precedence says which file is effective, never
+// which is redundant); `mcp.servers.context7` and legacy `mcp.context7` are
+// both present (conflicting/ambiguous registrations -- never guessed);
+// `mcp`/`mcp.servers` present but not objects; invalid JSON or a non-object
+// root. A lone legacy registration with a wrong URL migrates to the
+// canonical servers shape (legacy key removed) so exactly one remote entry
+// remains. Normalization preserves every unrelated server/key. Mutations run
+// only on the orchestration-approved normalize path (`depsSync`: normalize
+// current, idempotent) and the future `aria upgrade` handoff (T010); this
+// adapter performs no approval of its own.
 
-const CONTEXT7_REMOTE_URL = "https://mcp.context7.com/mcp";
-const CONTEXT7_NAME = "context7";
+export const CONTEXT7_REMOTE_URL = "https://mcp.context7.com/mcp";
+export const CONTEXT7_NAME = "context7";
+
+/** True for exactly the canonical remote entry (disabled entries never count). */
+export function isCanonicalContext7Entry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const record = entry as Record<string, unknown>;
+  return record["type"] === "remote" && record["url"] === CONTEXT7_REMOTE_URL && record["enabled"] !== false;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+type Context7FileState =
+  | { kind: "missing" }
+  | { kind: "ambiguous"; jsonPath: string; jsoncPath: string }
+  | { kind: "single"; path: string };
+
+/**
+ * Existence-only selection among the pinned global config names: exactly one
+ * existing file wins, none means the canonical creation target, and both
+ * existing is ambiguous. Parseability never decides -- callers fail closed
+ * on `"ambiguous"` (T002: precedence proves which file is effective, never
+ * which is redundant).
+ */
+function context7FileState(configDir?: string): Context7FileState {
+  const base = openCodeGlobalDir(configDir);
+  const jsonPath = join(base, "opencode.json");
+  const jsoncPath = join(base, "opencode.jsonc");
+  const jsonExists = existsSync(jsonPath);
+  const jsoncExists = existsSync(jsoncPath);
+  if (jsonExists && jsoncExists) return { kind: "ambiguous", jsonPath, jsoncPath };
+  if (jsonExists) return { kind: "single", path: jsonPath };
+  if (jsoncExists) return { kind: "single", path: jsoncPath };
+  return { kind: "missing" };
+}
+
+type Context7Classification =
+  | { kind: "absent" }
+  | { kind: "canonical" }
+  | { kind: "normalizable"; legacyOnly: boolean }
+  | { kind: "conflicting"; reason: string };
+
+/**
+ * Classify the parsed config's context7 registrations. Exactly one canonical
+ * remote entry is `canonical`; one present-but-wrong entry is `normalizable`
+ * (`legacyOnly` marks a lone legacy registration for migration to the
+ * canonical servers shape); anything that cannot be positively identified as
+ * a single registration -- dual-shape presence, non-object `mcp`/`servers`
+ * containers, a non-object root -- is `conflicting` (fail closed).
+ */
+function classifyContext7Config(parsed: unknown, path: string): Context7Classification {
+  if (!isPlainObject(parsed)) {
+    return { kind: "conflicting", reason: `${path}: expected a JSON object at the config root` };
+  }
+  const mcpValue = parsed["mcp"];
+  if (mcpValue === undefined) return { kind: "absent" };
+  if (!isPlainObject(mcpValue)) {
+    return {
+      kind: "conflicting",
+      reason: `${path}: "mcp" is not an object; refusing to normalize without risking user settings. No file was modified.`,
+    };
+  }
+  const serversValue = mcpValue["servers"];
+  if (serversValue !== undefined && !isPlainObject(serversValue)) {
+    return {
+      kind: "conflicting",
+      reason: `${path}: "mcp.servers" is not an object; refusing to normalize without risking user settings. No file was modified.`,
+    };
+  }
+  // Documented V2 global model (pinned 2.0.23 `opencode mcp add --global`
+  // writes `{ "mcp": { "servers": { "<name>": ... } } }` to the global
+  // `opencode.json`; verified live: `mcp add context7 --global --url
+  // https://mcp.context7.com/mcp` produces exactly
+  // `mcp.servers.context7 = { type: "remote", url: ... }`). The legacy
+  // `mcp.<name>` shape is accepted read-only for hand-written configs and
+  // is never emitted by setup.
+  const serversEntry = isPlainObject(serversValue)
+    ? (serversValue as Record<string, unknown>)[CONTEXT7_NAME]
+    : undefined;
+  const legacyEntry = mcpValue[CONTEXT7_NAME];
+  if (serversEntry !== undefined && legacyEntry !== undefined) {
+    return {
+      kind: "conflicting",
+      reason: `${path}: conflicting context7 registrations ("mcp.servers.context7" and legacy "mcp.context7" are both present). Remove the redundant entry so exactly one remote entry remains, then re-run. No file was modified.`,
+    };
+  }
+  const entry = serversEntry ?? legacyEntry;
+  if (entry === undefined) return { kind: "absent" };
+  if (isCanonicalContext7Entry(entry)) return { kind: "canonical" };
+  return { kind: "normalizable", legacyOnly: serversEntry === undefined };
+}
 
 async function detectContext7(executor: Executor, configDir?: string): Promise<{ configured: boolean; connected: boolean }> {
-  const configPath = discoverConfigPath(configDir);
-  if (!configPath) return { configured: false, connected: false };
+  const state = context7FileState(configDir);
+  if (state.kind !== "single") return { configured: false, connected: false };
 
   try {
-    const raw = await readFile(configPath, "utf8");
-    const stripped = configPath.endsWith(".jsonc") ? stripJsoncComments(raw) : raw;
+    const raw = await readFile(state.path, "utf8");
+    const stripped = state.path.endsWith(".jsonc") ? stripJsoncComments(raw) : raw;
     const config = JSON.parse(stripped);
-    // Documented V2 global model (pinned 2.0.23 `opencode mcp add --global`
-    // writes `{ "mcp": { "servers": { "<name>": ... } } }` to the global
-    // `opencode.json`; verified live: `mcp add context7 --global --url
-    // https://mcp.context7.com/mcp` produces exactly
-    // `mcp.servers.context7 = { type: "remote", url: ... }`). The legacy
-    // `mcp.<name>` shape is accepted read-only for hand-written configs and
-    // is never emitted by setup.
-    const servers = config?.mcp?.servers;
-    const server = (servers !== undefined && typeof servers === "object" && !Array.isArray(servers)
-      ? (servers as Record<string, unknown>)[CONTEXT7_NAME]
-      : undefined) ?? config?.mcp?.[CONTEXT7_NAME];
-    if (!server) return { configured: false, connected: false };
-
-    const isRemote = (server as { type?: unknown; url?: unknown }).type === "remote"
-      && (server as { url?: unknown }).url === CONTEXT7_REMOTE_URL;
-    const enabled = (server as { enabled?: unknown }).enabled !== false;
-
-    return { configured: isRemote && enabled, connected: isRemote && enabled };
+    const classification = classifyContext7Config(config, state.path);
+    const configured = classification.kind === "canonical";
+    // `connected` mirrors `configured` here: live MCP connectivity is
+    // validated where this result meets `opencode mcp list` (`doctor`
+    // reports `connected = configured && mcp.context7`).
+    void executor;
+    return { configured, connected: configured };
   } catch {
     return { configured: false, connected: false };
   }
 }
 
 async function syncContext7(executor: Executor, configDir?: string): Promise<SyncResult["context7"]> {
-  const detected = await detectContext7(executor, configDir);
-  if (detected.configured) {
-    return { action: "already-configured" };
-  }
-
+  void executor;
   // File-based write honors the resolved explicit root (explicit injection
   // or env defaults via openCodeGlobalDir): the pinned 2.0.23
   // `opencode mcp add --global` shell targets the env-derived global root
   // and cannot honor an explicit dir that diverges from env (Executor
   // carries no env seam), which left detection and writes observing
   // different effective state. Writing here reuses the existing configDir
-  // seam, targets the discovered `.json`/`.jsonc` file (or creates
+  // seam, targets the single existing `.json`/`.jsonc` file (or creates
   // `opencode.json` when absent), preserves unrelated keys/servers, and
-  // performs no shell invocation (no CLI flags, no second root arg).
+  // performs no shell invocation (no CLI flags, no second root arg; no local
+  // package install or upgrade exists on this remote-only path).
   const base = openCodeGlobalDir(configDir);
-  const existingPath = discoverConfigPath(configDir);
+  const state = context7FileState(configDir);
+  if (state.kind === "ambiguous") {
+    return {
+      action: "add-failed",
+      error: `Ambiguous global OpenCode config: both ${state.jsonPath} and ${state.jsoncPath} exist. ` +
+        `OpenCode reads ${state.jsonPath} (opencode.json) when both are present, so changing either file alone ` +
+        `could shadow user-owned settings in the other. ` +
+        `No file was created, modified, or backed up. Keep the single file OpenCode should read ` +
+        `(merging any settings worth keeping into it), remove the redundant file, then re-run.`,
+    };
+  }
+  const existingPath = state.kind === "single" ? state.path : null;
   const targetPath = existingPath ?? opencodeConfigPath(configDir);
   try {
     let config: Record<string, unknown> = {};
@@ -753,19 +1037,27 @@ async function syncContext7(executor: Executor, configDir?: string): Promise<Syn
       } catch {
         return { action: "add-failed", error: `${existingPath}: invalid JSON` };
       }
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { action: "add-failed", error: `${existingPath}: expected a JSON object at the config root` };
+      const classification = classifyContext7Config(parsed, existingPath);
+      if (classification.kind === "canonical") {
+        return { action: "already-configured" };
+      }
+      if (classification.kind === "conflicting") {
+        return { action: "add-failed", error: classification.reason };
       }
       config = parsed as Record<string, unknown>;
+      if (classification.kind === "normalizable" && classification.legacyOnly) {
+        // Migrate a lone legacy registration to the canonical servers shape
+        // so exactly one remote entry remains for future reads.
+        delete (config["mcp"] as Record<string, unknown>)[CONTEXT7_NAME];
+      }
     }
-    const mcpValue = (config as Record<string, unknown>).mcp;
-    const mcp = (mcpValue !== undefined && typeof mcpValue === "object" && mcpValue !== null && !Array.isArray(mcpValue)
-      ? mcpValue as Record<string, unknown>
-      : ((config as Record<string, unknown>).mcp = {} as Record<string, unknown>)) as Record<string, unknown>;
-    const serversValue = mcp.servers;
-    const servers = (serversValue !== undefined && typeof serversValue === "object" && serversValue !== null && !Array.isArray(serversValue)
-      ? serversValue as Record<string, unknown>
-      : (mcp.servers = {} as Record<string, unknown>)) as Record<string, unknown>;
+    // Containers are guaranteed plain objects here: `absent` means the key
+    // is missing (created below) and every present-but-non-object shape
+    // failed closed as `conflicting` above.
+    if (config["mcp"] === undefined) config["mcp"] = {};
+    const mcp = config["mcp"] as Record<string, unknown>;
+    if (mcp["servers"] === undefined) mcp["servers"] = {};
+    const servers = mcp["servers"] as Record<string, unknown>;
     servers[CONTEXT7_NAME] = { type: "remote", url: CONTEXT7_REMOTE_URL };
     await mkdir(base, { recursive: true });
     await writeFile(targetPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -785,33 +1077,47 @@ async function detectCodeGraph(executor: Executor): Promise<{ found: boolean; ve
   return { found: true, version: extractVersion(result.stdout) };
 }
 
+// ---------------------------------------------------------------------------
+// CodeGraph -- T006 shared evidence gate (report-only, non-managed)
+// ---------------------------------------------------------------------------
+
+/**
+ * T006 evidence gate (recorded 2026-10-08; feeds T013). Read-only probes
+ * only -- no upstream installer was executed during the investigation:
+ *
+ * - Installed 1.3.1 via npm global `@colbymchenry/codegraph@1.3.1`
+ *   (user nvm path; `npm-shim.js` launcher over a per-platform
+ *   optionalDependency bundle with a GitHub-release network self-heal
+ *   fallback). No ARIA ownership/provenance evidence exists for that
+ *   install target.
+ * - `codegraph install --print-config opencode` (documented no-write probe)
+ *   emits the legacy `mcp.codegraph` shape (`{ type: "local", command:
+ *   ["codegraph", "serve", "--mcp"] }`, zero `servers` mentions) targeting
+ *   `<XDG>/opencode/opencode.jsonc`. The upstream
+ *   `codegraph install --target opencode --location global --yes` reconciler
+ *   therefore writes legacy config, contradicting the managed V2
+ *   `mcp.servers.*` model used by the Context7 path; it also ignores the
+ *   `configDir` seam (env-derived global root only), breaking XDG isolation
+ *   under an explicit dir.
+ * - `codegraph upgrade` tracks unpinned latest (with network fallback) and
+ *   `npm install -g ...@latest` mutates the global npm root outside XDG
+ *   containment. Neither has a demonstrated-safe, version-pinned,
+ *   XDG-aware form, and live `opencode mcp list` verification was
+ *   unavailable in this environment (CLI errors), so no managed V2
+ *   correction path is established.
+ *
+ * Decision: CodeGraph stays non-managed. This function observes via
+ * `codegraph --version` only and never invokes `npm install -g`,
+ * `codegraph upgrade`, or `codegraph install --target opencode`. Missing or
+ * disconnected CodeGraph is reported through the action + `doctor` health,
+ * never repaired here; T013 owns any future evidence-supported adapter.
+ */
 async function syncCodeGraph(executor: Executor): Promise<SyncResult["codegraph"]> {
   const detected = await detectCodeGraph(executor);
-
   if (!detected.found) {
-    const installResult = await run(executor, "npm", "install", "-g", "@colbymchenry/codegraph@latest");
-    if (!installResult.ok) {
-      return { action: "install-failed", error: `npm install -g @colbymchenry/codegraph failed: ${installResult.stderr}` };
-    }
-  } else {
-    const upgrade = await run(executor, "codegraph", "upgrade");
-    if (!upgrade.ok) {
-      return { action: "upgrade-failed", error: `codegraph upgrade failed: ${upgrade.stderr}` };
-    }
+    return { action: "observed-not-managed" };
   }
-
-  // Reconcile OpenCode MCP config
-  const reconcileResult = await run(executor, "codegraph", "install", "--target", "opencode", "--location", "global", "--yes");
-  if (!reconcileResult.ok) {
-    return { action: "reconcile-failed", error: `codegraph install --target opencode failed: ${reconcileResult.stderr}` };
-  }
-
-  // Verify CodeGraph is available after install/upgrade
-  const verify = await detectCodeGraph(executor);
-  if (!verify.found) {
-    return { action: "post-install-verify-failed", error: "codegraph not found after installation" };
-  }
-  return { action: "synced", version: verify.version ?? undefined };
+  return { action: "observed-not-managed", version: detected.version ?? undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -881,6 +1187,12 @@ export type SubagentDepthProbe =
 /**
  * Defensively parse the fully merged JSON printed by `opencode debug config`
  * and inspect only its own top-level `subagent_depth` field.
+ *
+ * Two supported shapes (pin stays OpenCode 2.0.23):
+ * - a merged-config object with an own top-level `subagent_depth` field;
+ * - an array of per-source config documents, where each document either
+ *   carries an own top-level `subagent_depth` or nests the config under an
+ *   own `config` object holding that field.
  */
 export function parseSubagentDepth(output: string): SubagentDepthProbe {
   const clean = stripAnsi(output).trim();
@@ -897,20 +1209,71 @@ export function parseSubagentDepth(output: string): SubagentDepthProbe {
       reason: `opencode debug config output is not valid JSON (${error instanceof Error ? error.message : String(error)})`,
     };
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (Array.isArray(parsed)) {
+    return parseSubagentDepthDocuments(parsed);
+  }
+  if (!parsed || typeof parsed !== "object") {
     return { status: "unavailable", reason: "opencode debug config output is not a JSON object" };
   }
 
   // Only the own top-level field is inspected; nested lookalikes are ignored.
-  const depth = (parsed as { subagent_depth?: unknown }).subagent_depth;
+  return subagentDepthFromHolder(
+    parsed as { subagent_depth?: unknown },
+    "merged config",
+  );
+}
+
+/**
+ * Inspect one config holder's own top-level `subagent_depth` field.
+ * `where` names the holder for unavailable reasons only.
+ */
+function subagentDepthFromHolder(
+  holder: { subagent_depth?: unknown },
+  where: string,
+): SubagentDepthProbe {
+  const depth = holder.subagent_depth;
   if (depth === undefined || depth === null) return { status: "absent" };
   if (typeof depth !== "number" || !Number.isFinite(depth)) {
     return {
       status: "unavailable",
-      reason: `merged config subagent_depth is not a finite number (${typeof depth})`,
+      reason: `${where} subagent_depth is not a finite number (${typeof depth})`,
     };
   }
   return { status: "value", depth };
+}
+
+/**
+ * Inspect an array of per-source config documents for the effective
+ * `subagent_depth`. A document contributes at most one value: its nested
+ * `config` object when that is an object, otherwise the document itself.
+ * Zero established values is absent; one distinct finite value is the
+ * effective value; conflicting values (or a malformed non-numeric one)
+ * leave the effective value unidentified. Advisory only: callers report
+ * unavailable as WARN, never FAIL.
+ */
+function parseSubagentDepthDocuments(documents: unknown[]): SubagentDepthProbe {
+  const depths: number[] = [];
+  for (const document of documents) {
+    if (!document || typeof document !== "object" || Array.isArray(document)) continue;
+    const record = document as { config?: unknown; subagent_depth?: unknown };
+    const holder = record.config && typeof record.config === "object" && !Array.isArray(record.config)
+      ? (record.config as { subagent_depth?: unknown })
+      : record;
+    if (!Object.prototype.hasOwnProperty.call(holder, "subagent_depth")) continue;
+    const probe = subagentDepthFromHolder(holder, "config source");
+    if (probe.status === "unavailable") return probe;
+    if (probe.status === "value") depths.push(probe.depth);
+  }
+  const distinct = [...new Set(depths)];
+  if (distinct.length === 0) return { status: "absent" };
+  const effective = distinct[0];
+  if (effective === undefined || distinct.length > 1) {
+    return {
+      status: "unavailable",
+      reason: `config sources report conflicting subagent_depth values (${distinct.join(", ")})`,
+    };
+  }
+  return { status: "value", depth: effective };
 }
 
 /**
@@ -995,6 +1358,15 @@ export function doctorExitCode(status: DepsStatus): number {
 
 // ---------------------------------------------------------------------------
 // Sync orchestrator (sequential, serializes OpenCode mutations)
+//
+// T007 Quota dual policy: setup and `deps sync` never install, upgrade, or
+// mutate Quota state. `SyncResult` carries no quota field and no quota
+// command is invoked here; unrelated Quota entries in the shared global
+// config are preserved byte-identical. The upgrade-only adapter in
+// `src/quota.ts` (consumed by the future `aria upgrade` orchestration) may
+// upgrade an already-installed Quota 5 only through its positively
+// identified target plus a demonstrated-safe native update preview, with
+// validation and rollback where feasible.
 // ---------------------------------------------------------------------------
 
 export async function depsSync(executor: Executor = defaultExecutor, configDir?: string, fileOps: DependencyFileOps = defaultFileOps): Promise<SyncResult> {
@@ -1002,7 +1374,7 @@ export async function depsSync(executor: Executor = defaultExecutor, configDir?:
   // Continue to later dependencies after earlier failures so the report
   // contains as many failures as possible.
 
-  const engramResult = await syncEngram(executor, fileOps);
+  const engramResult = await syncEngram(executor, fileOps, configDir);
   const context7Result = await syncContext7(executor, configDir);
   const codegraphResult = await syncCodeGraph(executor);
 
@@ -1055,6 +1427,7 @@ export {
   detectContext7,
   detectMcpConnectivity,
   detectOpenCode,
+  syncContext7,
   syncEngramGitHub,
   syncEngramHomebrew,
   isCoreSemverTag,

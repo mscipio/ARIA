@@ -284,7 +284,10 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
     const registration = { action: registrationAction, detail: registrationDetail };
     // -----------------------------------------------------------------------
     // Phase 1b — Global V2 config (T008): exact plugin URI, single skills
-    // root, depth default 3. Preserves unrelated user keys, backs up before
+    // root, depth default 3. T002 discovery selects the canonical existing
+    // `opencode.json` / `opencode.jsonc` target (fail closed when both
+    // exist); the resolved `configState.path` below is authoritative for
+    // reporting and rollback. Preserves unrelated user keys, backs up before
     // replacing, and writes nothing when nothing changed. Fail closed: sync
     // is skipped when the config cannot be ensured.
     // -----------------------------------------------------------------------
@@ -308,7 +311,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
         };
     }
     const configPhase = {
-        path: globalConfigPath,
+        path: configState.path,
         changed: configState.changed,
         created: configState.created,
         backupPath: configState.backupPath,
@@ -338,7 +341,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
         if (partial && (partial.written.length > 0 || Object.keys(partial.backups ?? {}).length > 0)) {
             await rollbackAgentInstall(agentsDir, partial).catch(() => undefined);
         }
-        await rollbackSetupConfigFile(globalConfigPath, configState).catch(() => undefined);
+        await rollbackSetupConfigFile(configState.path, configState).catch(() => undefined);
         return {
             ok: false,
             stage: "agents",
@@ -356,15 +359,64 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
         written: installed.written.length,
         unchanged: installed.unchanged.length,
     };
+    // T003 effective-root forwarding: setup, sync, dependencies, and doctor
+    // share one root. The effective global config dir is
+    // dirname(globalConfigPath): explicit SetupFilesOptions stays authoritative,
+    // otherwise env defaults via defaultGlobalConfigPath() (XDG_CONFIG_HOME or
+    // ~/.config). No CLI flags.
+    const effectiveConfigDir = dirname(globalConfigPath);
+    // -----------------------------------------------------------------------
+    // Phase 1d — Shared dependency lifecycle (T017, optional seam). When a
+    // `dependenciesFn` is provided (the `aria setup` CLI always provides the
+    // real `runSetupDependencies`), invoke the shared adapters directly on the
+    // clean/existing OC2+ install: detect → discover latest → install if
+    // missing OR update if safely owned/outdated → normalize → validate. No
+    // ARIA self-upgrade handoff runs here on any path. Failure skips sync
+    // (fail closed); omission skips the phase with pre-T017 behavior.
+    // -----------------------------------------------------------------------
+    let dependenciesPhase;
+    if (options.dependenciesFn) {
+        let dependenciesResult;
+        try {
+            dependenciesResult = await options.dependenciesFn(executor, effectiveConfigDir);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+                ok: false,
+                stage: "dependencies",
+                setup: {
+                    registration: { ...registration },
+                    sync: { ok: false, error: "sync skipped due to dependencies failure" },
+                    config: configPhase,
+                    agents: agentsPhase,
+                    dependencies: { ok: false, outcomes: [], report: `dependencies threw: ${message}` },
+                },
+            };
+        }
+        dependenciesPhase = {
+            ok: dependenciesResult.ok,
+            outcomes: dependenciesResult.outcomes,
+            report: dependenciesResult.report,
+        };
+        if (!dependenciesResult.ok) {
+            return {
+                ok: false,
+                stage: "dependencies",
+                setup: {
+                    registration: { ...registration },
+                    sync: { ok: false, error: "sync skipped due to dependencies failure" },
+                    config: configPhase,
+                    agents: agentsPhase,
+                    dependencies: dependenciesPhase,
+                },
+            };
+        }
+    }
     // -----------------------------------------------------------------------
     // Phase 2 — Sync dependencies (always invoked exactly once after the
     // registration and file phases above)
     // -----------------------------------------------------------------------
-    // T003 effective-root forwarding: setup, sync, and doctor share one root.
-    // The effective global config dir is dirname(globalConfigPath): explicit
-    // SetupFilesOptions stays authoritative, otherwise env defaults via
-    // defaultGlobalConfigPath() (XDG_CONFIG_HOME or ~/.config). No CLI flags.
-    const effectiveConfigDir = dirname(globalConfigPath);
     let syncResult;
     try {
         syncResult = await depsSyncFn(executor, effectiveConfigDir);
@@ -379,6 +431,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
                 sync: { ok: false, error: `depsSync threw: ${message}` },
                 config: configPhase,
                 agents: agentsPhase,
+                dependencies: dependenciesPhase,
             },
         };
     }
@@ -412,6 +465,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
                     sync: { ok: true, output: "all dependencies synchronized" },
                     config: configPhase,
                     agents: agentsPhase,
+                    dependencies: dependenciesPhase,
                     model: {
                         status: "failed",
                         message: "Model configuration failed; no changes were persisted.",
@@ -431,9 +485,59 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
                     sync: { ok: true, output: "all dependencies synchronized" },
                     config: configPhase,
                     agents: agentsPhase,
+                    dependencies: dependenciesPhase,
                     model: modelResult,
                 },
             };
+        }
+        // T003 ordering: after a successful route write, managed agents are
+        // regenerated from freshly resolved routes in this same invocation, so
+        // agent model/variant values match the newly committed routes without a
+        // second setup. Only "configured" regenerates; "unchanged" and "skipped"
+        // leave agent files untouched, and "failed" above never reaches here.
+        // Resolution is project-neutral (defaults plus global overrides only).
+        // Unmanaged/user files survive via installAgentFiles backups.
+        if (modelResult.status === "configured") {
+            try {
+                const fresh = resolveSetupAriaConfig(worktree);
+                const refreshed = await installAgentFiles(fresh, { dir: agentsDir });
+                const refreshedPhase = {
+                    dir: refreshed.dir,
+                    version: refreshed.version,
+                    written: refreshed.written.length,
+                    unchanged: refreshed.unchanged.length,
+                };
+                return {
+                    ok: true,
+                    stage: "complete",
+                    setup: {
+                        registration: { ...registration },
+                        sync: { ok: true, output: "all dependencies synchronized" },
+                        config: configPhase,
+                        agents: refreshedPhase,
+                        dependencies: dependenciesPhase,
+                        model: modelResult,
+                    },
+                };
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                return {
+                    ok: false,
+                    stage: "model_configuration",
+                    setup: {
+                        registration: { ...registration },
+                        sync: { ok: true, output: "all dependencies synchronized" },
+                        config: configPhase,
+                        agents: {
+                            ...agentsPhase,
+                            detail: `managed agents could not be regenerated after model configuration: ${message}`,
+                        },
+                        dependencies: dependenciesPhase,
+                        model: modelResult,
+                    },
+                };
+            }
         }
         return {
             ok: true,
@@ -443,6 +547,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
                 sync: { ok: true, output: "all dependencies synchronized" },
                 config: configPhase,
                 agents: agentsPhase,
+                dependencies: dependenciesPhase,
                 model: modelResult,
             },
         };
@@ -459,6 +564,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
             },
             config: configPhase,
             agents: agentsPhase,
+            dependencies: dependenciesPhase,
         },
     };
 }

@@ -37,6 +37,10 @@ Prioritize concrete:
 
 Every finding must have a credible trigger, impact, repository evidence, and smallest plausible fix. Do not report speculative concerns.
 
+## Provenance baseline
+
+Establish or reference the pre-implementation worktree state before attributing findings. Distinguish pre-existing files/findings from implementation-introduced changes, but review the full approved implementation diff to the same standard. Do not misattribute pre-existing untracked state to the implementation, and do not excuse an introduced defect because its file also contains pre-existing issues. This changes no clean-tree or update gate.
+
 ## Severity
 
 - `BLOCKING`: must be fixed before the approved change is safe or functionally complete.

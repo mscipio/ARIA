@@ -1,11 +1,13 @@
 import { execFile } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { assertNotCallerGlobalPath } from "./test-isolation.js";
 
 // CLI-level coverage for bin/aria.mjs dispatch: the doctor branch must use
 // the src/doctor.ts runner/formatter/exit-code contract, and the
@@ -18,11 +20,52 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const CLI_TIMEOUT_MS = 240_000;
 
+// ---------------------------------------------------------------------------
+// T019 — subprocess env isolation. CLI children must never inherit caller
+// HOME/XDG_*/ENGRAM_DATA_DIR (those can point at live workstation config);
+// every spawn gets sandbox roots under one shared temp dir instead. The
+// per-call `env` extras still apply, but the five isolation keys always win
+// so no caller XDG/HOME passthrough is possible.
+// ---------------------------------------------------------------------------
+
+const cliSandboxRoot = mkdtempSync(resolve(tmpdir(), "aria-cli-sandbox-"));
+const cliSandboxEnv: NodeJS.ProcessEnv = {
+  HOME: resolve(cliSandboxRoot, "home"),
+  XDG_CONFIG_HOME: resolve(cliSandboxRoot, "config"),
+  XDG_DATA_HOME: resolve(cliSandboxRoot, "data"),
+  XDG_STATE_HOME: resolve(cliSandboxRoot, "state"),
+  ENGRAM_DATA_DIR: resolve(cliSandboxRoot, "engram-data"),
+};
+for (const dir of Object.values(cliSandboxEnv)) {
+  if (typeof dir === "string") {
+    mkdirSync(dir, { recursive: true });
+    assertNotCallerGlobalPath(dir, "CLI subprocess sandbox");
+  }
+}
+
+function isolatedChildEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const { HOME: _home, XDG_CONFIG_HOME: _xdgConfig, XDG_DATA_HOME: _xdgData, XDG_STATE_HOME: _xdgState, ENGRAM_DATA_DIR: _engram, ...rest } =
+    process.env;
+  void _home;
+  void _xdgConfig;
+  void _xdgData;
+  void _xdgState;
+  void _engram;
+  const { HOME: _eHome, XDG_CONFIG_HOME: _eXdgConfig, XDG_DATA_HOME: _eXdgData, XDG_STATE_HOME: _eXdgState, ENGRAM_DATA_DIR: _eEngram, ...extraRest } =
+    extra;
+  void _eHome;
+  void _eXdgConfig;
+  void _eXdgData;
+  void _eXdgState;
+  void _eEngram;
+  return { ...rest, ...extraRest, ...cliSandboxEnv };
+}
+
 async function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
     const result = await execFileAsync(process.execPath, [binPath, ...args], {
       cwd: repoRoot,
-      env: { ...process.env, ...env },
+      env: isolatedChildEnv(env),
       timeout: CLI_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
     });
@@ -111,8 +154,7 @@ async function runFixtureBin(
     const result = await execFileAsync(process.execPath, [fixture.binCopy, ...args], {
       cwd: fixture.workdir,
       env: {
-        ...process.env,
-        ...env,
+        ...isolatedChildEnv(env),
         PATH: `${fixture.fakeBinDir}:${process.env.PATH ?? ""}`,
       },
       timeout: CLI_TIMEOUT_MS,
@@ -177,7 +219,7 @@ describe("bin/aria.mjs doctor dispatch", () => {
       expect(result.stdout).not.toContain(forbidden);
     }
     expect(result.stderr).toBe("");
-  });
+  }, 60000);
 
   it("emits equally plain output under NO_COLOR", async () => {
     const result = await runCli(["doctor"], { NO_COLOR: "1" });
@@ -186,7 +228,7 @@ describe("bin/aria.mjs doctor dispatch", () => {
     // eslint-disable-next-line no-control-regex
     expect(result.stdout).not.toMatch(/\x1b\[[0-9;]*m/);
     expect(result.stderr).toBe("");
-  });
+  }, 60000);
 
   it("keeps the deps dispatch unchanged", async () => {
     const result = await runCli(["deps"]);
@@ -215,6 +257,113 @@ describe("bin/aria.mjs setup dispatch", () => {
     expect(result.stderr).toContain("Missing value for --plugin-spec");
     expect(result.stdout).not.toContain("Registration:");
   });
+});
+
+describe("bin/aria.mjs upgrade dispatch", () => {
+  it("help documents upgrade --check/--yes and offers no --aria-only/--deps-only", async () => {
+    const result = await runCli(["--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("aria upgrade               Show upgrade inventory (requires --yes to approve any mutation)");
+    expect(result.stdout).toContain("aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)");
+    expect(result.stdout).toContain("aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope");
+    expect(result.stdout).not.toContain("--aria-only");
+    expect(result.stdout).not.toContain("--deps-only");
+  });
+
+  it("rejects an unknown upgrade option before inventory work", async () => {
+    const result = await runCli(["upgrade", "--bogus"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown upgrade option");
+    expect(result.stderr).toContain("Usage: aria upgrade [--check] [--yes]");
+    // Rejected before any probe or pipeline work: no inventory report.
+    expect(result.stdout).not.toContain("ARIA upgrade check");
+  });
+
+  it("rejects --aria-only and --deps-only (not offered in v1.0.7)", async () => {
+    for (const flag of ["--aria-only", "--deps-only"]) {
+      const result = await runCli(["upgrade", flag]);
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Unknown upgrade option");
+      expect(result.stdout).not.toContain("ARIA upgrade check");
+    }
+  });
+
+  it("rejects combining --check with --yes (--check is strictly read-only)", async () => {
+    const result = await runCli(["upgrade", "--check", "--yes"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("cannot be combined");
+    expect(result.stdout).not.toContain("ARIA upgrade check");
+  });
+
+  it("reports read-only inventory via --check with current AND available releases plus the component table", async () => {
+    const result = await runCli(["upgrade", "--check"]);
+
+    // Read-only inventory always reports (exit 0) even when the available
+    // target is unknown (offline registry, missing CLIs, ambiguous config).
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("ARIA upgrade check");
+    expect(result.stdout).toContain("Current release:");
+    expect(result.stdout).toContain("Available release:");
+    for (const token of ["Component", "Installed", "Available", "Status"]) {
+      expect(result.stdout).toContain(token);
+    }
+    expect(result.stderr).toBe("");
+  }, 60000);
+
+  it("requires explicit approval: bare upgrade mutates nothing and exits nonzero", async () => {
+    const result = await runCli(["upgrade"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("ARIA upgrade check");
+    expect(result.stdout).toContain("Upgrade: blocked (explicit approval required)");
+  }, 60000);
+
+  it("rejects a missing --handoff-json value before handoff work", async () => {
+    const result = await runCli(["upgrade", "--handoff-json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Missing value for --handoff-json");
+    expect(result.stdout).not.toContain("ARIA upgrade check");
+  });
+
+  it("rejects combining --handoff-json with --check (--check is strictly read-only)", async () => {
+    const result = await runCli(["upgrade", "--check", "--handoff-json", "{}"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("cannot be combined");
+    expect(result.stdout).not.toContain("ARIA upgrade check");
+  });
+
+  it("fails a malformed handoff payload closed with zero mutation", async () => {
+    const result = await runCli(["upgrade", "--handoff-json", "not-json"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("Upgrade: stopped (drift-blocked)");
+    expect(result.stdout).not.toContain("ARIA upgrade check");
+    expect(result.stderr).toBe("");
+  }, 60000);
+
+  it("stops a drifted handoff payload for fresh approval with zero mutation", async () => {
+    const payload = JSON.stringify({
+      kind: "aria-upgrade-handoff",
+      handoffVersion: 1,
+      target: { tag: "v9.9.9", version: "9.9.9", spec: "github:mscipio/ARIA#v9.9.9" },
+      approvedComponents: ["aria", "engram", "context7", "codegraph", "zotpilot", "quota"],
+      before: {},
+    });
+    const result = await runCli(["upgrade", "--handoff-json", payload]);
+
+    // The receiving release is v1.0.6, never v9.9.9: drift-blocked before any
+    // component work, with no mutation possible on this path.
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain("Upgrade: stopped (drift-blocked)");
+    expect(result.stdout).toContain("drift");
+    expect(result.stderr).toBe("");
+  }, 60000);
 });
 
 describe("bin/aria.mjs configure dispatch", () => {

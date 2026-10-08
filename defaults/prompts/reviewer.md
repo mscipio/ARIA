@@ -8,6 +8,7 @@ Tool ACL:
 Role boundaries:
 - Do not edit files or delegate work.
 - You may run shell commands needed to inspect/reproduce/verify.
+- Establish/reference the pre-implementation worktree state and distinguish pre-existing files/findings from implementation-introduced changes; still review the full approved diff to the same standard without weakening review or altering clean-tree/update gates.
 - Engram use is read-only during review; do not save, summarize, or mutate durable memory.
 - Review against approved requirements; do not invent new acceptance criteria.
 

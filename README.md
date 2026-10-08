@@ -1,4 +1,4 @@
-# ARIA v1.0.6 — Native OpenCode 2
+# ARIA v1.0.7 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -31,7 +31,7 @@
 11. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
 12. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
 
-The tasklist is scoped to the OpenCode workspace/session directory, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
+The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace directory, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
 
 ## Team
 
@@ -154,10 +154,10 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Install
 
-Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.6`:
+Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.7`:
 
 ```sh
-SPEC='github:mscipio/ARIA#v1.0.6'
+SPEC='github:mscipio/ARIA#v1.0.7'
 npx --yes --package="$SPEC" aria setup --plugin-spec "$SPEC"
 npx --yes --package="$SPEC" aria doctor
 ```
@@ -175,7 +175,7 @@ node ./bin/aria.mjs doctor
 
 Restart OpenCode after setup to load the registered plugin.
 
-Tags v1.0.0–v1.0.5 predate the current 1.x line and are retained unchanged.
+Tags v1.0.0–v1.0.6 predate the current 1.x line and are retained unchanged.
 
 ## Configuration
 
@@ -220,6 +220,10 @@ ARIA currently requires three external integrations. ARIA does not fork, vendor,
 | [Context7](https://github.com/upstash/context7) | Current external library, framework, and API documentation | Remote MCP endpoint |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) | Codebase intelligence for structure and impact | `@colbymchenry/codegraph` |
 
+### Quota 5 (optional, user-managed)
+
+OpenCode Quota 5 is optional and user-managed: `aria setup` and `aria deps sync` never install it and never mutate its state. Quota is therefore absent from the required-dependency plan above. `aria upgrade` may upgrade an already-installed Quota 5 only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
+
 ### Commands
 
 ```bash
@@ -227,6 +231,9 @@ aria setup             # Register ARIA plugin with OpenCode and synchronize depe
 aria setup --configure # Register ARIA, sync dependencies, then interactively configure role models
 aria configure         # Interactively configure role models only (no registration or sync)
 aria update            # Pull latest changes, reinstall, and re-sync dependencies
+aria upgrade           # Show upgrade inventory (requires --yes to approve any mutation)
+aria upgrade --check   # Read-only upgrade inventory (current + available releases, component table)
+aria upgrade --yes     # Approve and run the upgrade pipeline over the whole inventoried scope
 aria deps sync         # Synchronize required integrations (Engram, Context7, CodeGraph)
 aria doctor            # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
 aria routes            # Print resolved model routes for each ARIA role
@@ -281,9 +288,23 @@ OpenCode must be restarted after update to load the changed code.
 
 Neither `aria setup` nor `aria update` runs as a postinstall script, daemon, background task, or automatic update. Both are manual commands. Neither creates or overwrites project `aria.json`, creates commits, or pushes.
 
+### `aria upgrade`
+
+`aria upgrade` moves to a new ARIA release through inventory, explicit approval, pre-removal validation, self-upgrade plus a bounded handoff, and new-release-only completion with a before/after report. It never splits scope: there is no `--aria-only` or `--deps-only` in v1.0.7 — approval covers the whole inventoried component scope and the handoff binds it.
+
+`deps sync` versus `upgrade`: sync normalizes the *current* installs (idempotent, unapproved, Quota excluded); upgrade moves to a *new* release. The pipeline order is inventory → explicit approval → validate the ARIA target before removal → self-upgrade plus bounded handoff → only in the new release: component upgrades → target-version normalization/registration → agent regen if required → deps sync → doctor → before/after report.
+
+```bash
+aria upgrade --check # Strictly read-only: current AND available ARIA releases plus a Component|Installed|Available|Status table
+aria upgrade         # Same inventory, then stops: explicit approval is required before any mutation
+aria upgrade --yes   # Approve the inventoried target and component scope and run the pipeline
+```
+
+`--check` reports `current`, `upgrade-available`, `remote-healthy`, `unmanaged-observed`, `unsupported-ownership`, `skipped`, and `unknown-target` rows and never installs, writes, or repairs. An unknown available target blocks self-upgrade with zero mutation. After approval the exact target is validated before the current registration is touched; pre-handoff failure leaves/restores the old registration where feasible or reports the exact unresolved state. Handoff success binds the exact validated target plus the approved inventory: the new release continues without re-asking only on an exact match, and any target/scope drift stops for fresh approval. Post-handoff component failure stops with per-component completed/rolled-back/unresolved states and no global transactionality. Approval precedes all mutations; unknown ownership/version means no install; unrelated entries are preserved; everything stays XDG-contained with no prod V1, session migration, V1/0.6 removal, or `.npmrc` side effects, and any git allowlist (`NPM_CONFIG_ALLOW_GIT=all`) is process-local only.
+
 ### `aria deps sync`
 
-Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `aria setup` and the post-update handoff.
+Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `aria setup` and the post-update handoff. Quota 5 is excluded: it stays optional and user-managed (see above), so sync performs no Quota installation or config mutation.
 
 ### `aria doctor`
 

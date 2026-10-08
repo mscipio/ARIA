@@ -179,12 +179,14 @@ function routeFinding(route, discovered) {
         return [{ severity: "PASS", area: "routes/models", title: route.role, detail: route.model }];
     }
     if (model.variantsObservable !== true) {
-        // Metadata absent: never guess whether the variant is supported.
+        // Variant capability unknown: plain `opencode models` (pinned 2.0.23)
+        // reports no variant metadata, so a configured variant is never guessed
+        // and never failed — it is reported as unknown.
         return [{
                 severity: "WARN",
                 area: "routes/models",
                 title: route.role,
-                detail: `${routeText}: variant metadata not observable; configured variant not verified`,
+                detail: `${routeText}: variant support unknown (variant metadata not observable; configured variant not verified)`,
             }];
     }
     if (model.variants.includes(route.variant)) {

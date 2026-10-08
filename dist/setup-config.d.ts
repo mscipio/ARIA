@@ -5,9 +5,13 @@ import type { ResolvedAriaConfig } from "./types.js";
  *
  * Supported V2 surface only (verified against `@opencode/schema@2.0.23`
  * `Config.Info`: `plugins` is `(string | Entry)[]`, `skills` is `string[]`,
- * `experimental.subagent_depth` is an int; `docs/config` describes `skills`
+ * `experimental.subagent_depth` is an int, `default_agent` is a string
+ * ("Default primary agent to use when no session agent is selected");
+ * `docs/config` describes `skills`
  * as "Additional paths or URLs to discover skills from"). This module writes
- * exactly three things:
+ * exactly four things:
+ * - `default_agent`: `"coder"` only when unconfigured (absent, null, or
+ *   blank) — an explicit user value is always preserved verbatim;
  * - `plugins`: the ARIA plugin identity (absolute path ≡ corresponding
  *   `file://` URI, one consistent local rule), appended once only when no
  *   equivalent is present and never rewriting an existing equivalent
@@ -39,6 +43,7 @@ import type { ResolvedAriaConfig } from "./types.js";
  */
 /** Minimal structural config surface this module reads/writes. */
 export interface SetupConfig {
+    default_agent?: unknown;
     plugins?: unknown;
     skills?: unknown;
     experimental?: {
@@ -46,6 +51,8 @@ export interface SetupConfig {
     } | undefined;
 }
 export interface ApplySetupResult {
+    /** True when `default_agent` was absent/null/blank and defaulted to `coder`. */
+    defaultAgentFilled: boolean;
     pluginsAdded: boolean;
     skillsAdded: boolean;
     /** True when `experimental.subagent_depth` was absent/null and defaulted to 3. */
@@ -71,10 +78,10 @@ export declare function applyAriaPluginToConfig<T extends SetupConfig>(config: T
     added: boolean;
 };
 /**
- * Apply the full ARIA V2 setup (plugins + skills + depth default) to an
- * already-parsed config object. Returns per-key outcomes; never emits V1
- * keys (no singular `plugin`, no `skills.paths`/`urls`, no top-level
- * `subagent_depth`).
+ * Apply the full ARIA V2 setup (default agent + plugins + skills + depth
+ * default) to an already-parsed config object. Returns per-key outcomes;
+ * never emits V1 keys (no singular `plugin`, no `skills.paths`/`urls`, no
+ * top-level `subagent_depth`).
  */
 export declare function applyAriaSetupToConfig<T extends SetupConfig>(config: T, targets: {
     pluginUri: string;
@@ -109,11 +116,22 @@ export declare function validateAriaSetupConfig(config: unknown, targets: {
 export declare function resolveSetupAriaConfig(worktree: string): ResolvedAriaConfig;
 /** Default global V2 config path (`$XDG_CONFIG_HOME/opencode/opencode.json`, else `~/.config/opencode/opencode.json`). */
 export declare function defaultGlobalConfigPath(explicit?: string): string;
+/** Pure existence outcome for the two pinned global config names. */
+export type SetupConfigFileKind = "json" | "jsonc" | "missing" | "ambiguous";
+/**
+ * Pure T002 selection among the pinned names from existence alone: exactly
+ * one existing file wins, none means the canonical creation target, and both
+ * existing is ambiguous. Parseability and extension order never decide —
+ * callers must fail closed on `"ambiguous"`.
+ */
+export declare function selectSetupConfigKind(jsonExists: boolean, jsoncExists: boolean): SetupConfigFileKind;
 export interface SetupConfigFileResult {
     path: string;
     changed: boolean;
     /** True when no config file existed before this call. */
     created: boolean;
+    /** True when `default_agent` was absent/null/blank and defaulted to `coder`. */
+    defaultAgentFilled: boolean;
     pluginsAdded: boolean;
     skillsAdded: boolean;
     depthFilled: boolean;
@@ -125,8 +143,14 @@ export interface SetupConfigFileResult {
     previousContents?: string;
 }
 /**
- * Ensure the global V2 config carries the ARIA setup (exact plugin URI,
- * single skills root, depth default 3). Unrelated user keys are preserved;
+ * Ensure the global V2 config carries the ARIA setup (`default_agent`
+ * default `coder` only when unconfigured, exact plugin URI,
+ * single skills root, depth default 3). The target is the canonical
+ * discovery selection: a single existing `opencode.json` or
+ * `opencode.jsonc` is updated in place (parsed JSONC-tolerantly, written
+ * back to the same path), absence creates the canonical `opencode.json`,
+ * and both existing fails closed with neither file touched. Unrelated user
+ * keys are preserved;
  * a replaced file is backed up first (as a copy, so the live path is never
  * missing); no write happens when nothing changed. ARIA-relevant V1 keys
  * (`plugin` singular, top-level `subagent_depth`) migrate forward with
