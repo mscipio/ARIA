@@ -125,6 +125,21 @@ export type SetupConfigFileKind = "json" | "jsonc" | "missing" | "ambiguous";
  * callers must fail closed on `"ambiguous"`.
  */
 export declare function selectSetupConfigKind(jsonExists: boolean, jsoncExists: boolean): SetupConfigFileKind;
+/**
+ * T001 hotfix preflight: read-only canonical-config discovery shared with
+ * `ensureAriaSetupConfigFile`. Runs before any `opencode plugin add`
+ * executor mutation in `setup()` so a dual-file (`opencode.json` plus
+ * `opencode.jsonc`) state fails closed with neither file touched and zero
+ * mutating executor calls. Only stats the sibling directory — never creates,
+ * modifies, or backs up any file. Ambiguity detection is the exact
+ * `resolveSetupConfigPath` path above (same basenames, same directory, same
+ * `selectSetupConfigKind` rule, same error), so this gate and the later
+ * config-writing phase can never disagree. The `explicit` flag only selects
+ * the missing-case creation target (discarded here); it never affects
+ * ambiguity. `setup()` always resolves to a concrete path before calling, so
+ * `true` matches `ensureAriaSetupConfigFile`'s view.
+ */
+export declare function assertSetupConfigNotAmbiguous(requestedPath: string): Promise<void>;
 export interface SetupConfigFileResult {
     path: string;
     changed: boolean;

@@ -30,7 +30,8 @@ Usage:
   aria update                Pull latest changes, reinstall, and re-sync dependencies
   aria upgrade               Show upgrade inventory (requires --yes to approve any mutation)
   aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)
-  aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope  aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
+  aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope
+  aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria routes                Print resolved model routes for each ARIA role
   aria --help                Show this help message
@@ -291,7 +292,7 @@ async function main() {
   if (command === "upgrade") {
     // T010: only --check (strictly read-only inventory) and --yes (explicit
     // approval) are accepted. There is intentionally no --aria-only or
-    // --deps-only in v1.0.7: approval covers the whole inventoried scope and
+    // --deps-only in v1.0.8: approval covers the whole inventoried scope and
     // the bounded handoff binds it. Anything else is rejected before any
     // probe, registration, file write, or sync.
     //

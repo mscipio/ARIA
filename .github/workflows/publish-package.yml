@@ -1,7 +1,7 @@
 name: Publish package (OPTIONAL manual npm publish only)
 
 # Manual-only workflow: GitHub Release events MUST NOT auto-publish to npm.
-# Canonical ARIA distribution is the Git package `github:mscipio/ARIA#v1.0.7`;
+# Canonical ARIA distribution is the Git package `github:mscipio/ARIA#v1.0.8`;
 # npm publication is never automatic and only runs via explicit workflow_dispatch.
 on:
   workflow_dispatch:

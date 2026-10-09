@@ -269,6 +269,14 @@ describe("bin/aria.mjs upgrade dispatch", () => {
     expect(result.stdout).toContain("aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope");
     expect(result.stdout).not.toContain("--aria-only");
     expect(result.stdout).not.toContain("--deps-only");
+    // `aria upgrade --yes` and `aria deps sync` are distinct help lines.
+    const helpLines = result.stdout.split("\n");
+    const yesLines = helpLines.filter((line) => line.includes("aria upgrade --yes"));
+    const syncLines = helpLines.filter((line) => line.includes("aria deps sync"));
+    expect(yesLines).toHaveLength(1);
+    expect(syncLines).toHaveLength(1);
+    expect(yesLines[0]).not.toContain("aria deps sync");
+    expect(syncLines[0]).not.toContain("aria upgrade --yes");
   });
 
   it("rejects an unknown upgrade option before inventory work", async () => {

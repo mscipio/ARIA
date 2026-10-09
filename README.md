@@ -1,4 +1,4 @@
-# ARIA v1.0.7 — Native OpenCode 2
+# ARIA v1.0.8 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -35,19 +35,19 @@ The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace direc
 
 ## Team
 
-| Agent | Responsibility | Default model |
-|---|---|---|
-| coder (`all`) | Coordinates work and maintains the shared plan | `opencode-go/deepseek-v4-pro` |
-| explorer | Maps code, tests, and dependencies | `opencode-go/deepseek-v4-flash` |
-| visualizer | Interprets screenshots and diagrams | `opencode-go/kimi-k2.7-code` |
-| planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-5.6-terra` |
-| architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-5.6-sol` |
-| implementer | Edits code and runs relevant checks | `opencode-go/glm-5.2` |
-| reviewer | Finds regressions, risks, and missing verification | `opencode-go/deepseek-v4-pro` |
-| researcher (`all`) | Direct or delegated external literature and evidence research | `openai/gpt-5.6-sol` |
-| archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/deepseek-v4-pro` |
-| writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-5.6-sol` |
-| scientist (`all`) | Scientific authority: question specification, methodology design, and result interpretation | `openai/gpt-5.6-sol` |
+| Agent | Responsibility | Default model | Strength |
+|---|---|---|---|
+| coder (`all`) | Coordinates work and maintains the shared plan | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
+| explorer | Maps code, tests, and dependencies | `opencode-go/muse-spark-1.3-contributor` | `high` |
+| visualizer | Interprets screenshots and diagrams | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
+| planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-6-luna` | `xhigh` |
+| architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-6.1-sol` | `high` |
+| implementer | Edits code and runs relevant checks | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
+| reviewer | Finds regressions, risks, and missing verification | `openai/gpt-6.1-sol` | `medium` |
+| researcher (`all`) | Direct or delegated external literature and evidence research | `openai/gpt-6.1-sol` | `medium` |
+| archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/muse-spark-1.3-contributor` | `high` |
+| writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-6-luna` | `xhigh` |
+| scientist (`all`) | Scientific authority: question specification, methodology design, and result interpretation | `openai/gpt-6.1-sol` | `medium` |
 
 Only implementer can use OpenCode's edit tool for application code. Implementer shell commands run without permission prompts, except destructive removal and package publishing commands, which remain blocked. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
 
@@ -154,10 +154,10 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Install
 
-Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.7`:
+Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.8`:
 
 ```sh
-SPEC='github:mscipio/ARIA#v1.0.7'
+SPEC='github:mscipio/ARIA#v1.0.8'
 npx --yes --package="$SPEC" aria setup --plugin-spec "$SPEC"
 npx --yes --package="$SPEC" aria doctor
 ```
@@ -175,7 +175,7 @@ node ./bin/aria.mjs doctor
 
 Restart OpenCode after setup to load the registered plugin.
 
-Tags v1.0.0–v1.0.6 predate the current 1.x line and are retained unchanged.
+Tags v1.0.0–v1.0.7 predate the current 1.x line and are retained unchanged.
 
 ## Configuration
 
@@ -191,8 +191,8 @@ For transition compatibility, ARIA still reads the legacy `~/.config/opencode/re
 ```json
 {
   "roles": {
-    "planner": { "model": "openai/gpt-5.6-terra", "variant": "xhigh" },
-    "architect": { "model": "openai/gpt-5.6-sol" },
+    "planner": { "model": "openai/gpt-6-luna", "variant": "xhigh" },
+    "architect": { "model": "openai/gpt-6.1-sol" },
     "explorer": { "variant": "xhigh" }
   }
 }
@@ -220,9 +220,9 @@ ARIA currently requires three external integrations. ARIA does not fork, vendor,
 | [Context7](https://github.com/upstash/context7) | Current external library, framework, and API documentation | Remote MCP endpoint |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) | Codebase intelligence for structure and impact | `@colbymchenry/codegraph` |
 
-### Quota 5 (optional, user-managed)
+### Quota 5 (optional, safety-gated)
 
-OpenCode Quota 5 is optional and user-managed: `aria setup` and `aria deps sync` never install it and never mutate its state. Quota is therefore absent from the required-dependency plan above. `aria upgrade` may upgrade an already-installed Quota 5 only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
+OpenCode Quota 5 is optional: the setup bootstrap lifecycle may install it when absent or upgrade an already-installed Quota 5, only under safety/ownership gates (absent-only native install with validation and rollback where feasible; upgrade only for a positively identified exact-semver Quota 5 target on OpenCode 2 with a clean native update preview, validation, and rollback where feasible). Ambiguous or unsupported targets stay observed-but-unmanaged with zero mutation. `aria deps sync` remains non-version-chasing normalization and does not independently chase or install Quota through the legacy sync path (`SyncResult` carries no quota field). Quota is therefore absent from the required-dependency plan above. `aria upgrade` may upgrade an already-installed Quota 5 only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
 
 ### Commands
 
@@ -290,9 +290,9 @@ Neither `aria setup` nor `aria update` runs as a postinstall script, daemon, bac
 
 ### `aria upgrade`
 
-`aria upgrade` moves to a new ARIA release through inventory, explicit approval, pre-removal validation, self-upgrade plus a bounded handoff, and new-release-only completion with a before/after report. It never splits scope: there is no `--aria-only` or `--deps-only` in v1.0.7 — approval covers the whole inventoried component scope and the handoff binds it.
+`aria upgrade` moves to a new ARIA release through inventory, explicit approval, pre-removal validation, self-upgrade plus a bounded handoff, and new-release-only completion with a before/after report. It never splits scope: there is no `--aria-only` or `--deps-only` in v1.0.8 — approval covers the whole inventoried component scope and the handoff binds it.
 
-`deps sync` versus `upgrade`: sync normalizes the *current* installs (idempotent, unapproved, Quota excluded); upgrade moves to a *new* release. The pipeline order is inventory → explicit approval → validate the ARIA target before removal → self-upgrade plus bounded handoff → only in the new release: component upgrades → target-version normalization/registration → agent regen if required → deps sync → doctor → before/after report.
+`deps sync` versus `upgrade`: sync normalizes the *current* installs (idempotent, unapproved; the legacy sync path performs no Quota chase or install); upgrade moves to a *new* release. The pipeline order is inventory → explicit approval → validate the ARIA target before removal → self-upgrade plus bounded handoff → only in the new release: component upgrades → target-version normalization/registration → agent regen if required → deps sync → doctor → before/after report.
 
 ```bash
 aria upgrade --check # Strictly read-only: current AND available ARIA releases plus a Component|Installed|Available|Status table
@@ -304,7 +304,7 @@ aria upgrade --yes   # Approve the inventoried target and component scope and ru
 
 ### `aria deps sync`
 
-Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `aria setup` and the post-update handoff. Quota 5 is excluded: it stays optional and user-managed (see above), so sync performs no Quota installation or config mutation.
+Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `aria setup` and the post-update handoff. Quota 5 is excluded from this legacy sync path: sync performs no Quota installation or config mutation (the setup bootstrap lifecycle manages Quota separately under safety/ownership gates; see above).
 
 ### `aria doctor`
 
@@ -336,17 +336,17 @@ Prints the resolved model (and optional variant) for every ARIA role, following 
 
 ```
 Resolved ARIA role routes:
-coder  opencode-go/deepseek-v4-pro
-explorer  opencode-go/deepseek-v4-flash (high)
-visualizer  opencode-go/kimi-k2.7-code
-planner  openai/gpt-5.6-terra (xhigh)
-architect  openai/gpt-5.6-sol (xhigh)
-implementer  opencode-go/glm-5.2
-reviewer  opencode-go/deepseek-v4-pro
-researcher  openai/gpt-5.6-sol (medium)
-archivist  opencode-go/deepseek-v4-pro
-writer  openai/gpt-5.6-sol (medium)
-scientist  openai/gpt-5.6-sol (medium)
+coder  opencode-go/muse-spark-1.3-contributor (xhigh)
+explorer  opencode-go/muse-spark-1.3-contributor (high)
+visualizer  opencode-go/muse-spark-1.3-contributor (xhigh)
+planner  openai/gpt-6-luna (xhigh)
+architect  openai/gpt-6.1-sol (high)
+implementer  opencode-go/muse-spark-1.3-contributor (xhigh)
+reviewer  openai/gpt-6.1-sol (medium)
+researcher  openai/gpt-6.1-sol (medium)
+archivist  opencode-go/muse-spark-1.3-contributor (high)
+writer  openai/gpt-6-luna (xhigh)
+scientist  openai/gpt-6.1-sol (medium)
 ```
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
@@ -412,7 +412,7 @@ Reciprocal grants cannot bounce: a delegated role must not task any role that is
 - `aria-research-planning` — tractable question framing (optional 5W1H), cautious gap/novelty and importance/feasibility reasoning, competing hypotheses, evidence needs versus assumptions, falsification/discrimination criteria, measurement/method/control/confounder/information-value planning, and a minimal next decision.
 - `aria-results-analysis` — artifact/comparability and unit/dependence validation, explicit comparisons and metrics, descriptive counts, uncertainty/effect sizes/inference assumptions/multiple comparisons/missingness, practical versus statistical significance, figure/table interpretation, observation versus mechanism, calibrated claims, and explicit blockers/underdetermination.
 
-`scientist` runs on `openai/gpt-5.6-sol` (variant `medium`), the same reasoning-model family and variant as `researcher` and `writer`: interpretation-heavy scientific reasoning at a balanced reasoning budget, distinct from the `xhigh` variants reserved for `planner` and `architect` plan work.
+`scientist` runs on `openai/gpt-6.1-sol` (variant `medium`), the same reasoning-model family and variant as `researcher`: interpretation-heavy scientific reasoning at a balanced reasoning budget, distinct from the `xhigh` variants reserved for `planner` and `writer` plan and prose work.
 
 ### Authority and permissions
 

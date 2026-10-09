@@ -80,8 +80,9 @@ export interface QuotaCheckResult {
  * Strictly read-only Quota inventory for setup/sync reporting and the
  * future upgrade `--check` table: installed spec/version plus a status.
  * Never invokes the updater and never writes. Identified Quota 5 reports
- * `unmanaged-observed` — observed and user-managed, with setup and sync
- * performing no Quota installation or config mutation.
+ * `unmanaged-observed` — observed for the setup bootstrap lifecycle to manage
+ * under safety/ownership gates, while the legacy `deps sync` path performs
+ * no Quota installation or config mutation.
  */
 export declare function checkQuotaUpgrade(executor: Executor, configDir?: string): Promise<QuotaCheckResult>;
 export type QuotaUpgradeStatus = "upgraded" | "already-current" | "unmanaged-observed" | "unknown-target" | "unsupported-ownership" | "skipped" | "update-failed" | "validation-failed";

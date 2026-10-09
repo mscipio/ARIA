@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -579,6 +579,74 @@ describe("setup", () => {
     expect(result.setup!.registration.action).toBe("already registered");
     expect(result.setup!.registration.detail).toContain("compatibility fallback");
     expect(depsSyncCalled).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setup ambiguous-config preflight (T001 hotfix)
+// ---------------------------------------------------------------------------
+
+describe("setup ambiguous-config preflight", () => {
+  it("fails closed before plugin add when both global configs exist (would-mutate)", async () => {
+    const checkout = await makeFixtureCheckout();
+    const root = await mkdtemp(resolve(tmpdir(), "rdc-lifecycle-ambiguous-"));
+    tempDirs.push(root);
+    const jsonPath = resolve(root, "opencode.json");
+    const jsoncPath = resolve(root, "opencode.jsonc");
+    const jsonOriginal = JSON.stringify({ model: "custom/json" });
+    const jsoncOriginal = JSON.stringify({ model: "custom/jsonc" });
+    await writeFile(jsonPath, jsonOriginal);
+    await writeFile(jsoncPath, jsoncOriginal);
+    const files = {
+      globalConfigPath: jsonPath,
+      agentsDir: resolve(root, "agents"),
+      skillsRoot: resolve(root, "skills"),
+    };
+    assertNotCallerGlobalPath(files.globalConfigPath, "setup files.globalConfigPath");
+    assertNotCallerGlobalPath(files.agentsDir, "setup files.agentsDir");
+
+    // Would-mutate stub: the plugin is absent from introspection and
+    // `plugin add` would succeed, so any preflight miss would mutate.
+    const { executor, calls } = collectingExecutor({
+      "opencode plugin list": { stdout: pluginListEmpty() },
+      [`opencode plugin add ${checkout}`]: { stdout: "plugin registered" },
+    });
+    let depsSyncCalled = false;
+    let dependenciesCalled = false;
+    const configureModelsFn = vi.fn(async () => ({ status: "configured" as const, message: "done" }));
+
+    const result = await setup(binaryUrl(checkout), executor, async () => {
+      depsSyncCalled = true;
+      return { ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } };
+    }, {
+      files,
+      dependenciesFn: async () => {
+        dependenciesCalled = true;
+        return { ok: true, outcomes: [], report: "must not run" };
+      },
+      configure: true,
+      configureModelsFn,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("config");
+    expect(result.setup?.config?.detail).toMatch(/both .*opencode\.json/);
+    // Zero mutating executor calls: the preflight runs before even `plugin
+    // list`, so no `plugin add` (and no executor call at all) happens.
+    expect(calls.filter((call) => call.args.includes("add")).length).toBe(0);
+    expect(calls.length).toBe(0);
+    // Neither config file changed: byte-identical, no creation/backups.
+    expect(await readFile(jsonPath, "utf8")).toBe(jsonOriginal);
+    expect(await readFile(jsoncPath, "utf8")).toBe(jsoncOriginal);
+    expect((await readdir(root)).some((entry) => entry.includes(".aria-backup-"))).toBe(false);
+    // No later stages ran: no agent install, no dependency lifecycle, no
+    // sync, no --configure model stage.
+    expect(result.setup?.agents).toBeUndefined();
+    expect(result.setup?.dependencies).toBeUndefined();
+    expect(result.setup?.model).toBeUndefined();
+    expect(depsSyncCalled).toBe(false);
+    expect(dependenciesCalled).toBe(false);
+    expect(configureModelsFn).not.toHaveBeenCalled();
   });
 });
 

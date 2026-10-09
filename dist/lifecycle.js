@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { depsSync, defaultExecutor } from "./deps.js";
 import { configureModels, } from "./model-config.js";
 import { defaultAgentsDir, installAgentFiles, rollbackAgentInstall } from "./agents.js";
-import { defaultGlobalConfigPath, ensureAriaSetupConfigFile, isSameLocalPluginIdentity, resolveSetupAriaConfig, rollbackSetupConfigFile, } from "./setup-config.js";
+import { assertSetupConfigNotAmbiguous, defaultGlobalConfigPath, ensureAriaSetupConfigFile, isSameLocalPluginIdentity, resolveSetupAriaConfig, rollbackSetupConfigFile, } from "./setup-config.js";
 import { getPackageSkillsRoot } from "./skills.js";
 // ---------------------------------------------------------------------------
 // Checkout resolution (pure function, independent of process.cwd())
@@ -213,6 +213,30 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
     const pluginSpec = options.pluginSpec;
     const packageArg = pluginSpec ?? checkout;
     const configPluginIdentity = pluginSpec ?? pluginUri;
+    // T001 hotfix preflight: read-only canonical-config discovery at the
+    // effective config root BEFORE any `opencode plugin list/add` executor
+    // call. A dual-file (`opencode.json` + `opencode.jsonc`) state fails
+    // closed here — before any plugin mutation — via the exact discovery rule
+    // shared with `ensureAriaSetupConfigFile` below (same effective
+    // `globalConfigPath`, same ambiguity definition). Single-config and
+    // clean-install states proceed unchanged.
+    const filesOptions = options.files ?? {};
+    const globalConfigPath = filesOptions.globalConfigPath ?? defaultGlobalConfigPath();
+    try {
+        await assertSetupConfigNotAmbiguous(globalConfigPath);
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+            ok: false,
+            stage: "config",
+            setup: {
+                registration: { action: "failed", detail: "registration skipped due to config failure" },
+                sync: { ok: false, error: "sync skipped due to config failure" },
+                config: { path: globalConfigPath, changed: false, created: false, detail: message },
+            },
+        };
+    }
     let registrationAction = "failed";
     let registrationDetail;
     // -----------------------------------------------------------------------
@@ -291,8 +315,8 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn = 
     // replacing, and writes nothing when nothing changed. Fail closed: sync
     // is skipped when the config cannot be ensured.
     // -----------------------------------------------------------------------
-    const filesOptions = options.files ?? {};
-    const globalConfigPath = filesOptions.globalConfigPath ?? defaultGlobalConfigPath();
+    // T001: filesOptions/globalConfigPath were resolved in the preflight
+    // above (same effective root); only skillsRoot is still needed here.
     const skillsRoot = filesOptions.skillsRoot ?? getPackageSkillsRoot();
     let configState;
     try {

@@ -8,10 +8,13 @@ import { openCodeGlobalDir } from "./paths.js";
 // Quota 5 dual policy (T007) — upgrade-only single owner
 // ---------------------------------------------------------------------------
 //
-// Quota 5 stays optional and user-managed for `aria setup` and
-// `aria deps sync`: neither path installs, upgrades, or mutates Quota state
-// (see the exclusion note on `depsSync` in `./deps.js`; `SyncResult` carries
-// no quota field, and the setup file phases never write quota entries).
+// Quota 5 stays optional: the setup bootstrap lifecycle (`ensureQuotaForLifecycle`
+// in `./dependencies.js`: absent → install-if-missing via `installQuotaIfMissing`
+// in `./bootstrap.js`; identified Quota 5 → gated update via `upgradeQuota` below)
+// may manage it under safety/ownership gates. The legacy `deps sync` path
+// (`depsSync` in `./deps.js`) remains non-version-chasing and does not
+// independently chase or install Quota (`SyncResult` carries no quota field,
+// and the setup file phases never write quota entries).
 // This module is the single upgrade-only owner, consumed by the future
 // `aria upgrade` orchestration (T010):
 //
@@ -327,8 +330,9 @@ export interface QuotaCheckResult {
  * Strictly read-only Quota inventory for setup/sync reporting and the
  * future upgrade `--check` table: installed spec/version plus a status.
  * Never invokes the updater and never writes. Identified Quota 5 reports
- * `unmanaged-observed` — observed and user-managed, with setup and sync
- * performing no Quota installation or config mutation.
+ * `unmanaged-observed` — observed for the setup bootstrap lifecycle to manage
+ * under safety/ownership gates, while the legacy `deps sync` path performs
+ * no Quota installation or config mutation.
  */
 export async function checkQuotaUpgrade(executor: Executor, configDir?: string): Promise<QuotaCheckResult> {
   const listResult = await runPluginList(executor);
