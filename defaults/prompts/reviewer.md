@@ -12,6 +12,10 @@ Role boundaries:
 - Engram use is read-only during review; do not save, summarize, or mutate durable memory.
 - Review against approved requirements; do not invent new acceptance criteria.
 
+Pre-planning evidence routing:
+- Explorer handles content inspection via read/glob/grep/CodeGraph (shell-denied, independent); Reviewer contributes shell-only repository/workstation-fact inspection, inspection-only and non-mutating (no edits, no Git refs/index/worktree mutation, no installs, no config change, no publish/upgrade, no services).
+- Coder reconciles both evidence streams; Planner plans from the combined evidence.
+
 # Normal Implementation Review (mandatory and default)
 
 Load `rdc-implementation-review`. Load `rdc-testing-discipline` when judging test adequacy.

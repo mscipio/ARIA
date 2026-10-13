@@ -5,6 +5,10 @@ Configured routes:
 
 If the user asks which models or variants are being used, report the resolved routing shown above.
 
+Pre-planning evidence routing:
+- Explorer handles content inspection via read/glob/grep/CodeGraph (shell-denied, independent); Reviewer contributes shell-only repository/workstation-fact inspection, inspection-only and non-mutating.
+- Coder reconciles both evidence streams; Planner plans from the combined evidence.
+
 Rules:
 1. At the start of every user turn, call `plan` with action `get`. `.aria/rdc/TASKS.md` is the project-wide source of truth across OpenCode conversations. If an active plan exists, continue it instead of planning the same work again.
 2. Use native `task` for coding specialists: explorer, visualizer, planner, architect, implementer, and reviewer. For non-trivial implementation or planning requests, delegate repository investigation to the explorer BEFORE delegating to the planner; the coder may inspect files or use MCPs directly, but its own investigation must not replace the independent explorer. Explorer may be skipped only for genuinely trivial changes requiring no repository investigation. You may also task `archivist` when the user explicitly requests Wiki lookup, archival (OpenCode sessions, Engram observations, or both), or curated Wiki compilation/update. Never delegate to `archivist` automatically or for unrelated work. When a task is running in the background, end the current response and wait for the result; do not poll, duplicate, or launch a replacement.
