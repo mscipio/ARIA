@@ -6,6 +6,7 @@ import { context7UpgradeComponent, quotaLifecycleUpgradeComponent, } from "./dep
 import { defaultExecutor, depsSync, detectCodeGraph, detectContext7, detectEngram, detectMcpConnectivity, } from "./deps.js";
 import { doctorExitCode, runDoctor } from "./doctor.js";
 import { engramUpgradeComponent } from "./engram.js";
+import { classifyAriaRegistration, parsePluginList } from "./lifecycle.js";
 import { openCodeGlobalDir } from "./paths.js";
 import { checkQuotaUpgrade } from "./quota.js";
 import { zotpilotUpgradeComponent } from "./zotpilot.js";
@@ -58,6 +59,95 @@ export const ARIA_GIT_SPEC_PREFIX = "github:mscipio/ARIA#";
  * never assign to `process.env` and never persist to any file.
  */
 export const PROCESS_LOCAL_GIT_ENV = { NPM_CONFIG_ALLOW_GIT: "all" };
+// ---------------------------------------------------------------------------
+// T003 exact-package upgrade invocation (never bare `aria`).
+//
+// `bin/aria.mjs` dispatches `upgrade` by importing `../dist/upgrade.js` and
+// `../dist/aria-upgrade.js` relative to its own location, so a bare
+// `aria upgrade --yes` runs whatever `aria` resolves on PATH (for example
+// the development checkout at 1.0.8) instead of the positively identified
+// installed registration (for example `github:mscipio/ARIA#v1.0.7`). The
+// executable form pins the package:
+//
+//   NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package <spec> -- aria upgrade --yes
+//
+// (`NPM_CONFIG_ALLOW_GIT=all npx --yes --package <spec> -- aria upgrade --yes` is equivalent.)
+// The `NPM_CONFIG_ALLOW_GIT=all` prefix is the approved per-invocation process-local Git
+// allowance (mirrors `PROCESS_LOCAL_GIT_ENV` spread per-call via the Executor `env` seam):
+// it allows the one npm fetch of the exact Git spec without any global `npm config`,
+// environment export, or `.npmrc` change (a bare `npm exec ...` without it fails with
+// EALLOWGIT on Git specs). The
+// `--` boundary keeps the `aria ...` argv from being parsed as npm
+// options; `--package <spec>` selects the exact Git spec (never a local
+// path, never a bare name). These builders are pure: they format argv and
+// display strings only and never touch an executor, config, or the
+// network. No launcher is needed: npm resolves the `aria` binary from the
+// named package, and the dispatched release is that package's own code.
+//
+// T009 installed identity: the `<spec>` above is the positively identified
+// OpenCode plugin registration (approved Git source plus exact release
+// tag, resolved read-only by `checkUpgradeInventory` via `opencode plugin
+// list`), never the running CLI package version. The CLI version only
+// selects the code that executes inventory; it is reported separately
+// (`cliVersion`) and never used for guidance or version comparison, so a
+// dev CLI (for example 1.0.8) cannot steer guidance at an installed
+// registration (for example v1.0.7) nor falsely report it already current.
+// ---------------------------------------------------------------------------
+/**
+ * Derive the installed Git spec for guidance from a positively identified
+ * bare `X.Y.Z` version (e.g. `1.0.6` → `github:mscipio/ARIA#v1.0.6`).
+ * Anything else (null, dev/inexact versions) yields null and guidance
+ * fails closed without guessing.
+ */
+export function installedSpecForGuidance(currentVersion) {
+    if (currentVersion === null)
+        return null;
+    if (!/^\d+\.\d+\.\d+$/.test(currentVersion))
+        return null;
+    return `${ARIA_GIT_SPEC_PREFIX}v${currentVersion}`;
+}
+/**
+ * Pure npm argv for an approval run against the installed release:
+ * `exec --yes --package <spec> -- aria upgrade --yes`. The caller
+ * prefixes `npm` (or `npx`) and the approved per-invocation
+ * `NPM_CONFIG_ALLOW_GIT=all` env (see `PROCESS_LOCAL_GIT_ENV`, spread
+ * per-call via the Executor `env` seam, never global/`.npmrc`); the `--`
+ * boundary and `--package` position
+ * are part of the contract verified by regression tests.
+ */
+export function buildExactUpgradeApprovalArgv(installedSpec) {
+    return ["exec", "--yes", "--package", installedSpec, "--", "aria", "upgrade", "--yes"];
+}
+/** Display form of the exact-package approval invocation (pure). Includes the approved
+ * per-invocation `NPM_CONFIG_ALLOW_GIT=all` prefix so the displayed command fetches the
+ * exact Git spec without any global npm config or `.npmrc` change. */
+export function formatExactUpgradeApprovalCommand(installedSpec) {
+    return `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package ${installedSpec} -- aria upgrade --yes`;
+}
+/**
+ * Approval guidance line for `formatUpgradeCheck` / `runUpgrade`
+ * blocked-approval (pure, no mutation). Names the exact installed package
+ * when it is positively identified; otherwise fails closed with no bare
+ * invocation offered.
+ */
+export function formatApprovalGuidance(currentVersion, targetSpec) {
+    const installedSpec = installedSpecForGuidance(currentVersion);
+    if (installedSpec === null) {
+        return `Self-upgrade approval is withheld: the installed release is not positively identified as an exact version, so no exact-package invocation can be offered for ${targetSpec}. Establish identity, then re-run with fresh approval. No changes were made.`;
+    }
+    return `Self-upgrade: available — run \`${formatExactUpgradeApprovalCommand(installedSpec)}\` to approve the inventoried target (${targetSpec}) and component scope`;
+}
+/**
+ * Blocked-approval detail for `runUpgrade` when `--yes` was not given
+ * (pure, no mutation). Same exact-package rule as `formatApprovalGuidance`.
+ */
+export function formatBlockedApprovalDetail(currentVersion, targetSpec) {
+    const installedSpec = installedSpecForGuidance(currentVersion);
+    if (installedSpec === null || targetSpec === null) {
+        return "Explicit approval is required before any mutation. The installed release or available target is not positively identified, so no exact-package invocation can be offered. Establish identity, then re-run with fresh approval. No changes were made.";
+    }
+    return `Explicit approval is required before any mutation. Re-run with \`${formatExactUpgradeApprovalCommand(installedSpec)}\` to approve the inventoried target (${targetSpec}) and component scope. No changes were made.`;
+}
 /** Component inventory scope bound by `--check`, approval, and handoff. */
 export const UPGRADE_COMPONENTS = ["aria", "engram", "context7", "codegraph", "zotpilot", "quota"];
 // ---------------------------------------------------------------------------
@@ -71,6 +161,106 @@ export function readCurrentAriaVersion() {
     catch {
         return null;
     }
+}
+/** Installed identity from an explicit pin (test/operator override; trusted as stated). */
+function installedIdentityFromPin(pin) {
+    if (pin === null) {
+        return { version: null, spec: null, note: "installed ARIA version is not positively identified (pinned unknown)" };
+    }
+    const spec = installedSpecForGuidance(pin);
+    if (spec === null) {
+        return {
+            version: pin,
+            spec: null,
+            note: `installed version ${pin} is not an exact release identity, so no exact-package invocation can be offered`,
+        };
+    }
+    return { version: pin, spec, note: `installed ${pin} (${spec})` };
+}
+/**
+ * Read-only installed-identity probe (`opencode plugin list`; never
+ * mutates). Exactly one ARIA-identifying row (shared T012 rule in
+ * `src/lifecycle.ts`, never deduplicated before the uniqueness decision)
+ * with an exact `vX.Y.Z` tag identifies; zero registrations, multiple
+ * rows (including duplicate identical specs), a foreign
+ * (non-approved-source) `aria` id, or an inexact ref fails closed with
+ * zero version evidence. Mirrors the source rule in
+ * `src/aria-upgrade.ts` (`isAriaGitTarget`) without importing it (that
+ * module imports this one).
+ */
+async function detectInstalledAriaIdentity(executor) {
+    let stdout;
+    try {
+        stdout = (await executor("opencode", ["plugin", "list"])).stdout;
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return {
+            version: null,
+            spec: null,
+            note: `installed ARIA registration unknown (opencode plugin list failed: ${reason}); not guessed`,
+        };
+    }
+    const { recognized, entries } = parsePluginList(stdout);
+    if (!recognized) {
+        return {
+            version: null,
+            spec: null,
+            note: "installed ARIA registration unknown (unrecognized plugin list output); not guessed",
+        };
+    }
+    // T013: row-level uniqueness via the shared T012 rule — identical specs
+    // still count as multiple registrations (never deduplicated before the
+    // uniqueness decision). Exactly one identifying row may proceed.
+    const registration = classifyAriaRegistration(entries);
+    if (registration.kind === "ambiguous") {
+        const observed = registration.identifying.map((entry) => `${entry.id} ${entry.target}`).join(", ");
+        return {
+            version: null,
+            spec: null,
+            note: `installed ARIA registration ambiguous (multiple registrations: ${observed}); refusing to guess`,
+        };
+    }
+    const approved = [...new Set(entries.filter((entry) => entry.target.startsWith(ARIA_GIT_SPEC_PREFIX)).map((entry) => entry.target))];
+    const foreign = entries.filter((entry) => entry.id === "aria" && !entry.target.startsWith(ARIA_GIT_SPEC_PREFIX));
+    if (approved.length > 1) {
+        return {
+            version: null,
+            spec: null,
+            note: `installed ARIA registration ambiguous (multiple distinct registrations: ${approved.join(", ")}); refusing to guess`,
+        };
+    }
+    if (foreign.length > 0 && approved.length === 0) {
+        return {
+            version: null,
+            spec: null,
+            note: `installed ARIA registration is from an unapproved source (${foreign.map((entry) => entry.target).join(", ")}); ownership unsupported, leaving untouched`,
+        };
+    }
+    if (foreign.length > 0) {
+        return {
+            version: null,
+            spec: null,
+            note: `installed ARIA registration conflicting (approved ${approved[0]} plus unapproved ${foreign.map((entry) => entry.target).join(", ")}); refusing to guess`,
+        };
+    }
+    if (approved.length === 0) {
+        return {
+            version: null,
+            spec: null,
+            note: "installed ARIA registration is definitely absent (no approved ARIA Git registration in the recognized plugin list)",
+        };
+    }
+    const spec = approved[0];
+    const tag = spec.slice(spec.lastIndexOf("#") + 1);
+    if (!isExactReleaseTag(tag)) {
+        return {
+            version: null,
+            spec: null,
+            note: `installed ARIA ref is not an exact release identity (${spec}); refusing to guess`,
+        };
+    }
+    return { version: tag.slice(1), spec, note: `installed ${tag.slice(1)} (${spec}) via opencode plugin list` };
 }
 const EXACT_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/;
 /**
@@ -156,13 +346,18 @@ export function validateAriaTargetForRemoval(target) {
 // ---------------------------------------------------------------------------
 // Read-only component inventory (`--check` never mutates)
 // ---------------------------------------------------------------------------
-function ariaRow(current, available) {
+function ariaRow(installed, available) {
+    // T009: comparison requires approved-source version evidence on BOTH
+    // sides. A registration without a positively identified spec (foreign
+    // source, ambiguous, absent, unknown) never compares — even an
+    // equal tag from a foreign source stays unknown-target, never current.
+    const current = installed.version !== null && installed.spec !== null ? installed.version : null;
     if (current === null || available.kind === "unknown") {
         const reason = current === null
-            ? "installed ARIA version is not positively identified"
+            ? installed.note
             : available.kind === "unknown"
                 ? available.reason
-                : "installed ARIA version is not positively identified";
+                : installed.note;
         return {
             component: "aria",
             installed: current,
@@ -211,13 +406,21 @@ function dualConfigAmbiguous(configDir) {
  * or mutating CLI is ever invoked here.
  */
 export async function checkUpgradeInventory(executor = defaultExecutor, options = {}) {
-    const currentVersion = options.currentVersion !== undefined ? options.currentVersion : readCurrentAriaVersion();
+    // T009: the installed version/spec derive from the positively identified
+    // plugin registration (or an explicit pin), never from the running CLI
+    // package. The CLI version is reporting-only and never compared.
+    const cliVersion = options.cliVersion !== undefined ? options.cliVersion : readCurrentAriaVersion();
+    const installed = options.currentVersion !== undefined
+        ? installedIdentityFromPin(options.currentVersion)
+        : await detectInstalledAriaIdentity(executor);
+    const currentVersion = installed.version;
+    const installedSpec = installed.spec;
     const available = options.availableOverride !== undefined
         ? options.availableOverride === null
             ? { kind: "unknown", reason: "available ARIA release pinned unknown" }
             : { kind: "known", target: options.availableOverride }
         : await discoverAvailableAriaTarget(executor);
-    const components = [ariaRow(currentVersion, available)];
+    const components = [ariaRow(installed, available)];
     // Engram: installed version observed read-only; version currency is
     // established post-handoff by the T012 adapter, not by this check
     // (deps sync only normalizes the current install).
@@ -311,13 +514,16 @@ export async function checkUpgradeInventory(executor = defaultExecutor, options 
         status: quota.status,
         detail: quota.detail,
     });
-    const selfUpgradeBlocked = available.kind === "unknown" || currentVersion === null;
-    const blockReason = currentVersion === null
-        ? "installed ARIA version is not positively identified"
+    // T009: unknown installed spec blocks self-upgrade with zero mutation —
+    // guidance cannot name an exact package without a positively identified
+    // registration, even when a bare installed version string is present.
+    const selfUpgradeBlocked = available.kind === "unknown" || currentVersion === null || installedSpec === null;
+    const blockReason = currentVersion === null || installedSpec === null
+        ? installed.note
         : available.kind === "unknown"
             ? available.reason
             : null;
-    return { currentVersion, available, selfUpgradeBlocked, blockReason, components };
+    return { currentVersion, cliVersion, installedSpec, available, selfUpgradeBlocked, blockReason, components };
 }
 // ---------------------------------------------------------------------------
 // Reporting (plain text, no ANSI — same convention as doctor)
@@ -327,7 +533,11 @@ function padCells(cells, widths) {
 }
 export function formatUpgradeCheck(result) {
     const lines = ["ARIA upgrade check", ""];
-    lines.push(`Current release: ${result.currentVersion ?? "unknown"}`);
+    lines.push(`Current release: ${result.currentVersion ?? "unknown"}${result.installedSpec ? ` (${result.installedSpec})` : ""}`);
+    // T009: the running CLI is reported separately and never used for
+    // guidance or comparison (legacy results without `cliVersion` report it
+    // as unknown rather than guessing).
+    lines.push(`Running CLI: ${result.cliVersion ?? "unknown"} (reporting only; guidance names the registered installation)`);
     lines.push(result.available.kind === "known"
         ? `Available release: ${result.available.target.tag} (${result.available.target.spec})`
         : "Available release: unknown");
@@ -337,8 +547,11 @@ export function formatUpgradeCheck(result) {
     else if (result.available.kind === "known" && result.currentVersion === result.available.target.version) {
         lines.push("Self-upgrade: already current");
     }
+    else if (result.available.kind === "known") {
+        lines.push(formatApprovalGuidance(result.currentVersion, result.available.target.spec));
+    }
     else {
-        lines.push("Self-upgrade: available — run `aria upgrade --yes` to approve the inventoried target and component scope");
+        lines.push(formatApprovalGuidance(result.currentVersion, "unknown target"));
     }
     lines.push("");
     const header = ["Component", "Installed", "Available", "Status"];
@@ -365,6 +578,40 @@ export async function defaultSelfUpgrade() {
     };
 }
 /**
+ * T010 already-current CLI/plugin identity gate (pure, no mutation).
+ *
+ * The already-current dependency path mutates (shared lifecycle) directly
+ * under the running release with NO self-replacement/handoff, so the
+ * running CLI must positively be the registered installation before the
+ * seam runs. The CLI version is positively identified (`cliVersion`) and
+ * must exactly equal the positively identified installed registration
+ * (`currentVersion` + `installedSpec`); any unknown or differing identity
+ * fails closed with zero mutation. The approved exact-target handoff path
+ * (upgrade-available, below) is preserved: it remains allowed to replace
+ * the positively identified registration with the exact validated target.
+ */
+export function checkAlreadyCurrentCliIdentity(check) {
+    if (check.currentVersion === null || check.installedSpec === null) {
+        return {
+            ok: false,
+            reason: `installed ARIA registration is not positively identified (${check.installedSpec ?? "no exact spec"}); refusing to run dependency updates under an unverified release`,
+        };
+    }
+    if (check.cliVersion === null) {
+        return {
+            ok: false,
+            reason: `running CLI version is unknown; refusing to run dependency updates against registered ${check.installedSpec} without positive CLI identity`,
+        };
+    }
+    if (check.cliVersion !== check.currentVersion) {
+        return {
+            ok: false,
+            reason: `definite mismatch: running CLI ${check.cliVersion} vs registered installation ${check.currentVersion} (${check.installedSpec}); refusing to run dependency updates under a conflicting release (move only via the explicit exact-target \`aria upgrade --yes\` handoff)`,
+        };
+    }
+    return { ok: true };
+}
+/**
  * Old-release upgrade pipeline: inventory → explicit approval → validate
  * the ARIA target BEFORE removal → T011 self-upgrade + bounded handoff.
  * On handoff success this function returns WITHOUT running any further
@@ -374,12 +621,16 @@ export async function defaultSelfUpgrade() {
 export async function runUpgrade(executor = defaultExecutor, options) {
     const check = await checkUpgradeInventory(executor, options);
     // Approval precedes ALL mutations (inventory above is strictly read-only).
+    // T009: `check.currentVersion` is the installed registration version
+    // (never the running CLI package version), so the blocked-approval
+    // guidance names the registered installation.
     if (!options.approval.yes) {
+        const targetSpec = check.available.kind === "known" ? check.available.target.spec : null;
         return {
             stage: "blocked-approval",
             ok: false,
             check,
-            detail: "Explicit approval is required before any mutation. Re-run with `aria upgrade --yes` to approve the inventoried target and component scope. No changes were made.",
+            detail: formatBlockedApprovalDetail(check.currentVersion, targetSpec),
         };
     }
     // Unknown available target blocks self-upgrade with zero mutation.
@@ -404,9 +655,24 @@ export async function runUpgrade(executor = defaultExecutor, options) {
     // (the `aria upgrade` CLI always provides the real shared lifecycle), run
     // the approved dependency updates directly under the current release with
     // NO self-replacement/handoff — the binding T017 case.
+    //
+    // T010: the seam path is gated on CLI/plugin identity before mutation. A
+    // running CLI that is not positively the registered installation (unknown
+    // or definite mismatch, e.g. dev CLI 1.0.8 vs registered v1.0.7) fails
+    // closed with zero mutation; only the approved exact-target handoff below
+    // moves between releases.
     if (check.currentVersion === check.available.target.version) {
         if (!options.dependenciesFn) {
             return { stage: "already-current", ok: true, check, detail: `ARIA ${check.currentVersion} is already current; no changes made.` };
+        }
+        const identity = checkAlreadyCurrentCliIdentity(check);
+        if (!identity.ok) {
+            return {
+                stage: "already-current",
+                ok: false,
+                check,
+                detail: `ARIA ${check.currentVersion} is already current; ${identity.reason}. No changes were made.`,
+            };
         }
         let dependencies;
         try {

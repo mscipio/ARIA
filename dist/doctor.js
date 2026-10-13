@@ -8,7 +8,8 @@ import { agentFileName, defaultAgentsDir, generateAgentFiles, parseManagedHeader
 import { PLAN_TOOL_NAME } from "./plan-tool.js";
 import { CODING_ROLES, PACKAGE_SKILL_NAMES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
 import { deriveRoutes, ROLES } from "./routes.js";
-import { resolveSetupAriaConfig } from "./setup-config.js";
+import { isSameLocalPluginIdentity, resolveSetupAriaConfig } from "./setup-config.js";
+import { classifyAriaRegistration, normalizeIdentityVersion, parsePluginList, pluginSpecTagVersion } from "./lifecycle.js";
 import { ARIA_SKILL_NAMES } from "./skills.js";
 const defaultFileOps = {
     readText: (path) => readFile(path, "utf8"),
@@ -179,9 +180,10 @@ function routeFinding(route, discovered) {
         return [{ severity: "PASS", area: "routes/models", title: route.role, detail: route.model }];
     }
     if (model.variantsObservable !== true) {
-        // Variant capability unknown: plain `opencode models` (pinned 2.0.23)
-        // reports no variant metadata, so a configured variant is never guessed
-        // and never failed — it is reported as unknown.
+        // Variant capability unknown: plain `opencode models` (verified on
+        // OpenCode 2.0.26, where `--verbose` is rejected) reports no variant
+        // metadata, so a configured variant is never guessed and never
+        // failed — it is reported as unknown.
         return [{
                 severity: "WARN",
                 area: "routes/models",
@@ -273,10 +275,34 @@ function subagentDepthFinding(probe) {
  * agent permissions observed directly. `ctx.*.list` is unreachable from the
  * standalone CLI, which reports SKIP (never FAIL) for runtime findings.
  */
-/** Pinned OpenCode runtime target (plan T001 audit gate + exact dep pin). */
+/**
+ * T004 OpenCode runtime compatibility (explicit; exact version equality is
+ * retired as a runtime gate).
+ *
+ * - `SUPPORTED_OPENCODE_VERSION` is the build/test pin: the exact
+ *   `@opencode/plugin` dependency in package.json that ARIA builds and
+ *   tests against. It is not a runtime equality gate.
+ * - `MINIMUM_OPENCODE_VERSION` is the oldest supported runtime. Older
+ *   runtimes predate the V2 plugin API ARIA requires and are
+ *   known-incompatible (FAIL).
+ * - `VALIDATED_OPENCODE_VERSIONS` are runtimes positively validated with
+ *   this ARIA build (PASS on version evidence alone, standalone or live).
+ * - Newer, unvalidated runtimes never FAIL solely for being newer: with
+ *   positively observed live V2 capability evidence for every necessary
+ *   domain (`REQUIRED_RUNTIME_CAPABILITIES`: plugins/agents/skills/tools
+ *   carried in the `v2` snapshot) they PASS; with partial or no live
+ *   evidence the standalone CLI reports WARN (capability
+ *   unknown/insufficient, action-needed, never presumed compatible).
+ *   A single observed list (for example only `v2:{plugins:[]}`) is
+ *   insufficient and stays WARN.
+ */
 export const SUPPORTED_OPENCODE_VERSION = "2.0.23";
+/** Oldest OpenCode runtime this ARIA build supports. */
+export const MINIMUM_OPENCODE_VERSION = "2.0.23";
+/** OpenCode runtimes positively validated with this ARIA build. */
+export const VALIDATED_OPENCODE_VERSIONS = ["2.0.23"];
 /** Shared gap wording when no live V2 list is available to the CLI. */
-const RUNTIME_LIST_GAP = "V2 runtime list unavailable outside a live OpenCode 2.0.23 session (ctx.*.list is runtime-only; the standalone CLI has no live-session access)";
+const RUNTIME_LIST_GAP = "no live OpenCode runtime evidence observed (ctx.*.list is runtime-only; the standalone CLI has no live-session access)";
 /** Quota v5 + Engram3 stay UNKNOWN until the T010 runtime gate tests them. */
 const COEXISTENCE_UNKNOWN = "quota v5 + Engram3 coexistence UNKNOWN until runtime-tested (T010); no plugin ordering assumed";
 function pluginRuntimeFinding(plugins) {
@@ -599,23 +625,119 @@ const FRESH_CLI_OBSERVATION = "fresh standalone `opencode mcp list` CLI observat
 // ---------------------------------------------------------------------------
 // Composed dependency doctor (legacy deps.ts health probes)
 // ---------------------------------------------------------------------------
-function openCodeFinding(opencode) {
+/** Numeric `major.minor.patch` prefix of an OpenCode version string, if parseable. */
+function parseOpenCodeVersionParts(version) {
+    const match = version.trim().match(/^(\d+)\.(\d+)\.(\d+)/);
+    if (!match?.[1] || !match[2] || !match[3])
+        return null;
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+/** Compare two OpenCode versions numerically; null when either is not parseable. */
+function compareOpenCodeVersions(a, b) {
+    const partsA = parseOpenCodeVersionParts(a);
+    const partsB = parseOpenCodeVersionParts(b);
+    if (!partsA || !partsB)
+        return null;
+    for (let index = 0; index < 3; index++) {
+        if (partsA[index] < partsB[index])
+            return -1;
+        if (partsA[index] > partsB[index])
+            return 1;
+    }
+    return 0;
+}
+/**
+ * Necessary V2 capability domains for a newer unvalidated runtime to PASS.
+ * Every domain must be observed (defined in the `v2` snapshot); a single
+ * observed list is insufficient. Session inventory alone is never evidence
+ * (sessions carry no ARIA registration state).
+ */
+const REQUIRED_RUNTIME_CAPABILITIES = ["plugins", "agents", "skills", "tools"];
+/**
+ * V2 lists actually observed in the snapshot: positive live-runtime
+ * capability evidence. Session inventory alone is not evidence (sessions
+ * carry no ARIA registration state).
+ */
+function observedRuntimeCapabilities(snapshot) {
+    if (!snapshot)
+        return [];
+    const observed = [];
+    if (snapshot.plugins !== undefined)
+        observed.push("plugins");
+    if (snapshot.agents !== undefined)
+        observed.push("agents");
+    if (snapshot.skills !== undefined)
+        observed.push("skills");
+    if (snapshot.tools !== undefined)
+        observed.push("tools");
+    return observed;
+}
+function openCodeFinding(opencode, v2) {
     if (!opencode.found) {
         return { severity: "FAIL", area: "dependencies", title: "OpenCode", detail: "not found" };
     }
-    if (opencode.version === SUPPORTED_OPENCODE_VERSION) {
-        return { severity: "PASS", area: "dependencies", title: "OpenCode", detail: opencode.version };
+    const version = opencode.version;
+    if (!version) {
+        return {
+            severity: "WARN",
+            area: "dependencies",
+            title: "OpenCode",
+            detail: "runtime identified but version unknown (probe output not parseable): capability unknown, action needed; not presumed compatible",
+        };
+    }
+    if (VALIDATED_OPENCODE_VERSIONS.includes(version)) {
+        return {
+            severity: "PASS",
+            area: "dependencies",
+            title: "OpenCode",
+            detail: `${version} (validated runtime version)`,
+        };
+    }
+    const comparison = compareOpenCodeVersions(version, MINIMUM_OPENCODE_VERSION);
+    if (comparison === null) {
+        return {
+            severity: "WARN",
+            area: "dependencies",
+            title: "OpenCode",
+            detail: `OpenCode ${version} is not comparable to minimum supported ${MINIMUM_OPENCODE_VERSION}: capability unknown, action needed; not presumed compatible`,
+        };
+    }
+    if (comparison < 0) {
+        return {
+            severity: "FAIL",
+            area: "dependencies",
+            title: "OpenCode",
+            detail: `OpenCode ${version} is below minimum supported ${MINIMUM_OPENCODE_VERSION} (known-incompatible with this ARIA build's V2 runtime API)`,
+        };
+    }
+    const observed = observedRuntimeCapabilities(v2);
+    const missing = REQUIRED_RUNTIME_CAPABILITIES.filter((capability) => !observed.includes(capability));
+    if (missing.length === 0) {
+        return {
+            severity: "PASS",
+            area: "dependencies",
+            title: "OpenCode",
+            detail: `OpenCode ${version} is newer than validated ${SUPPORTED_OPENCODE_VERSION}; required V2 runtime capabilities positively observed (${observed.join("/")})`,
+        };
+    }
+    if (observed.length === 0) {
+        return {
+            severity: "WARN",
+            area: "dependencies",
+            title: "OpenCode",
+            detail: `OpenCode ${version} is newer than validated ${SUPPORTED_OPENCODE_VERSION}: capability unvalidated in the standalone CLI (no live runtime evidence observed); action needed, not presumed compatible`,
+        };
     }
     return {
-        severity: "FAIL",
+        severity: "WARN",
         area: "dependencies",
         title: "OpenCode",
-        detail: `expected OpenCode ${SUPPORTED_OPENCODE_VERSION}, found ${opencode.version ?? "unknown version"}`,
+        detail: `OpenCode ${version} is newer than validated ${SUPPORTED_OPENCODE_VERSION}: capability insufficient in the standalone CLI (insufficient live runtime evidence observed: ${observed.join("/")} only; missing ${missing.join("/")}); action needed, not presumed compatible`,
     };
 }
-function dependencyFindings(deps) {
+function dependencyFindings(deps, v2) {
     return [
-        openCodeFinding(deps.opencode),
+        openCodeFinding(deps.opencode, v2),
         {
             severity: deps.engram.found && deps.engram.connected ? "PASS" : "FAIL",
             area: "dependencies",
@@ -647,6 +769,255 @@ function dependencyFindings(deps) {
                     : `${deps.codegraph.version ?? "version unknown"} (${FRESH_CLI_OBSERVATION})`,
         },
     ];
+}
+// ---------------------------------------------------------------------------
+// T001 ARIA identity: running CLI vs registered plugin (read-only)
+// ---------------------------------------------------------------------------
+/**
+ * T001 positively identified CLI/plugin identity (read-only; nothing is
+ * written, installed, or repaired). Three separate observations plus one
+ * guarded comparison:
+ * - the running CLI version/source: this package's `package.json` version
+ *   via the read-only file seam plus the package root as the checkout/source
+ *   identity (mirrors `bin/aria.mjs` `loadVersion` and `lifecycle.ts`
+ *   `resolveCheckout`, except an unreadable version FAILs here instead of
+ *   guessing `0.0.0`);
+ * - the OpenCode runtime version fact, reported separately from the
+ *   `dependencies` compatibility verdict above (compatibility semantics are
+ *   T004-owned; this finding never FAILs);
+ * - the registered ARIA plugin reference/version from a fresh read-only
+ *   `opencode plugin list` run parsed with the exact `lifecycle.ts`
+ *   `parsePluginList` rule (never guessed);
+ * - one comparison that FAILs only on a definite mismatch proven by exact
+ *   version evidence and otherwise reports SKIP (missing input) or WARN
+ *   (ambiguous evidence, fail-closed).
+ */
+const IDENTITY_AREA = "identity";
+/**
+ * T009 approved ARIA Git source for CLI/plugin version comparison.
+ * Canonical value: `ARIA_GIT_SPEC_PREFIX` in `src/upgrade.ts` (duplicated
+ * here because that module imports this one, so importing it would cycle).
+ * Tag or VERSION-column evidence from any other source (for example
+ * `github:other/ARIA#v1.0.8`) proves nothing about the approved release:
+ * it never PASSes and never FAILs a version comparison — it stays WARN
+ * unknown, fail-closed, never guessed.
+ */
+const APPROVED_ARIA_GIT_SPEC_PREFIX = "github:mscipio/ARIA#";
+async function collectIdentityFindings(inputs) {
+    const { packageRoot, fileOps, executor, deps } = inputs;
+    const findings = [];
+    // 1. Running CLI version/source.
+    let cliVersion = null;
+    try {
+        const raw = await fileOps.readText(resolve(packageRoot, "package.json"));
+        const parsed = JSON.parse(raw);
+        cliVersion = normalizeIdentityVersion(parsed.version);
+        if (cliVersion) {
+            findings.push({
+                severity: "PASS",
+                area: IDENTITY_AREA,
+                title: "ARIA CLI",
+                detail: `version ${cliVersion} (source: ${packageRoot})`,
+            });
+        }
+        else {
+            findings.push({
+                severity: "FAIL",
+                area: IDENTITY_AREA,
+                title: "ARIA CLI",
+                detail: `package.json version is missing or not an exact version (source: ${packageRoot})`,
+            });
+        }
+    }
+    catch (error) {
+        findings.push({
+            severity: "FAIL",
+            area: IDENTITY_AREA,
+            title: "ARIA CLI",
+            detail: `package.json version unknown: ${describeError(error)}`,
+        });
+    }
+    // 2. OpenCode runtime version fact (never FAILs; the compatibility verdict
+    // stays in `dependencies`).
+    if (!deps) {
+        findings.push({
+            severity: "WARN",
+            area: IDENTITY_AREA,
+            title: "OpenCode runtime",
+            detail: "runtime version unknown: dependency probes failed",
+        });
+    }
+    else if (!deps.opencode.found) {
+        findings.push({
+            severity: "WARN",
+            area: IDENTITY_AREA,
+            title: "OpenCode runtime",
+            detail: "runtime version unknown: opencode --version did not identify a runtime",
+        });
+    }
+    else if (!deps.opencode.version) {
+        findings.push({
+            severity: "WARN",
+            area: IDENTITY_AREA,
+            title: "OpenCode runtime",
+            detail: "runtime identified but version unknown (probe output not parseable)",
+        });
+    }
+    else {
+        findings.push({
+            severity: "PASS",
+            area: IDENTITY_AREA,
+            title: "OpenCode runtime",
+            detail: `version ${deps.opencode.version}`,
+        });
+    }
+    // 3. Registered ARIA plugin reference/version (fresh read-only
+    // `opencode plugin list`, parsed with the exact lifecycle rule).
+    // T012: identity uses the shared `classifyAriaRegistration` rule (ID
+    // `aria` plus approved Git SOURCE, plus TUI-local rows naming the
+    // running checkout), so ID `-` Git-package rows such as
+    // `- 842e4ec github:mscipio/ARIA#v1.0.7` are positively identified
+    // registration — never definitely absent, and the CLI/plugin comparison
+    // below is never skipped when present.
+    let pluginTarget = null;
+    let pluginVersionRaw = null;
+    let pluginState = "unknown";
+    let pluginUnknownReason = "";
+    let pluginDuplicateDetail = "";
+    try {
+        const result = await executor("opencode", ["plugin", "list"]);
+        const { recognized, entries } = parsePluginList(result.stdout);
+        if (!recognized) {
+            pluginUnknownReason = "unrecognized plugin list output (not guessed)";
+        }
+        else {
+            const registration = classifyAriaRegistration(entries, (target) => isSameLocalPluginIdentity(target, packageRoot));
+            if (registration.kind === "absent") {
+                pluginState = "absent";
+            }
+            else if (registration.kind === "ambiguous") {
+                pluginState = "duplicate";
+                pluginDuplicateDetail = registration.identifying.map((entry) => `${entry.id} ${entry.target}`).join(", ");
+            }
+            else {
+                pluginState = "single";
+                pluginTarget = registration.identifying[0]?.target ?? null;
+                pluginVersionRaw = registration.identifying[0]?.version ?? null;
+            }
+        }
+    }
+    catch (error) {
+        pluginUnknownReason = `opencode plugin list failed: ${describeError(error)}`;
+    }
+    if (pluginState === "single") {
+        findings.push({
+            severity: "PASS",
+            area: IDENTITY_AREA,
+            title: "ARIA plugin registration",
+            detail: `registered as ${pluginTarget} (plugin version ${pluginVersionRaw}) via opencode plugin list`,
+        });
+    }
+    else if (pluginState === "absent") {
+        findings.push({
+            severity: "FAIL",
+            area: IDENTITY_AREA,
+            title: "ARIA plugin registration",
+            detail: "ARIA plugin is definitely absent from the recognized opencode plugin list (no ARIA-identifying entry)",
+        });
+    }
+    else if (pluginState === "duplicate") {
+        findings.push({
+            severity: "FAIL",
+            area: IDENTITY_AREA,
+            title: "ARIA plugin registration",
+            detail: pluginDuplicateDetail
+                ? `ARIA plugin is listed more than once (${pluginDuplicateDetail}; duplicate/conflicting registration; not compared)`
+                : "ARIA plugin is listed more than once (duplicate/conflicting registration; not compared)",
+        });
+    }
+    else {
+        findings.push({
+            severity: "WARN",
+            area: IDENTITY_AREA,
+            title: "ARIA plugin registration",
+            detail: `plugin registration unknown: ${pluginUnknownReason}`,
+        });
+    }
+    // 4. Guarded comparison: exact version evidence only, fail-closed.
+    if (!cliVersion) {
+        findings.push({
+            severity: "SKIP",
+            area: IDENTITY_AREA,
+            title: "CLI/plugin identity",
+            detail: "comparison skipped: running CLI version unknown",
+        });
+    }
+    else if (pluginState !== "single") {
+        const reason = pluginState === "absent"
+            ? "plugin registration is definitely absent"
+            : pluginState === "duplicate"
+                ? "plugin registration is duplicated"
+                : `plugin registration is unknown (${pluginUnknownReason})`;
+        findings.push({
+            severity: "SKIP",
+            area: IDENTITY_AREA,
+            title: "CLI/plugin identity",
+            detail: `comparison skipped: ${reason}`,
+        });
+    }
+    else {
+        const target = pluginTarget;
+        // T009: approved-source evidence is required before comparing
+        // versions. A tag from a foreign source carries no comparable version
+        // evidence even when it textually equals the CLI version.
+        const sourceApproved = target.startsWith(APPROVED_ARIA_GIT_SPEC_PREFIX);
+        const comparable = sourceApproved
+            ? (pluginSpecTagVersion(target) ?? normalizeIdentityVersion(pluginVersionRaw))
+            : null;
+        if (comparable) {
+            if (comparable === cliVersion) {
+                findings.push({
+                    severity: "PASS",
+                    area: IDENTITY_AREA,
+                    title: "CLI/plugin identity",
+                    detail: `CLI ${cliVersion} matches registered plugin ${target}`,
+                });
+            }
+            else {
+                findings.push({
+                    severity: "FAIL",
+                    area: IDENTITY_AREA,
+                    title: "CLI/plugin identity",
+                    detail: `definite mismatch: running CLI ${cliVersion} (source: ${packageRoot}) vs registered plugin ${target} (plugin version ${pluginVersionRaw})`,
+                });
+            }
+        }
+        else if (isSameLocalPluginIdentity(target, packageRoot)) {
+            findings.push({
+                severity: "PASS",
+                area: IDENTITY_AREA,
+                title: "CLI/plugin identity",
+                detail: `CLI source matches registered local plugin ${target}`,
+            });
+        }
+        else if (!sourceApproved && pluginSpecTagVersion(target) !== null) {
+            findings.push({
+                severity: "WARN",
+                area: IDENTITY_AREA,
+                title: "CLI/plugin identity",
+                detail: `identity unknown: registered plugin ${target} carries an exact tag from an unapproved source (expected ${APPROVED_ARIA_GIT_SPEC_PREFIX}vX.Y.Z); version evidence is not comparable to CLI ${cliVersion}; not guessed`,
+            });
+        }
+        else {
+            findings.push({
+                severity: "WARN",
+                area: IDENTITY_AREA,
+                title: "CLI/plugin identity",
+                detail: `identity unknown: registered plugin ${target} (plugin version ${pluginVersionRaw}) carries no exact version evidence comparable to CLI ${cliVersion}; not guessed`,
+            });
+        }
+    }
+    return findings;
 }
 // ---------------------------------------------------------------------------
 // Optional ZotPilot: CLI availability/version, MCP connectivity, limitation
@@ -1096,7 +1467,7 @@ export async function runDoctor(options = {}) {
     let deps;
     try {
         deps = await dependencyDoctor(executor);
-        findings.push(...dependencyFindings(deps));
+        findings.push(...dependencyFindings(deps, options.v2));
     }
     catch (error) {
         findings.push({
@@ -1106,6 +1477,15 @@ export async function runDoctor(options = {}) {
             detail: describeError(error),
         });
     }
+    // T001 ARIA identity (read-only): running CLI version/source, OpenCode
+    // runtime version fact, registered plugin reference/version, and the
+    // guarded comparison. Never mutates config.
+    findings.push(...await collectIdentityFindings({
+        packageRoot: getPackageRoot(),
+        fileOps,
+        executor,
+        deps,
+    }));
     findings.push(...zotPilotMcpFindings(deps));
     // Optional ZotPilot CLI availability/version (separate from MCP connectivity).
     findings.push(zotPilotCliFinding(await probeZotPilotCli(executor)));

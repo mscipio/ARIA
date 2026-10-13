@@ -66,10 +66,11 @@ function describeDiscoveryError(error: unknown): string {
   }
 }
 
-// `opencode models` prints one usable model identifier per line. Pinned
-// OpenCode 2.0.23 offers no supported `--verbose` variant-metadata surface,
-// so discovery never assumes one: variant capability stays unestablished
-// (see `discoverAvailableModels`).
+// `opencode models` prints one usable model identifier per line. Verified
+// against OpenCode 2.0.26: `opencode models --verbose` is rejected
+// ("Unrecognized flag: --verbose", exit 1), so there is no supported
+// `--verbose` variant-metadata surface. Discovery never assumes one:
+// variant capability stays unestablished (see `discoverAvailableModels`).
 const MODEL_ID_PATTERN = /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/;
 
 function splitModelIdentifier(id: string): { providerID: string; modelID: string } {
@@ -145,8 +146,9 @@ function verboseModelFromBlock(id: string, jsonText: string): AvailableModel | u
  * followed by its JSON metadata block, whose `variants` object keys are the
  * reported variant IDs.
  *
- * Retained as a tested parser only: pinned OpenCode 2.0.23 discovery uses
- * plain `opencode models` and never assumes `--verbose` support.
+ * Retained as a tested parser only: OpenCode 2.0.26 rejects `--verbose`
+ * ("Unrecognized flag: --verbose"), so discovery uses plain
+ * `opencode models` and never assumes `--verbose` support.
  */
 export function parseModelVerbose(stdout: string): AvailableModel[] {
   const lines = stdout.split("\n");
@@ -189,10 +191,11 @@ export function parseModelVerbose(stdout: string): AvailableModel[] {
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
  * shells out to plain `opencode models` for the usable identifier list.
- * Pinned OpenCode 2.0.23 has no supported `--verbose` variant-metadata
- * surface, so variant capability stays unestablished here (`variants` is
- * empty and `variantsObservable` is absent); doctor reports a configured
- * variant as unknown rather than verified or failed.
+ * OpenCode 2.0.26 offers no supported `--verbose` variant-metadata
+ * surface (verified: the flag is rejected with "Unrecognized flag:
+ * --verbose"), so variant capability stays unestablished here (`variants`
+ * is empty and `variantsObservable` is absent); doctor reports a
+ * configured variant as unknown rather than verified or failed.
  *
  * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
  * configuration untouched.

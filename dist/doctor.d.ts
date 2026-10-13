@@ -8,6 +8,22 @@ import { type ModelDiscoverFn } from "./model-config.js";
  * repaired.
  */
 export type DoctorFindingSeverity = "PASS" | "WARN" | "FAIL" | "SKIP";
+/**
+ * T007 finding semantics (existing vocabulary, no new severities):
+ * - `FAIL` — blocker: positively identified breakage that fails the run
+ *   (missing/unparseable package state, known-incompatible runtime,
+ *   unresolved routes, absent required registration).
+ * - `WARN` — action-needed: degraded or unverifiable state that stays
+ *   non-fatal (capability unknown/unvalidated, unobservable variant
+ *   metadata, optional integrations not connected). Never presumed
+ *   healthy, never failed.
+ * - `SKIP` — unobservable or not applicable: live-runtime lists outside a
+ *   live session, an unset optional path, or a check whose inputs failed.
+ *   Never a guess about the underlying state.
+ * - `PASS` — healthy or informational: verified state, including
+ *   explicitly informational observations (session counts carry no setup
+ *   truth; an absent optional depth defers to the runtime default).
+ */
 export interface DoctorFinding {
     severity: DoctorFindingSeverity;
     /** Finding group: "package", "config", "routes/models", "dependencies", "skills", "zotpilot", "wiki". */
@@ -43,7 +59,7 @@ export interface DoctorOptions {
     /**
      * T008 V2 runtime snapshot (plugin/agent/skill/tool lists, session count).
      * Built from a live plugin `Context` via `snapshotFromContext`; absent
-     * outside a live 2.0.23 session, where runtime findings report SKIP with
+     * outside a live OpenCode session, where runtime findings report SKIP with
      * the documented gap (the standalone CLI never guesses live state).
      */
     v2?: DoctorV2Snapshot;
@@ -75,8 +91,32 @@ export interface DoctorOptions {
  * agent permissions observed directly. `ctx.*.list` is unreachable from the
  * standalone CLI, which reports SKIP (never FAIL) for runtime findings.
  */
-/** Pinned OpenCode runtime target (plan T001 audit gate + exact dep pin). */
+/**
+ * T004 OpenCode runtime compatibility (explicit; exact version equality is
+ * retired as a runtime gate).
+ *
+ * - `SUPPORTED_OPENCODE_VERSION` is the build/test pin: the exact
+ *   `@opencode/plugin` dependency in package.json that ARIA builds and
+ *   tests against. It is not a runtime equality gate.
+ * - `MINIMUM_OPENCODE_VERSION` is the oldest supported runtime. Older
+ *   runtimes predate the V2 plugin API ARIA requires and are
+ *   known-incompatible (FAIL).
+ * - `VALIDATED_OPENCODE_VERSIONS` are runtimes positively validated with
+ *   this ARIA build (PASS on version evidence alone, standalone or live).
+ * - Newer, unvalidated runtimes never FAIL solely for being newer: with
+ *   positively observed live V2 capability evidence for every necessary
+ *   domain (`REQUIRED_RUNTIME_CAPABILITIES`: plugins/agents/skills/tools
+ *   carried in the `v2` snapshot) they PASS; with partial or no live
+ *   evidence the standalone CLI reports WARN (capability
+ *   unknown/insufficient, action-needed, never presumed compatible).
+ *   A single observed list (for example only `v2:{plugins:[]}`) is
+ *   insufficient and stays WARN.
+ */
 export declare const SUPPORTED_OPENCODE_VERSION = "2.0.23";
+/** Oldest OpenCode runtime this ARIA build supports. */
+export declare const MINIMUM_OPENCODE_VERSION = "2.0.23";
+/** OpenCode runtimes positively validated with this ARIA build. */
+export declare const VALIDATED_OPENCODE_VERSIONS: readonly string[];
 /** Structural V2 agent entry (only the fields findings inspect). */
 export interface DoctorV2AgentEntry {
     id: string;

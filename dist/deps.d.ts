@@ -208,13 +208,15 @@ export interface McpStatus {
 export declare function parseMcpList(output: string): McpStatus;
 declare function detectMcpConnectivity(executor: Executor): Promise<McpStatus>;
 /**
- * Result of inspecting only the own top-level `subagent_depth` field of the
+ * Result of inspecting the supported `subagent_depth` locations of the
  * fully merged configuration printed by the read-only `opencode debug
- * config` CLI. Nested lookalike fields are never considered and no
- * configuration is mutated by this probe.
+ * config` CLI. Both the legacy own top-level `subagent_depth` field and the
+ * V2 `experimental.subagent_depth` field are recognized; nested lookalikes
+ * elsewhere are never considered and no configuration is mutated by this
+ * probe.
  *
  * - `value`: the merged config reports a finite numeric subagent_depth.
- * - `absent`: the merged config has no top-level subagent_depth field.
+ * - `absent`: the merged config has neither supported field.
  * - `unavailable`: the probe or its output could not be evaluated;
  *   `reason` explains why.
  */
@@ -229,18 +231,21 @@ export type SubagentDepthProbe = {
 };
 /**
  * Defensively parse the fully merged JSON printed by `opencode debug config`
- * and inspect only its own top-level `subagent_depth` field.
+ * and inspect its supported `subagent_depth` locations: the own top-level
+ * `subagent_depth` field and the V2 `experimental.subagent_depth` field.
  *
  * Two supported shapes (pin stays OpenCode 2.0.23):
- * - a merged-config object with an own top-level `subagent_depth` field;
+ * - a merged-config object carrying either supported field;
  * - an array of per-source config documents, where each document either
- *   carries an own top-level `subagent_depth` or nests the config under an
- *   own `config` object holding that field.
+ *   carries a supported field directly or nests the config under an own
+ *   `config` or `info` object holding that field (live `opencode debug
+ *   config` nests per-source config under `info`).
  */
 export declare function parseSubagentDepth(output: string): SubagentDepthProbe;
 /**
  * Read-only probe: run `opencode debug config` in the inspected worktree and
- * inspect the effective merged top-level `subagent_depth`. Never mutates
+ * inspect the effective `subagent_depth` across both supported locations
+ * (top-level and V2 `experimental.subagent_depth`). Never mutates
  * configuration.
  */
 export declare function probeSubagentDepth(executor: Executor, worktree?: string): Promise<SubagentDepthProbe>;

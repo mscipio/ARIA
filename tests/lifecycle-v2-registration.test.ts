@@ -176,7 +176,6 @@ describe("T008 V2 absence/presence surfaces only (D)", () => {
     const checkout = await makeFixtureCheckout();
     const { executor, calls } = collectingExecutor({
       "opencode plugin list": { stdout: "something unexpected" },
-      [`opencode plugin add ${checkout}`]: { stdout: "installed via fallback" },
     });
     const result = await setup(binaryUrl(checkout), executor, okSync, {
       worktree: await tempDir(),
@@ -186,9 +185,14 @@ describe("T008 V2 absence/presence surfaces only (D)", () => {
         skillsRoot: SKILLS_ROOT,
       },
     });
-    expect(result.ok).toBe(true);
-    expect(result.setup!.registration.action).toBe("registered");
+    // T002 fail-closed: unrecognized output is unknown identity (never
+    // guessed). No `plugin add`, file write, or sync runs; no `debug info`.
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("registration");
+    expect(result.setup!.registration.action).toBe("failed");
+    expect(result.setup!.registration.detail).toContain("not positively identified");
     expect(calls.some((call) => call.args.join(" ") === "debug info")).toBe(false);
+    expect(calls.some((call) => call.args.includes("add"))).toBe(false);
   });
 });
 

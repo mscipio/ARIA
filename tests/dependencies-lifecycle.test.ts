@@ -226,6 +226,10 @@ describe("T017 upgrade handoff ordering and already-current binding", () => {
     const result = await runUpgrade(executor, {
       configDir,
       currentVersion: "1.0.7",
+      // T010: the already-current seam requires positive CLI/plugin
+      // identity (CLI must be the registered installation); pin the CLI to
+      // match so this binding case still runs.
+      cliVersion: "1.0.7",
       approval: { yes: true },
       selfUpgradeFn: async () => {
         selfUpgradeCalled++;

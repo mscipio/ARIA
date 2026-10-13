@@ -1,7 +1,7 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { formatAgentModel, installAgentFiles } from "../src/agents.js";
 import { loadDefaultConfig } from "../src/defaults.js";
@@ -20,7 +20,8 @@ import { ARIA_SKILL_NAMES } from "../src/skills.js";
 
 /**
  * T008 doctor runtime truth: V2 list findings (plugin/agents/skills/plan
- * tool/coexistence/session), the 2.0.23 pin, and managed-file verification.
+ * tool/coexistence/session), T004 OpenCode runtime compatibility, and
+ * managed-file verification.
  * Tested through the public `runDoctor` runner with mocked V2 snapshots —
  * no live session, no workstation changes.
  */
@@ -182,15 +183,6 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(report.findings.filter((finding) => finding.area === "runtime" && finding.severity === "FAIL")).toHaveLength(0);
   });
 
-  it("fails a non-2.0.23 runtime with the pinned expectation", async () => {
-    const report = await runDoctor({ ...(await baseOptions(baseExecutor("opencode 1.18.34"))), v2: healthySnapshot() });
-
-    const opencode = report.findings.find((finding) => finding.area === "dependencies" && finding.title === "OpenCode");
-    expect(opencode?.severity).toBe("FAIL");
-    expect(opencode?.detail).toContain("2.0.23");
-    expect(opencode?.detail).toContain("1.18.34");
-  });
-
   it("verifies installed agent files match version/config and flags drift", async () => {
     const options = await baseOptions();
     await installAgentFiles(resolveSetupAriaConfig(options.worktree), { dir: options.agentsDir });
@@ -205,6 +197,108 @@ describe("T008 doctor V2 runtime truth", () => {
     const fail = drifted.findings.find((finding) => finding.area === "config" && finding.title === "managed agent files");
     expect(fail?.severity).toBe("FAIL");
     expect(fail?.detail).toContain("coder");
+  });
+});
+
+describe("T004 OpenCode runtime compatibility", () => {
+  let originalXdgConfigHome: string | undefined;
+  beforeEach(() => {
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  });
+  afterEach(() => {
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  });
+
+  function compatFinding(report: DoctorReport) {
+    return report.findings.find((finding) => finding.area === "dependencies" && finding.title === "OpenCode");
+  }
+
+  /**
+   * Executor with the `opencode --version` output replaced and
+   * global-config resolution isolated to a fresh XDG dir carrying the
+   * Context7 fixture, so Context7 detection is deterministic under the
+   * vitest sandbox and on a plain workstation alike (mirrors
+   * `openCodeGlobalDir` resolution).
+   */
+  async function compatExecutor(opencodeVersion: string): Promise<Executor> {
+    const xdg = await mkdtemp(resolve(tmpdir(), "aria-compat-xdg-"));
+    tempDirs.push(xdg);
+    const configDir = resolve(xdg, "opencode");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({
+      mcp: { context7: { type: "remote", url: "https://mcp.context7.com/mcp" } },
+    }));
+    process.env.XDG_CONFIG_HOME = xdg;
+    return async (command, args) => {
+      if (`${command} ${args.join(" ")}` === "opencode --version") return { stdout: opencodeVersion, stderr: "" };
+      return baseExecutor()(command, args);
+    };
+  }
+
+  it("fails a below-minimum runtime as known-incompatible", async () => {
+    const report = await runDoctor({ ...(await baseOptions(await compatExecutor("opencode 1.18.34"))), v2: healthySnapshot() });
+
+    const opencode = compatFinding(report);
+    expect(opencode?.severity).toBe("FAIL");
+    expect(opencode?.detail).toContain("below minimum supported 2.0.23");
+    expect(opencode?.detail).toContain("known-incompatible");
+    expect(opencode?.detail).toContain("1.18.34");
+  });
+
+  it("passes a validated runtime version", async () => {
+    const report = await runDoctor({ ...(await baseOptions(await compatExecutor("opencode 2.0.23"))), v2: healthySnapshot() });
+
+    const opencode = compatFinding(report);
+    expect(opencode?.severity).toBe("PASS");
+    expect(opencode?.detail).toContain("2.0.23");
+    expect(opencode?.detail).toContain("validated");
+    expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
+  });
+
+  it("passes a newer runtime when required capabilities are positively observed", async () => {
+    const report = await runDoctor({ ...(await baseOptions(await compatExecutor("opencode 2.0.26"))), v2: healthySnapshot() });
+
+    const opencode = compatFinding(report);
+    expect(opencode?.severity).toBe("PASS");
+    expect(opencode?.detail).toContain("2.0.26");
+    expect(opencode?.detail).toContain("positively observed");
+    expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
+  });
+
+  it("reports a newer runtime as unknown/action-needed without live runtime evidence", async () => {
+    const report = await runDoctor(await baseOptions(await compatExecutor("opencode 2.0.26")));
+
+    const opencode = compatFinding(report);
+    expect(opencode?.severity).toBe("WARN");
+    expect(opencode?.detail).toContain("2.0.26");
+    expect(opencode?.detail).toContain("no live runtime evidence observed");
+    expect(opencode?.detail).toContain("not presumed compatible");
+    expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
+  });
+
+  it("reports an unknown runtime version as unknown/action-needed rather than compatible", async () => {
+    const report = await runDoctor({ ...(await baseOptions(await compatExecutor("opencode"))), v2: healthySnapshot() });
+
+    const opencode = compatFinding(report);
+    expect(opencode?.severity).toBe("WARN");
+    expect(opencode?.detail).toContain("unknown");
+    expect(opencode?.detail).toContain("not presumed compatible");
+    expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
+  });
+
+  it("words standalone runtime SKIP as absent live runtime evidence, not version inequality", async () => {
+    const report = await runDoctor(await baseOptions(await compatExecutor("opencode 2.0.23")));
+
+    for (const title of ["plugin aria", "agents (11)", "skills (21 live)", "plan tool"]) {
+      const finding = runtimeFinding(report, title);
+      expect(finding?.severity).toBe("SKIP");
+      expect(finding?.detail).toContain("no live OpenCode runtime evidence observed");
+      expect(finding?.detail).not.toContain("2.0.23");
+    }
+    // The standalone/live-runtime distinction is preserved: validated
+    // version evidence still passes while live lists stay SKIP.
+    expect(compatFinding(report)?.severity).toBe("PASS");
   });
 });
 

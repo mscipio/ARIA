@@ -70,6 +70,20 @@ export type QuotaIdentification = {
  */
 export declare function identifyQuotaTarget(listSpecs: string[], configSpecs: string[]): QuotaIdentification;
 export type QuotaCheckStatus = "skipped" | "unmanaged-observed" | "unknown-target" | "unsupported-ownership";
+/**
+ * T007 inventory semantics (existing vocabulary, no new statuses):
+ * - `skipped` — informational: no Quota installation observed, nothing to do.
+ * - `unmanaged-observed` — informational observation: a positively
+ *   identified Quota 5 is present. This inventory never versions it;
+ *   version action is owned exclusively by the gated `upgradeQuota` /
+ *   bootstrap lifecycle below, never by `deps sync`.
+ * - `unknown-target` — blocker/action-needed: the installed target is not
+ *   positively identified (ambiguous sources, an unversioned spec, or a
+ *   moving tag such as `@latest`). Fail-closed: no updater invocation and
+ *   no mutation.
+ * - `unsupported-ownership` — intentionally unmanaged: a foreign channel
+ *   or a major outside the Quota 5 policy. Left untouched, never upgraded.
+ */
 export interface QuotaCheckResult {
     status: QuotaCheckStatus;
     installedSpec: string | null;
@@ -80,9 +94,12 @@ export interface QuotaCheckResult {
  * Strictly read-only Quota inventory for setup/sync reporting and the
  * future upgrade `--check` table: installed spec/version plus a status.
  * Never invokes the updater and never writes. Identified Quota 5 reports
- * `unmanaged-observed` — observed for the setup bootstrap lifecycle to manage
- * under safety/ownership gates, while the legacy `deps sync` path performs
- * no Quota installation or config mutation.
+ * `unmanaged-observed`: observed by this inventory while version action is
+ * owned exclusively by the gated `upgradeQuota`/bootstrap lifecycle below,
+ * and the legacy `deps sync` path performs no Quota installation or config
+ * mutation. A moving tag such as `@latest` is never a positively
+ * identified target: it reports `unknown-target` (fail-closed) and is
+ * never upgraded, installed, or otherwise taken ownership of here.
  */
 export declare function checkQuotaUpgrade(executor: Executor, configDir?: string): Promise<QuotaCheckResult>;
 export type QuotaUpgradeStatus = "upgraded" | "already-current" | "unmanaged-observed" | "unknown-target" | "unsupported-ownership" | "skipped" | "update-failed" | "validation-failed";

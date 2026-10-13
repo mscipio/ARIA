@@ -21,11 +21,12 @@ export type AriaRegistrationDetection = {
 };
 /**
  * Classify ARIA registrations from `opencode plugin list` output. Exactly
- * one distinct `github:mscipio/ARIA#<ref>` spec with an exact
+ * one ARIA-identifying row (shared T012 `isAriaRegistrationEntry` rule,
+ * never deduplicated before the uniqueness decision) with an exact
  * `vX.Y.Z`-tag or 40-hex-SHA ref identifies; zero ARIA entries, multiple
- * distinct specs, a conflicting non-Git `aria` id, or an inexact ref
- * (branch, moving tag, short SHA) fails closed. Pure: no executor, no
- * mutation.
+ * rows (including duplicate identical specs), a conflicting non-Git `aria`
+ * id, or an inexact ref (branch, moving tag, short SHA) fails closed.
+ * Pure: no executor, no mutation.
  */
 export declare function classifyAriaRegistration(stdout: string): AriaRegistrationDetection;
 /** Read-only current-registration probe (`opencode plugin list`; never mutates). */
@@ -44,6 +45,28 @@ export interface HandoffSpawnResult {
  * per-call git allowlist travels here too.
  */
 export type HandoffSpawnFn = (handoff: UpgradeHandoff, target: AriaAvailableTarget) => Promise<HandoffSpawnResult>;
+/**
+ * T003 dispatcher analysis (no launcher needed).
+ *
+ * `bin/aria.mjs` dispatches `upgrade` (and `--handoff-json`) by importing
+ * `../dist/upgrade.js` / `../dist/aria-upgrade.js` relative to its own
+ * location, so the code that runs is always the `aria` binary's own
+ * release. `npm exec --yes --package <spec> -- aria ...` (equivalently
+ * `npx --yes --package <spec> -- aria ...`) therefore selects the release
+ * by resolving the `aria` binary from the named exact Git spec; the `--`
+ * boundary keeps the `aria ...` argv (including `--handoff-json <payload>`
+ * or `--yes`) from being parsed as npm options, and `--package <spec>`
+ * never names a local path or a bare `aria`. No separate launcher file is
+ * added: the existing dispatcher plus the exact-spec spawn is the whole
+ * mechanism. Pure builder below carries the boundary contract.
+ */
+/**
+ * Pure argv for the one-shot handoff spawn (no executor, no mutation):
+ * `exec --yes --package <target.spec> -- aria upgrade --handoff-json
+ * <payload>`. The caller prefixes `npm`; `npx` accepts the same trailing
+ * boundary.
+ */
+export declare function buildHandoffSpawnArgv(target: AriaAvailableTarget, payloadJson: string): string[];
 export declare function makeDefaultHandoffSpawn(executor: Executor): HandoffSpawnFn;
 export interface AriaSelfUpgradeOptions {
     executor?: Executor;

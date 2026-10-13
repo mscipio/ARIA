@@ -63,6 +63,25 @@ async function main() {
       return 1;
     }
 
+    // T010 identity gate before mutation: the checkout running this sync
+    // must positively match the registered ARIA plugin (or registration
+    // must be positively absent) before any dependency mutation runs. A
+    // definite mismatch, duplicate, or unknown list fails closed with no
+    // sync; the only transition between releases is the explicit
+    // exact-target `aria upgrade --yes` handoff.
+    try {
+      const { defaultExecutor } = await import("../dist/deps.js");
+      const { gateStandaloneSync } = await import("../dist/lifecycle.js");
+      const gate = await gateStandaloneSync(defaultExecutor, import.meta.url);
+      if (!gate.ok) {
+        console.error(`Identity: [FAIL] ${gate.detail}`);
+        return 1;
+      }
+    } catch (err) {
+      console.error(`Identity: [FAIL] standalone sync identity gate failed (${err instanceof Error ? err.message : String(err)}). No changes were made.`);
+      return 1;
+    }
+
     const { depsSync, formatSyncResult } = await import("../dist/deps.js");
     const result = await depsSync();
     console.log(formatSyncResult(result));
@@ -249,13 +268,19 @@ async function main() {
     const result = await update(import.meta.url);
 
     if (result.update) {
-      const { git, npm, handoff } = result.update;
+      const { git, npm, handoff, identity } = result.update;
+
+      // T002 identity gate (runs after the read-only git preconditions,
+      // before any pull/install/handoff mutation).
+      if (identity && !identity.ok) {
+        console.error(`Identity: [FAIL] ${identity.error || "identity gate blocked the update"}`);
+      }
 
       // Git operations
       if (git.ok) {
         console.log("git: [OK]");
       } else {
-        const label = result.stage === "git_pull" ? "git pull --ff-only" : "git precondition";
+        const label = result.stage === "git_pull" ? "git pull --ff-only" : result.stage === "identity" ? "identity gate" : "git precondition";
         console.error(`${label}: [FAIL] ${git.error || "git operation failed"}`);
       }
 

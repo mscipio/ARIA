@@ -367,18 +367,20 @@ describe("setup", () => {
       return { ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } };
     };
 
-    // Introspection fails, registration reports "already registered"
+    // T002 fail-closed: introspection failure means the registration is
+    // unknown (never guessed). No `plugin add`, file write, or sync runs —
+    // the pre-T002 blind-registration fallback is retired.
     const executor = mockExecutor({
       "opencode plugin list": { error: "command not found" },
-      [`opencode plugin add ${checkout}`]: { error: "Error: plugin already registered" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
-    expect(result.ok).toBe(true);
-    expect(result.setup!.registration.action).toBe("already registered");
-    expect(result.setup!.registration.detail).toContain("compatibility fallback");
-    expect(depsSyncCalled).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("registration");
+    expect(result.setup!.registration.action).toBe("failed");
+    expect(result.setup!.registration.detail).toContain("not positively identified");
+    expect(depsSyncCalled).toBe(false);
   });
 
   it("fails closed on fallback when registration error is not a duplicate", async () => {
@@ -412,18 +414,19 @@ describe("setup", () => {
       return { ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } };
     };
 
-    // Introspection returns output without a plugins section → unrecognized format
+    // T002 fail-closed: unrecognized output means the registration is
+    // unknown (never guessed). No `plugin add`, file write, or sync runs.
     const executor = mockExecutor({
       "opencode plugin list": { stdout: pluginListUnrecognized() },
-      // Fallback: attempt registration succeeds
-      [`opencode plugin add ${checkout}`]: { stdout: "plugin registered via fallback" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
-    expect(result.ok).toBe(true);
-    expect(result.setup!.registration.action).toBe("registered");
-    expect(depsSyncCalled).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("registration");
+    expect(result.setup!.registration.action).toBe("failed");
+    expect(result.setup!.registration.detail).toContain("not positively identified");
+    expect(depsSyncCalled).toBe(false);
   });
 
   it("treats 'already configured' as already registered in compatibility fallback", async () => {
@@ -435,18 +438,20 @@ describe("setup", () => {
       return { ok: true, engram: { action: "ok" }, context7: { action: "ok" }, codegraph: { action: "ok" } };
     };
 
-    // Introspection fails, registration reports "already configured"
+    // T002 fail-closed: introspection failure means the registration is
+    // unknown (never guessed), even when a blind `plugin add` would have
+    // reported "already configured". No mutation runs.
     const executor = mockExecutor({
       "opencode plugin list": { error: "command not found" },
-      [`opencode plugin add ${checkout}`]: { error: "Error: plugin already configured" },
     });
 
     const result = await setup(binaryUrl(checkout), executor, mockDepsSync, { files: await tempSetupFiles() });
 
-    expect(result.ok).toBe(true);
-    expect(result.setup!.registration.action).toBe("already registered");
-    expect(result.setup!.registration.detail).toContain("compatibility fallback");
-    expect(depsSyncCalled).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("registration");
+    expect(result.setup!.registration.action).toBe("failed");
+    expect(result.setup!.registration.detail).toContain("not positively identified");
+    expect(depsSyncCalled).toBe(false);
   });
 
   it("reports sync failure when depsSync returns ok=false", async () => {
@@ -540,7 +545,10 @@ describe("setup", () => {
     expect(depsSyncCalled).toBe(true);
   });
 
-  // T011: run() helper preserves stdout from error, enabling "already configured" detection
+  // T011: run() helper preserves stdout from error, enabling "already configured" detection.
+  // T002: this interpretation survives only on the positively-absent
+  // bootstrap path (recognized empty list → `plugin add` reports the race
+  // as already configured). Unknown lists never reach `plugin add`.
   it("preserves stdout from failed exec to detect already configured in compatibility fallback", async () => {
     const checkout = await makeFixtureCheckout();
 
@@ -556,12 +564,13 @@ describe("setup", () => {
       };
     };
 
-    // Custom executor: introspections fails, registration throws with stdout containing
-    // "already configured" — tests that run() extracts stdout from the error object.
+    // Custom executor: recognized-absent list, then registration throws
+    // with stdout containing "already configured" — tests that run()
+    // extracts stdout from the error object on the allowed bootstrap path.
     const executor: Executor = async (command, args, _options) => {
       const key = `${command} ${args.join(" ")}`;
       if (key === "opencode plugin list") {
-        throw new Error("command not found: opencode");
+        return { stdout: pluginListEmpty(), stderr: "" };
       }
       if (key === `opencode plugin add ${checkout}`) {
         const err = Object.assign(new Error("Command failed: exit code 1"), {
@@ -715,13 +724,18 @@ describe("setup --plugin-spec", () => {
       [`opencode plugin add ${SPEC}`]: { stdout: "plugin installed" },
     });
 
+    // T002 fail-closed: a conflicting `aria` source is a definite mismatch.
+    // `setup --plugin-spec` never re-registers over it — the only designed
+    // transition is the explicit exact-target `aria upgrade --yes` handoff.
+    // No `plugin add`, file write, or sync runs.
     const result = await setup(binaryUrl(checkout), executor, okSync, { files, pluginSpec: SPEC });
 
-    expect(result.ok).toBe(true);
-    expect(result.setup!.registration.action).toBe("registered");
+    expect(result.ok).toBe(false);
+    expect(result.stage).toBe("registration");
+    expect(result.setup!.registration.action).toBe("failed");
+    expect(result.setup!.registration.detail).toContain("definite mismatch");
     const addCalls = calls.filter((call) => call.command === "opencode" && call.args[0] === "plugin" && call.args[1] === "add");
-    expect(addCalls.length).toBe(1);
-    expect(addCalls[0]!.args).toEqual(["plugin", "add", SPEC]);
+    expect(addCalls.length).toBe(0);
   });
 
   it("fails closed on an empty spec before sync or file writes", async () => {
@@ -938,6 +952,8 @@ describe("update", () => {
     const { executor, calls } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      // T002 identity gate: the checkout positively matches the registration.
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "Already up to date." },
       "npm ci --omit=dev": { stdout: "added 0 packages" },
       [`${process.execPath} ${binPath} deps sync`]: { stdout: "sync ok", stderr: "" },
@@ -1028,6 +1044,7 @@ describe("update", () => {
     const { executor, calls } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { error: "fatal: Not possible to fast-forward, aborting." },
     });
 
@@ -1055,6 +1072,7 @@ describe("update", () => {
     const { executor, calls } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "Updating abc..def" },
       "npm ci --omit=dev": { error: "npm ERR! code E404" },
     });
@@ -1082,6 +1100,7 @@ describe("update", () => {
     const { executor, calls } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "Already up to date." },
       "npm ci --omit=dev": { stdout: "added 0 packages" },
       [`${process.execPath} ${binPath} deps sync`]: {
@@ -1122,6 +1141,7 @@ describe("update", () => {
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "Already up to date." },
       "npm ci --omit=dev": { stdout: "added 0 packages" },
       [`${process.execPath} ${binPath} deps sync`]: { error: "spawn ENOENT" },
@@ -1142,6 +1162,7 @@ describe("update", () => {
     const executor = mockExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "" },
       "npm ci --omit=dev": { stdout: "" },
       [`${process.execPath} ${binPath} deps sync`]: { stdout: "engram: ok\ncontext7: ok\ncodegraph: ok", stderr: "" },
@@ -1160,6 +1181,7 @@ describe("update", () => {
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "" },
       "npm ci --omit=dev": { stdout: "" },
       [`${process.execPath} ${binPath} deps sync`]: { stdout: "ok", stderr: "" },
@@ -1181,6 +1203,7 @@ describe("update return values for CLI formatting", () => {
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "Already up to date." },
       "npm ci --omit=dev": { stdout: "added 0 packages" },
       [`${process.execPath} ${binPath} deps sync`]: { stdout: "engram: ok\ncontext7: ok\ncodegraph: ok", stderr: "" },
@@ -1213,6 +1236,7 @@ describe("update return values for CLI formatting", () => {
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { stdout: "" },
       "npm ci --omit=dev": { stdout: "" },
       [`${process.execPath} ${binPath} deps sync`]: { error: "Command failed: exit code 1\nstderr output" },
@@ -1246,6 +1270,7 @@ describe("update return values for CLI formatting", () => {
     const { executor } = collectingExecutor({
       "git status --porcelain": { stdout: "" },
       "git rev-parse --abbrev-ref @{upstream}": { stdout: "origin/main" },
+      "opencode plugin list": { stdout: ["ID  VERSION  SOURCE", `aria  local  ${checkout}`].join("\n") },
       "git pull --ff-only": { error: "fatal: cannot fast-forward" },
     });
     const result = await update(binaryUrl(checkout), executor);

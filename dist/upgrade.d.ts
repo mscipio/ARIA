@@ -12,12 +12,61 @@ export declare const ARIA_GIT_SPEC_PREFIX = "github:mscipio/ARIA#";
 export declare const PROCESS_LOCAL_GIT_ENV: {
     readonly NPM_CONFIG_ALLOW_GIT: "all";
 };
+/**
+ * Derive the installed Git spec for guidance from a positively identified
+ * bare `X.Y.Z` version (e.g. `1.0.6` → `github:mscipio/ARIA#v1.0.6`).
+ * Anything else (null, dev/inexact versions) yields null and guidance
+ * fails closed without guessing.
+ */
+export declare function installedSpecForGuidance(currentVersion: string | null): string | null;
+/**
+ * Pure npm argv for an approval run against the installed release:
+ * `exec --yes --package <spec> -- aria upgrade --yes`. The caller
+ * prefixes `npm` (or `npx`) and the approved per-invocation
+ * `NPM_CONFIG_ALLOW_GIT=all` env (see `PROCESS_LOCAL_GIT_ENV`, spread
+ * per-call via the Executor `env` seam, never global/`.npmrc`); the `--`
+ * boundary and `--package` position
+ * are part of the contract verified by regression tests.
+ */
+export declare function buildExactUpgradeApprovalArgv(installedSpec: string): string[];
+/** Display form of the exact-package approval invocation (pure). Includes the approved
+ * per-invocation `NPM_CONFIG_ALLOW_GIT=all` prefix so the displayed command fetches the
+ * exact Git spec without any global npm config or `.npmrc` change. */
+export declare function formatExactUpgradeApprovalCommand(installedSpec: string): string;
+/**
+ * Approval guidance line for `formatUpgradeCheck` / `runUpgrade`
+ * blocked-approval (pure, no mutation). Names the exact installed package
+ * when it is positively identified; otherwise fails closed with no bare
+ * invocation offered.
+ */
+export declare function formatApprovalGuidance(currentVersion: string | null, targetSpec: string): string;
+/**
+ * Blocked-approval detail for `runUpgrade` when `--yes` was not given
+ * (pure, no mutation). Same exact-package rule as `formatApprovalGuidance`.
+ */
+export declare function formatBlockedApprovalDetail(currentVersion: string | null, targetSpec: string | null): string;
 /** Component inventory scope bound by `--check`, approval, and handoff. */
 export declare const UPGRADE_COMPONENTS: readonly ["aria", "engram", "context7", "codegraph", "zotpilot", "quota"];
 export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number];
 /**
  * Upgrade-action states for the `--check` Component|Installed|Available|
- * Status table:
+ * Status table (existing vocabulary; T007 semantic categories, no new
+ * statuses):
+ * - blockers (`unknown-target` on ARIA): the release target is not
+ *   positively identified, so self-upgrade cannot run — zero mutation.
+ * - action-needed (`upgrade-available`, plus non-ARIA `unknown-target`
+ *   where fresh evidence would resolve the row): a newer ARIA target is
+ *   positively identified and waits on explicit approval, or a component
+ *   row needs fresh evidence before any action.
+ * - informational (`current`, `remote-healthy`, `skipped`): nothing to
+ *   upgrade — installed already equals the available target, a remote-only
+ *   endpoint is configured and connected (no version concept), or nothing
+ *   is installed.
+ * - intentionally unmanaged/unobservable (`unmanaged-observed`,
+ *   `unsupported-ownership`): observed but not version-managed by this
+ *   check (user-managed per policy, version currency established
+ *   post-handoff by the owning adapter), or positively identified on a
+ *   channel this pipeline will not upgrade and leaves untouched.
  * - `current`: installed equals the positively identified available target.
  * - `upgrade-available`: a newer available target is positively identified.
  * - `remote-healthy`: remote-only endpoint configured and connected (no
@@ -57,8 +106,19 @@ export type AriaTargetDiscovery = {
 export interface UpgradeCheckOptions {
     /** Explicit global config dir (XDG-contained; defaults via env). */
     configDir?: string;
-    /** Pin the installed version (`undefined` reads the package). */
+    /**
+     * Pin the installed ARIA version (test/operator override for the
+     * read-only plugin-registration probe; `undefined` probes `opencode
+     * plugin list` for the positively identified registration, `null`
+     * forces unknown). This is the installed registration, never the
+     * running CLI package version.
+     */
     currentVersion?: string | null;
+    /**
+     * Pin the running CLI version (reporting only; `undefined` reads the
+     * package). Never used for guidance, comparison, or mutation.
+     */
+    cliVersion?: string | null;
     /**
      * Pin the available target (`undefined` discovers via read-only
      * `git ls-remote`; `null` forces unknown for tests/operator override).
@@ -66,7 +126,16 @@ export interface UpgradeCheckOptions {
     availableOverride?: AriaAvailableTarget | null;
 }
 export interface UpgradeCheckResult {
+    /** Installed ARIA version from the positively identified plugin registration (null when unknown). */
     currentVersion: string | null;
+    /** Running CLI package version (reporting only; never used for guidance or comparison). */
+    cliVersion: string | null;
+    /**
+     * Positively identified installed spec for exact-package guidance
+     * (e.g. `github:mscipio/ARIA#v1.0.7`; null when the registration is
+     * not positively identified, so no invocation can be offered).
+     */
+    installedSpec: string | null;
     available: AriaTargetDiscovery;
     /** True when self-upgrade must not run (unknown target or version). */
     selfUpgradeBlocked: boolean;
@@ -75,6 +144,21 @@ export interface UpgradeCheckResult {
 }
 /** Installed ARIA version, or null when it cannot be positively read. */
 export declare function readCurrentAriaVersion(): string | null;
+/**
+ * T009 installed ARIA identity: the positively identified OpenCode plugin
+ * registration (approved Git source plus exact release tag), never the
+ * running CLI package version. Guidance, version comparison, and
+ * self-upgrade blocking all derive from this identity; the running CLI
+ * version is reported separately and never compared.
+ */
+export interface InstalledAriaIdentity {
+    /** Bare installed version (e.g. `1.0.7`), or null when not positively identified. */
+    version: string | null;
+    /** Exact installed spec (e.g. `github:mscipio/ARIA#v1.0.7`), or null when not positively identified. */
+    spec: string | null;
+    /** Provenance for read-only details (never guessed). */
+    note: string;
+}
 /**
  * Exact `vX.Y.Z` release-tag predicate. Single source of truth shared by
  * release discovery/validation (T010) and the self-upgrade adapter (T011);
@@ -114,7 +198,7 @@ export declare function validateAriaTargetForRemoval(target: AriaAvailableTarget
 export declare function checkUpgradeInventory(executor?: Executor, options?: UpgradeCheckOptions): Promise<UpgradeCheckResult>;
 export declare function formatUpgradeCheck(result: UpgradeCheckResult): string;
 export interface UpgradeApproval {
-    /** Explicit operator approval (`aria upgrade --yes`). No other signal counts. */
+    /** Explicit operator approval (`upgrade --yes` via the exact-package invocation). No other signal counts. */
     yes: boolean;
 }
 export type UpgradeRunStage = "already-current" | "blocked-approval" | "blocked-unknown-target" | "self-upgrade-failed" | "handoff-taken";
@@ -150,6 +234,25 @@ export interface UpgradeRunOptions extends UpgradeCheckOptions {
  * Already-current dependencies seam signature (shared lifecycle result).
  */
 export type UpgradeAlreadyCurrentDependenciesFn = (executor: Executor, configDir?: string) => Promise<DependencyLifecycleResult>;
+/**
+ * T010 already-current CLI/plugin identity gate (pure, no mutation).
+ *
+ * The already-current dependency path mutates (shared lifecycle) directly
+ * under the running release with NO self-replacement/handoff, so the
+ * running CLI must positively be the registered installation before the
+ * seam runs. The CLI version is positively identified (`cliVersion`) and
+ * must exactly equal the positively identified installed registration
+ * (`currentVersion` + `installedSpec`); any unknown or differing identity
+ * fails closed with zero mutation. The approved exact-target handoff path
+ * (upgrade-available, below) is preserved: it remains allowed to replace
+ * the positively identified registration with the exact validated target.
+ */
+export declare function checkAlreadyCurrentCliIdentity(check: UpgradeCheckResult): {
+    ok: true;
+} | {
+    ok: false;
+    reason: string;
+};
 export interface UpgradeRunResult {
     stage: UpgradeRunStage;
     ok: boolean;

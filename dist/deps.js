@@ -994,13 +994,15 @@ async function detectMcpConnectivity(executor) {
 }
 /**
  * Defensively parse the fully merged JSON printed by `opencode debug config`
- * and inspect only its own top-level `subagent_depth` field.
+ * and inspect its supported `subagent_depth` locations: the own top-level
+ * `subagent_depth` field and the V2 `experimental.subagent_depth` field.
  *
  * Two supported shapes (pin stays OpenCode 2.0.23):
- * - a merged-config object with an own top-level `subagent_depth` field;
+ * - a merged-config object carrying either supported field;
  * - an array of per-source config documents, where each document either
- *   carries an own top-level `subagent_depth` or nests the config under an
- *   own `config` object holding that field.
+ *   carries a supported field directly or nests the config under an own
+ *   `config` or `info` object holding that field (live `opencode debug
+ *   config` nests per-source config under `info`).
  */
 export function parseSubagentDepth(output) {
     const clean = stripAnsi(output).trim();
@@ -1023,15 +1025,46 @@ export function parseSubagentDepth(output) {
     if (!parsed || typeof parsed !== "object") {
         return { status: "unavailable", reason: "opencode debug config output is not a JSON object" };
     }
-    // Only the own top-level field is inspected; nested lookalikes are ignored.
+    // Both supported locations are inspected; nested lookalikes elsewhere
+    // are ignored.
     return subagentDepthFromHolder(parsed, "merged config");
 }
 /**
- * Inspect one config holder's own top-level `subagent_depth` field.
- * `where` names the holder for unavailable reasons only.
+ * Inspect one config holder's supported `subagent_depth` locations: the own
+ * top-level field and the V2 own `experimental.subagent_depth` field.
+ * `where` names the holder for unavailable reasons only. Absent (neither
+ * location present, or present-but-nullish) stays distinct from a configured
+ * finite value; conflicting values across the two locations leave the
+ * effective value unidentified.
  */
 function subagentDepthFromHolder(holder, where) {
-    const depth = holder.subagent_depth;
+    const topHasOwn = Object.prototype.hasOwnProperty.call(holder, "subagent_depth");
+    const topProbe = topHasOwn
+        ? subagentDepthFromValue(holder.subagent_depth, where)
+        : { status: "absent" };
+    const experimentalProbe = subagentDepthFromExperimental(holder.experimental, where);
+    if (topProbe.status === "unavailable")
+        return topProbe;
+    if (experimentalProbe.status === "unavailable")
+        return experimentalProbe;
+    if (topProbe.status === "value" && experimentalProbe.status === "value") {
+        if (topProbe.depth === experimentalProbe.depth)
+            return topProbe;
+        return {
+            status: "unavailable",
+            reason: `${where} reports conflicting subagent_depth values (${topProbe.depth}, ${experimentalProbe.depth})`,
+        };
+    }
+    if (topProbe.status === "value")
+        return topProbe;
+    return experimentalProbe;
+}
+/**
+ * Inspect a raw top-level `subagent_depth` value. Nullish counts as absent
+ * (ARIA supplies the runtime default/recommendation 3); a finite number is
+ * the configured value; anything else is unavailable.
+ */
+function subagentDepthFromValue(depth, where) {
     if (depth === undefined || depth === null)
         return { status: "absent" };
     if (typeof depth !== "number" || !Number.isFinite(depth)) {
@@ -1043,25 +1076,51 @@ function subagentDepthFromHolder(holder, where) {
     return { status: "value", depth };
 }
 /**
- * Inspect an array of per-source config documents for the effective
- * `subagent_depth`. A document contributes at most one value: its nested
- * `config` object when that is an object, otherwise the document itself.
- * Zero established values is absent; one distinct finite value is the
- * effective value; conflicting values (or a malformed non-numeric one)
- * leave the effective value unidentified. Advisory only: callers report
- * unavailable as WARN, never FAIL.
+ * Inspect the V2 `experimental.subagent_depth` location. A missing or
+ * non-object `experimental`, or an absent/nullish nested field, counts as
+ * absent for this location; otherwise the nested value is evaluated with the
+ * same finite-number rule as the top-level field.
  */
+function subagentDepthFromExperimental(experimental, where) {
+    if (!experimental || typeof experimental !== "object" || Array.isArray(experimental)) {
+        return { status: "absent" };
+    }
+    if (!Object.prototype.hasOwnProperty.call(experimental, "subagent_depth")) {
+        return { status: "absent" };
+    }
+    return subagentDepthFromValue(experimental.subagent_depth, `${where} experimental`);
+}
+/**
+ * Inspect an array of per-source config documents for the effective
+ * `subagent_depth` across both supported locations. A document contributes
+ * at most one value: its nested `info` object (live `opencode debug config`)
+ * or `config` object when that is an object, otherwise the document itself.
+ * Each holder is evaluated for both the top-level and the V2
+ * `experimental.subagent_depth` locations. Zero established values is
+ * absent; one distinct finite value is the effective value; conflicting
+ * values (or a malformed non-numeric one) leave the effective value
+ * unidentified. Advisory only: callers report unavailable as WARN, never
+ * FAIL.
+ */
+/**
+ * True for a nested per-source config holder (live `info` or test `config`
+ * shapes): a non-null, non-array object.
+ */
+function isNestedConfigHolder(value) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
 function parseSubagentDepthDocuments(documents) {
     const depths = [];
     for (const document of documents) {
         if (!document || typeof document !== "object" || Array.isArray(document))
             continue;
         const record = document;
-        const holder = record.config && typeof record.config === "object" && !Array.isArray(record.config)
-            ? record.config
-            : record;
-        if (!Object.prototype.hasOwnProperty.call(holder, "subagent_depth"))
-            continue;
+        const nested = isNestedConfigHolder(record.info)
+            ? record.info
+            : isNestedConfigHolder(record.config)
+                ? record.config
+                : null;
+        const holder = (nested ?? record);
         const probe = subagentDepthFromHolder(holder, "config source");
         if (probe.status === "unavailable")
             return probe;
@@ -1082,7 +1141,8 @@ function parseSubagentDepthDocuments(documents) {
 }
 /**
  * Read-only probe: run `opencode debug config` in the inspected worktree and
- * inspect the effective merged top-level `subagent_depth`. Never mutates
+ * inspect the effective `subagent_depth` across both supported locations
+ * (top-level and V2 `experimental.subagent_depth`). Never mutates
  * configuration.
  */
 export async function probeSubagentDepth(executor, worktree) {

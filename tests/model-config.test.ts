@@ -179,6 +179,41 @@ const DISCOVERED_MODELS: ModelDiscovery = {
   ],
 };
 
+// Captured from OpenCode 2.0.26 (`opencode models`, exit 0, 109 lines):
+// one usable model identifier per line, with no variant metadata.
+const OPENCODE_2_0_26_MODELS_EXCERPT = [
+  "github-copilot/claude-haiku-4.5",
+  "github-copilot/gpt-5-mini",
+  "google/gemini-2.5-flash",
+  "opencode/muse-spark-1.3-contributor-free",
+  "opencode/nemotron-3-ultra-free",
+].join("\n");
+
+// Captured from OpenCode 2.0.26 (`opencode models --verbose`, exit 1):
+// the flag is rejected, so no variant-metadata surface exists to parse.
+const OPENCODE_2_0_26_VERBOSE_REJECTION = [
+  "DESCRIPTION",
+  "  List all available models",
+  "",
+  "USAGE",
+  "  opencode models [flags]",
+  "",
+  "FLAGS",
+  "  --standalone       Run with a private server instead of the background service",
+  "  --server string    Connect to a server URL instead of the background service",
+  "",
+  "GLOBAL FLAGS",
+  "  --help, -h                                                          Show help information",
+  "  --version, -v                                                       Show version information",
+  "  --wizard                                                            Start wizard mode for a command",
+  "  --completions <bash|zsh|fish|sh>                                    Print shell completion script (choices: bash, zsh, fish, sh)",
+  "  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)",
+  "  --print-logs                                                        Print logs to stderr (server logs require --standalone)",
+  "",
+  "ERROR",
+  "  Unrecognized flag: --verbose in command opencode models",
+].join("\n");
+
 /** `count` discovered models sharing the `bench/model-NN` identifier family. */
 function makeManyModels(count: number): ModelDiscovery {
   return {
@@ -243,6 +278,30 @@ describe("parseModelList", () => {
     const models = parseModelList("opencode/deepseek-v4-flash\n");
     expect(models[0]?.variants).toEqual([]);
     expect(models[0]?.variantsObservable).toBeUndefined();
+  });
+
+  it("parses a representative OpenCode 2.0.26 model list with variants unobservable", () => {
+    const models = parseModelList(OPENCODE_2_0_26_MODELS_EXCERPT);
+
+    expect(models.map((model) => model.id)).toEqual([
+      "github-copilot/claude-haiku-4.5",
+      "github-copilot/gpt-5-mini",
+      "google/gemini-2.5-flash",
+      "opencode/muse-spark-1.3-contributor-free",
+      "opencode/nemotron-3-ultra-free",
+    ]);
+    // The 2.0.26 list carries no variant metadata: nothing to infer.
+    for (const model of models) {
+      expect(model.variants).toEqual([]);
+      expect(model.variantsObservable).toBeUndefined();
+    }
+  });
+
+  it("never mistakes the rejected --verbose surface for models or variants", () => {
+    // OpenCode 2.0.26 rejects `opencode models --verbose` (exit 1), so this
+    // help/error text is the entire surface: it yields no models and no
+    // variant metadata to infer from.
+    expect(parseModelList(OPENCODE_2_0_26_VERBOSE_REJECTION)).toEqual([]);
   });
 });
 
@@ -318,8 +377,9 @@ describe("discoverAvailableModels", () => {
       "opencode-go/deepseek-v4-pro",
       "openai/gpt-5.6-terra",
     ]);
-    // Pinned 2.0.23 has no supported --verbose surface: plain discovery
-    // establishes no variant metadata, so doctor reports variants as unknown.
+    // OpenCode 2.0.26 rejects --verbose ("Unrecognized flag: --verbose"):
+    // plain discovery establishes no variant metadata, so doctor reports
+    // variants as unknown.
     for (const model of discovered.models) {
       expect(model.variants).toEqual([]);
       expect(model.variantsObservable).toBeUndefined();

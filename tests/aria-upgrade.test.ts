@@ -65,7 +65,7 @@ function checkWithTarget(target: AriaAvailableTarget): UpgradeCheckResult {
       ? { component, installed: "1.0.6", available: target.tag, status: "upgrade-available", detail: "upgrade available" }
       : { component, installed: "remote", available: null, status: "remote-healthy", detail: "observed" }
   ));
-  return { currentVersion: "1.0.6", available: { kind: "known", target }, selfUpgradeBlocked: false, blockReason: null, components: rows };
+  return { currentVersion: "1.0.6", cliVersion: "1.0.6", installedSpec: "github:mscipio/ARIA#v1.0.6", available: { kind: "known", target }, selfUpgradeBlocked: false, blockReason: null, components: rows };
 }
 
 function handoffFor(target: AriaAvailableTarget): UpgradeHandoff {

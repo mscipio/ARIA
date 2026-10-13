@@ -185,6 +185,14 @@ export interface UpdateResult {
   git: { ok: boolean; error?: string };
   npm: { ok: boolean; error?: string };
   handoff: CommandResult & { error?: string };
+  /**
+   * T002 identity-gate outcome for `update` (present only when the gate
+   * ran). `ok:true` means the running checkout positively matched the
+   * registered plugin (or registration was positively absent); `ok:false`
+   * carries the fail-closed reason and no pull/npm/handoff mutation ran
+   * beyond the read-only preconditions.
+   */
+  identity?: { ok: boolean; error?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +340,241 @@ function parsePluginList(output: string): { recognized: boolean; entries: Plugin
  */
 function matchesCurrentPluginTarget(target: string, checkout: string, pluginUri: string): boolean {
   return isSameLocalPluginIdentity(target, checkout) || isSameLocalPluginIdentity(target, pluginUri);
+}
+
+// ---------------------------------------------------------------------------
+// T002 identity evidence (single source shared with `src/doctor.ts`)
+// ---------------------------------------------------------------------------
+//
+// T001 positively identified CLI/plugin identity reuses exactly
+// `parsePluginList` (above) plus `isSameLocalPluginIdentity` (setup-config)
+// and the two exact-version predicates below. This module owns the
+// canonical definitions so `setup()`/`update()` gates and the read-only
+// doctor comparison can never diverge: `doctor.ts` imports (never
+// duplicates) these predicates.
+
+/**
+ * Exact core-version predicate for identity comparison. A leading `v`
+ * (release-tag form) is accepted and stripped; anything that is not an
+ * exact `X.Y.Z` core (with an optional prerelease/build suffix) is not
+ * version evidence and is never compared. Short SHAs such as the plugin
+ * list `842e4ec` and the `local` placeholder therefore stay unknown.
+ */
+export function normalizeIdentityVersion(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim().replace(/^v/i, "");
+  return /^\d+\.\d+\.\d+([-.][0-9A-Za-z.-]+)?$/.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * Exact version evidence carried by a plugin-list SOURCE reference: the
+ * `#tag` suffix of a Git package specifier such as
+ * `github:mscipio/ARIA#v1.0.7`. References without an exact tag (local
+ * paths, bare specs) carry no version evidence and return null.
+ */
+export function pluginSpecTagVersion(target: string): string | null {
+  const hash = target.lastIndexOf("#");
+  if (hash === -1) return null;
+  return normalizeIdentityVersion(target.slice(hash + 1));
+}
+
+/**
+ * T002 setup/update identity gate states (read-only classification, no
+ * mutation). `matching` (exactly one registration for the intended target)
+ * and `absent` (recognized list with no `aria` entry: deterministic
+ * first-time bootstrap) allow the caller to proceed; every other state
+ * fails closed before any `plugin add/remove`, file write, or sync:
+ * - `mismatch`: at least one `aria` entry names a different source
+ *   (definite mismatch, including exact-tag evidence when present);
+ * - `ambiguous`: a duplicated `aria` registration (never guessed);
+ * - `unknown`: the list probe failed or its output is unrecognized (never
+ *   guessed; the compatibility fallback that once registered blindly is
+ *   retired — callers must observe positive absence or an exact match).
+ *
+ * The only designed transition out of `mismatch` is the explicit
+ * exact-target upgrade handoff (`aria upgrade --yes` via
+ * `src/upgrade.ts`/`src/aria-upgrade.ts`); `setup()` never re-registers
+ * over a conflicting entry.
+ */
+export type SetupIdentityGate =
+  | { kind: "matching"; detail: string }
+  | { kind: "absent"; detail: string }
+  | { kind: "mismatch"; detail: string }
+  | { kind: "ambiguous"; detail: string }
+  | { kind: "unknown"; detail: string };
+
+/**
+ * T010 approved ARIA Git source for bootstrap classification. Canonical
+ * value: `ARIA_GIT_SPEC_PREFIX` in `src/upgrade.ts` (duplicated here
+ * because that module imports this one, so importing it would cycle; cf.
+ * `APPROVED_ARIA_GIT_SPEC_PREFIX` in `src/doctor.ts`). Any plugin-list
+ * SOURCE starting with this prefix is positively recognized as an ARIA
+ * Git registration regardless of its ID column (including TUI-only `-`
+ * rows such as `- 842e4ec github:mscipio/ARIA#v1.0.7`), so it is never
+ * classified absent.
+ */
+const APPROVED_ARIA_GIT_SPEC_PREFIX = "github:mscipio/ARIA#";
+
+/**
+ * True for a positively recognized ARIA Git source (approved prefix).
+ * Exact-tag shape is not required here: any approved-source row proves an
+ * existing registration exists, so bootstrap must not overwrite it (the
+ * exact tag is validated separately by the upgrade handoff).
+ */
+export function isRecognizedAriaGitSource(target: string): boolean {
+  return target.startsWith(APPROVED_ARIA_GIT_SPEC_PREFIX);
+}
+
+/**
+ * T012 shared ARIA registration rule (single source for lifecycle gating
+ * and doctor reporting). A plugin-list row is positively ARIA-identifying
+ * when its ID is `aria` (any SOURCE, including local paths and foreign
+ * specs) or its SOURCE is a positively recognized ARIA Git package
+ * (approved `github:mscipio/ARIA#` prefix, any ID including TUI-only `-`
+ * rows such as `- 842e4ec github:mscipio/ARIA#v1.0.7`). Exact-tag shape is
+ * not required: any such row proves a registration exists, so it is never
+ * classified absent (the exact tag is validated separately by the upgrade
+ * handoff and the guarded doctor comparison).
+ */
+export function isAriaRegistrationEntry(entry: PluginListEntry): boolean {
+  return entry.id === "aria" || isRecognizedAriaGitSource(entry.target);
+}
+
+/** Shared ARIA registration count: absent/single/ambiguous. */
+export type AriaRegistrationKind = "absent" | "single" | "ambiguous";
+
+export interface AriaRegistrationClassification {
+  kind: AriaRegistrationKind;
+  identifying: PluginListEntry[];
+}
+
+/**
+ * T012 shared ARIA registration classification (pure, no mutation).
+ * `isLocalMatch` optionally recognizes TUI-only local rows that name the
+ * running checkout (lifecycle: `matchesIntended`; doctor:
+ * `isSameLocalPluginIdentity(target, packageRoot)`). Exactly one
+ * positively identified registration is `single`; zero is `absent`;
+ * multiple/conflicting rows are `ambiguous` (never guessed).
+ */
+export function classifyAriaRegistration(
+  entries: PluginListEntry[],
+  isLocalMatch?: (target: string) => boolean,
+): AriaRegistrationClassification {
+  const identifying = entries.filter(
+    (entry) => isAriaRegistrationEntry(entry) || (isLocalMatch ? isLocalMatch(entry.target) : false),
+  );
+  if (identifying.length === 0) return { kind: "absent", identifying };
+  if (identifying.length === 1) return { kind: "single", identifying };
+  return { kind: "ambiguous", identifying };
+}
+
+/**
+ * Classify the current plugin-list entries against the intended setup
+ * registration target. `matchesIntended` is the exact setup matching rule
+ * (verbatim `--plugin-spec` equality when given, otherwise the local
+ * path/`file://` identity above, TUI `-` rows included via their SOURCE).
+ * Pure: no executor, no mutation.
+ *
+ * T010: ARIA is identified by positively recognized source as well as ID.
+ * A recognized Git-source row with any ID (including TUI-only `-`) is an
+ * existing registration: when it does not match the intended target it is
+ * a definite mismatch (never absent), so setup never bootstraps over it.
+ *
+ * T012: the ARIA-identifying set is shared with doctor via
+ * `classifyAriaRegistration` (ID `aria` plus approved Git SOURCE, plus
+ * TUI-local matches). Multiple/conflicting identifying rows are ambiguous
+ * and fail closed: a matching local row plus a `- github:...` row,
+ * duplicate matching Git/TUI rows, or any other multiple ARIA-identifying
+ * rows are never accepted as a unique match.
+ */
+export function classifySetupIdentity(
+  entries: PluginListEntry[],
+  matchesIntended: (target: string) => boolean,
+): SetupIdentityGate {
+  const registration = classifyAriaRegistration(entries, matchesIntended);
+  if (registration.kind === "absent") {
+    return {
+      kind: "absent",
+      detail: "ARIA plugin is definitely absent from the recognized opencode plugin list (no ARIA-identifying entry)",
+    };
+  }
+  if (registration.kind === "ambiguous") {
+    const observed = registration.identifying.map((entry) => `${entry.id} ${entry.target}`).join(", ");
+    return {
+      kind: "ambiguous",
+      detail:
+        `ARIA plugin is listed more than once (${observed}; ` +
+        `duplicate/conflicting registration; not compared). Refusing to guess. No changes were made.`,
+    };
+  }
+  const sole = registration.identifying[0]!;
+  if (!matchesIntended(sole.target)) {
+    const tagged = pluginSpecTagVersion(sole.target);
+    const evidence = tagged !== null ? ` (exact version evidence: ${tagged})` : "";
+    return {
+      kind: "mismatch",
+      detail:
+        `definite mismatch: registered ARIA source(s) [${sole.target}]${evidence} do not match the intended target. ` +
+        `Refusing to re-register over a conflicting registration (run \`aria doctor\` to inspect; ` +
+        `move to another release only via the explicit exact-target \`aria upgrade --yes\` handoff). No changes were made.`,
+    };
+  }
+  return {
+    kind: "matching",
+    detail: "plugin already registered (detected via plugin list)",
+  };
+}
+
+/**
+ * T010 standalone-sync identity gate (read-only classification, no
+ * mutation). The checkout running `aria deps sync` must positively match
+ * the registered ARIA plugin (or registration must be positively absent)
+ * before any dependency mutation runs. A definite mismatch, a duplicate,
+ * or an unknown list (probe failure/unrecognized) fails closed with no
+ * sync; the only designed transition between releases is the explicit
+ * exact-target `aria upgrade --yes` handoff. Mirrors the `update()`
+ * identity gate (matching/absent allow, all else blocks) so sync, setup,
+ * and update can never diverge.
+ */
+export async function gateStandaloneSync(
+  executor: Executor,
+  binaryUrl: string,
+): Promise<{ ok: true; detail: string } | { ok: false; detail: string }> {
+  let checkout: string;
+  try {
+    checkout = await resolveCheckout(binaryUrl);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      detail: `running checkout is not positively identified (${reason}). Refusing to guess (run \`aria doctor\` to inspect). No changes were made.`,
+    };
+  }
+  const pluginUri = pathToFileURL(checkout).href;
+  const listResult = await run(executor, checkout, "opencode", "plugin", "list");
+  if (!listResult.ok || !listResult.stdout) {
+    const reason = !listResult.ok
+      ? `opencode plugin list failed (${listResult.stderr || "unknown error"}); the current ARIA registration is not positively identified`
+      : "opencode plugin list output is empty; the current ARIA registration is not positively identified";
+    return { ok: false, detail: `${reason}. Refusing to guess (run \`aria doctor\` to inspect). No changes were made.` };
+  }
+  const { recognized, entries } = parsePluginList(listResult.stdout);
+  if (!recognized) {
+    return {
+      ok: false,
+      detail:
+        "opencode plugin list output is unrecognized; the current ARIA registration is not positively identified. " +
+        "Refusing to guess (run `aria doctor` to inspect). No changes were made.",
+    };
+  }
+  const gate = classifySetupIdentity(
+    entries,
+    (target) => matchesCurrentPluginTarget(target, checkout, pluginUri),
+  );
+  if (gate.kind === "matching" || gate.kind === "absent") {
+    return { ok: true, detail: gate.detail };
+  }
+  return { ok: false, detail: gate.detail };
 }
 
 /**
@@ -519,7 +762,17 @@ export async function setup(
   // corresponding `file://` URI under the one consistent local-identity rule
   // shared with the config file truth).
 
-  // Try introspection first (read-only, never mutates config)
+  // Try introspection first (read-only, never mutates config). T002 gates
+  // every mutation on the positively identified states shared with the
+  // read-only doctor (`parsePluginList` + `isSameLocalPluginIdentity` plus
+  // the exact-version predicates above): only a positively absent
+  // registration bootstraps and only an exact match re-runs idempotently.
+  // A definite mismatch, a duplicate, or an unknown list (probe failure or
+  // unrecognized output) fails closed here — before any `plugin add`, file
+  // write, or sync. The retired compatibility fallback never registered
+  // blindly, and the conflicting-stale auto-add never re-registers over a
+  // different source: the only designed transition is the explicit
+  // exact-target `aria upgrade --yes` handoff.
   const listResult = await run(executor, checkout, "opencode", "plugin", "list");
   const introspectionOk = listResult.ok && listResult.stdout;
   let usedIntrospection = false;
@@ -532,37 +785,52 @@ export async function setup(
       const matchesCurrent = (target: string): boolean =>
         (pluginSpec !== undefined && target === pluginSpec) ||
         matchesCurrentPluginTarget(target, checkout, pluginUri);
-      const currentEntries = entries.filter((entry) => matchesCurrent(entry.target));
-      if (currentEntries.length > 0) {
+      const gate = classifySetupIdentity(entries, matchesCurrent);
+      if (gate.kind === "matching") {
         registrationAction = "already registered";
-        registrationDetail = currentEntries.length > 1
-          ? "plugin already registered (detected via plugin list; duplicate observed, no new registration)"
-          : "plugin already registered (detected via plugin list)";
-      } else if (entries.some((entry) => entry.id === "aria")) {
-        // Conflicting-stale: an `aria` ID is listed with a different source.
-        // Safe update path: add the current checkout below (config phase
-        // preserves the stale entry with backup; nothing is deleted).
+        registrationDetail = gate.detail;
+      } else if (gate.kind === "absent") {
+        // Positively absent — deterministic first-time bootstrap only.
         const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
         const interpreted = interpretPluginAddResult(pluginResult, packageArg);
         registrationAction = interpreted.action;
         registrationDetail = interpreted.detail;
       } else {
-        // Absent — register it
-        const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
-        const interpreted = interpretPluginAddResult(pluginResult, packageArg);
-        registrationAction = interpreted.action;
-        registrationDetail = interpreted.detail;
+        // T002 fail-closed: mismatch, duplicate, or (unreachable here —
+        // recognized lists always classify above) unknown. No plugin
+        // mutation, no file writes, no sync.
+        return {
+          ok: false,
+          stage: "registration",
+          setup: {
+            registration: { action: "failed", detail: gate.detail },
+            sync: { ok: false, error: "sync skipped due to registration failure" },
+          },
+        };
       }
     }
-    // Unrecognized format → fall through to compatibility fallback
+    // Unrecognized format → fail closed below (never guessed).
   }
 
-  // Compatibility fallback when introspection unavailable or format unrecognized
+  // Fail-closed when introspection is unavailable or unrecognized: the
+  // registration is unknown, so no mutation, file write, or sync runs.
+  // (The pre-T002 compatibility fallback that registered blindly is
+  // retired; observe positive absence or an exact match first.)
   if (!usedIntrospection) {
-    const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
-    const interpreted = interpretPluginAddResult(pluginResult, packageArg);
-    registrationAction = interpreted.action;
-    registrationDetail = interpreted.detail;
+    const reason = !listResult.ok
+      ? `opencode plugin list failed (${listResult.stderr || "unknown error"}); the current ARIA registration is not positively identified`
+      : "opencode plugin list output is unrecognized; the current ARIA registration is not positively identified";
+    return {
+      ok: false,
+      stage: "registration",
+      setup: {
+        registration: {
+          action: "failed",
+          detail: `${reason}. Refusing to guess (run \`aria doctor\` to inspect). No changes were made.`,
+        },
+        sync: { ok: false, error: "sync skipped due to registration failure" },
+      },
+    };
   }
 
   // Fail closed — if registration failed, do not proceed to file phases or sync
@@ -924,6 +1192,69 @@ export async function update(
         handoff: { exitCode: null, stdout: "", stderr: "", ok: false, error: "skipped" },
       },
     };
+  }
+
+  // -----------------------------------------------------------------------
+  // T002 identity gate — the checkout being updated must positively match
+  // the registered ARIA plugin (or registration must be positively absent).
+  // Runs after the read-only git preconditions but before any mutation
+  // (`git pull`, `npm ci`, handoff). A definite mismatch, a duplicate, or
+  // an unknown list (probe failure/unrecognized) fails closed with no pull,
+  // no install, and no handoff; the only designed transition between
+  // releases is the explicit exact-target `aria upgrade --yes` handoff.
+  // -----------------------------------------------------------------------
+  {
+    const pluginUri = pathToFileURL(checkout).href;
+    const listResult = await run(executor, checkout, "opencode", "plugin", "list");
+    const gateOk = listResult.ok && listResult.stdout;
+    if (!gateOk) {
+      const reason = !listResult.ok
+        ? `opencode plugin list failed (${listResult.stderr || "unknown error"}); the current ARIA registration is not positively identified`
+        : "opencode plugin list output is empty; the current ARIA registration is not positively identified";
+      const detail = `${reason}. Refusing to guess (run \`aria doctor\` to inspect). No changes were made.`;
+      return {
+        ok: false,
+        stage: "identity",
+        update: {
+          git: { ok: true },
+          npm: { ok: false, error: "skipped" },
+          handoff: { exitCode: null, stdout: "", stderr: "", ok: false, error: "skipped" },
+          identity: { ok: false, error: detail },
+        },
+      };
+    }
+    const { recognized, entries } = parsePluginList(listResult.stdout);
+    if (!recognized) {
+      const detail =
+        "opencode plugin list output is unrecognized; the current ARIA registration is not positively identified. " +
+        "Refusing to guess (run `aria doctor` to inspect). No changes were made.";
+      return {
+        ok: false,
+        stage: "identity",
+        update: {
+          git: { ok: true },
+          npm: { ok: false, error: "skipped" },
+          handoff: { exitCode: null, stdout: "", stderr: "", ok: false, error: "skipped" },
+          identity: { ok: false, error: detail },
+        },
+      };
+    }
+    const gate = classifySetupIdentity(
+      entries,
+      (target) => matchesCurrentPluginTarget(target, checkout, pluginUri),
+    );
+    if (gate.kind !== "matching" && gate.kind !== "absent") {
+      return {
+        ok: false,
+        stage: "identity",
+        update: {
+          git: { ok: true },
+          npm: { ok: false, error: "skipped" },
+          handoff: { exitCode: null, stdout: "", stderr: "", ok: false, error: "skipped" },
+          identity: { ok: false, error: gate.detail },
+        },
+      };
+    }
   }
 
   // -----------------------------------------------------------------------
