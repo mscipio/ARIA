@@ -612,9 +612,9 @@ async function syncEngramHomebrew(executor: Executor, configDir?: string): Promi
     return { action: "brew-update-failed", error: `brew update failed: ${update.stderr}` };
   }
 
-  const upgrade = await run(executor, "brew", "upgrade", "engram");
+  const upgrade = await run(executor, "brew", "upgrade", "--formula", "gentleman-programming/tap/engram");
   if (!upgrade.ok) {
-    return { action: "upgrade-failed", error: `brew upgrade engram failed: ${upgrade.stderr}` };
+    return { action: "upgrade-failed", error: `brew upgrade --formula gentleman-programming/tap/engram failed: ${upgrade.stderr}` };
   }
 
   const setup = await runEngramSetup(executor, configDir);
@@ -832,7 +832,7 @@ async function syncEngram(executor: Executor, fileOps: DependencyFileOps, config
     // Not installed -- try Homebrew first, then GitHub
     const brewPath = await run(executor, "which", "brew");
     if (brewPath.ok && brewPath.stdout) {
-      const brewInstall = await run(executor, "brew", "install", "gentleman-programming/tap/engram");
+      const brewInstall = await run(executor, "brew", "install", "--formula", "gentleman-programming/tap/engram");
       if (brewInstall.ok) {
         const setup = await runEngramSetup(executor, configDir);
         if (!setup.ok) {

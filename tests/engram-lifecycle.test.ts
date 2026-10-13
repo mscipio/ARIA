@@ -179,7 +179,7 @@ describe("T012 clean-install bootstraps via the brew path", () => {
       expect(result.mutated).toBe(true);
       expect(result.mcpConnected).toBe(true);
       expect(result.statuslineAbsent).toBe(true);
-      expect(calls).toContain("brew install gentleman-programming/tap/engram");
+      expect(calls).toContain("brew install --formula gentleman-programming/tap/engram");
       expect(calls).toContain("engram setup opencode");
       expect(calls.some((call) => call.includes("api.github.com"))).toBe(false);
 
@@ -325,7 +325,7 @@ describe("T012 validation rolls the config snapshot back", () => {
       expect(result.mutated).toBe(true);
       expect(result.rolledBack).toBe(true);
       expect(result.mcpConnected).toBe(false);
-      expect(calls).toContain("brew install gentleman-programming/tap/engram");
+      expect(calls).toContain("brew install --formula gentleman-programming/tap/engram");
       await expectByteIdentical(configDir, before);
     });
   });

@@ -53,7 +53,7 @@ function brewMocks(cellarBin: string, cellarRoot: string): Record<string, { stdo
     "which engram": { stdout: cellarBin },
     "brew --cellar": { stdout: cellarRoot },
     "brew update": { stdout: "" },
-    "brew upgrade engram": { stdout: "" },
+    "brew upgrade --formula gentleman-programming/tap/engram": { stdout: "" },
     "engram setup opencode": { stdout: "" },
   };
 }
@@ -752,7 +752,7 @@ describe("depsSync -- Engram homebrew", () => {
     const result = await depsSync(executor, configDir);
     expect(result.engram.action).toBe("no-asset");
     expect(calls).toContain("which brew");
-    expect(calls).not.toContain("brew install gentleman-programming/tap/engram");
+    expect(calls).not.toContain("brew install --formula gentleman-programming/tap/engram");
   });
 
   it("detects Homebrew-managed engram and upgrades via brew", async () => {
@@ -783,7 +783,7 @@ describe("depsSync -- Engram homebrew", () => {
     expect(result.ok).toBe(true);
     expect(result.engram.action).toBe("synced (homebrew)");
     expect(calls).toContain("brew update");
-    expect(calls).toContain("brew upgrade engram");
+    expect(calls).toContain("brew upgrade --formula gentleman-programming/tap/engram");
     expect(calls).toContain("engram setup opencode");
   });
 

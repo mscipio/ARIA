@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { readPackageVersion } from "./agents.js";
 import { codegraphUpgradeComponent } from "./codegraph.js";
 import { context7UpgradeComponent, quotaLifecycleUpgradeComponent, } from "./dependencies.js";
-import { defaultExecutor, depsSync, detectCodeGraph, detectContext7, detectEngram, detectMcpConnectivity, } from "./deps.js";
+import { defaultExecutor, depsSync, detectCodeGraph, detectContext7, detectEngram, detectEngramSource, detectMcpConnectivity, } from "./deps.js";
 import { doctorExitCode, runDoctor } from "./doctor.js";
 import { engramUpgradeComponent } from "./engram.js";
 import { classifyAriaRegistration, parsePluginList } from "./lifecycle.js";
@@ -566,6 +566,94 @@ export function formatUpgradeCheck(result) {
         lines.push(`  ${row.component}: ${row.detail}`);
     return lines.join("\n");
 }
+// ---------------------------------------------------------------------------
+// v1.0.11 hotfix: formula-scoped Engram Homebrew prerequisite preflight.
+//
+// Placement: AFTER explicit approval (`--yes`/approved migrate entry) plus
+// target/identity validation, and BEFORE any ARIA registration mutation,
+// handoff/spawn, or component mutation. Read-only inventory
+// (`checkUpgradeInventory`) and `upgrade --check` never invoke this — they
+// only report the inventoried Engram row.
+//
+// Scope: only when the inventoried Engram install positively resolves to the
+// Homebrew-formula path (`detectEngramSource() === "homebrew"`). Missing,
+// unknown-target, non-Homebrew (`unknown`), and GitHub-asset paths skip
+// unchanged (no probe, no behavior change). No trust is granted
+// automatically and no transactionality is redesigned.
+//
+// Probe: exactly `brew upgrade --formula
+// gentleman-programming/tap/engram --dry-run` via the existing Executor
+// seam. `--dry-run` keeps the probe read-only (no install/upgrade).
+// `HOMEBREW_NO_AUTO_UPDATE=1` is passed process-locally for that one probe
+// call only (via the Executor `env` seam, never assigned to `process.env`,
+// never persisted) so the probe cannot trigger a Homebrew auto-update — a
+// network/state mutation outside the approved read-only probe.
+//
+// Tradeoff: HOMEBREW_NO_AUTO_UPDATE=1 freezes tap data at its cached state,
+// so the dry-run reasons over possibly stale formulae. That staleness cannot
+// cause a false block — worst case it reports success ("already current"),
+// which still permits the real upgrade path (which performs its own `brew
+// update` plus the real formula upgrade). A genuinely missing/untrusted
+// formula still fails the dry-run and blocks with an actionable error.
+// Omitting the flag would let a supposedly read-only probe mutate Homebrew
+// state via auto-update, so the flag is the smallest safe read-only probe.
+// ---------------------------------------------------------------------------
+/** Fully qualified Engram Homebrew formula the preflight and upgrade use. */
+export const ENGRAM_HOMEBREW_FORMULA = "gentleman-programming/tap/engram";
+/** Exact argv for the read-only preflight probe (never mutates). */
+export function buildEngramPreflightArgv() {
+    return ["upgrade", "--formula", ENGRAM_HOMEBREW_FORMULA, "--dry-run"];
+}
+/** Display form of the preflight probe (for errors and reporting). */
+export function formatEngramPreflightCommand() {
+    return `brew upgrade --formula ${ENGRAM_HOMEBREW_FORMULA} --dry-run`;
+}
+/**
+ * Per-call environment addition for the preflight probe only. Returned as
+ * additions for the Executor `env` seam (the executor merges over a copy of
+ * `process.env` for that call); never assigned to `process.env` and never
+ * persisted to any file.
+ */
+export function engramPreflightEnv() {
+    return { HOMEBREW_NO_AUTO_UPDATE: "1" };
+}
+/**
+ * Formula-scoped prerequisite probe. Skips (ok, no probe) unless the
+ * inventoried Engram row shows an installed version AND the install
+ * positively resolves to the Homebrew-formula path. On the Homebrew path,
+ * runs the exact read-only dry-run probe; any throw (failure or
+ * indeterminate) blocks with an actionable error naming the formula, the
+ * failed command, and the manual prerequisite. Never grants trust.
+ */
+export async function checkEngramHomebrewPreflight(executor, check) {
+    const row = check.components.find((entry) => entry.component === "engram");
+    if (!row || row.status === "skipped" || row.status === "unknown-target" || row.installed === null) {
+        return { ok: true, skipped: true };
+    }
+    let source;
+    try {
+        source = await detectEngramSource(executor);
+    }
+    catch {
+        // Source ambiguity is not a preflight failure: non-Homebrew/GitHub paths
+        // stay unchanged and the real upgrade path reports its own errors.
+        return { ok: true, skipped: true };
+    }
+    if (source !== "homebrew") {
+        return { ok: true, skipped: true };
+    }
+    try {
+        await executor("brew", buildEngramPreflightArgv(), { env: engramPreflightEnv() });
+        return { ok: true, skipped: false };
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return {
+            ok: false,
+            reason: `Engram Homebrew preflight failed: \`${formatEngramPreflightCommand()}\` reported (${reason}); establish formula trust for ${ENGRAM_HOMEBREW_FORMULA} manually (e.g. verify the tap is tapped and the formula is installed), then re-run with fresh approval. No changes were made. No trust was granted automatically.`,
+        };
+    }
+}
 /**
  * Default self-upgrade seam: fail closed. T011 owns exact-ref
  * remove/replace/re-register plus the one-shot handoff spawn; until it
@@ -674,6 +762,12 @@ export async function runUpgrade(executor = defaultExecutor, options) {
                 detail: `ARIA ${check.currentVersion} is already current; ${identity.reason}. No changes were made.`,
             };
         }
+        // v1.0.11 hotfix: approved already-current dependency mutation runs only
+        // after the formula-scoped Engram preflight permits it.
+        const alreadyCurrentPreflight = await checkEngramHomebrewPreflight(executor, check);
+        if (!alreadyCurrentPreflight.ok) {
+            return { stage: "preflight-failed", ok: false, check, detail: alreadyCurrentPreflight.reason };
+        }
         let dependencies;
         try {
             dependencies = await options.dependenciesFn(executor, options.configDir);
@@ -709,6 +803,13 @@ export async function runUpgrade(executor = defaultExecutor, options) {
     if (!validated.ok) {
         return { stage: "blocked-unknown-target", ok: false, check, detail: `${validated.reason}; no changes made.` };
     }
+    // v1.0.11 hotfix: formula-scoped Engram prerequisite preflight — after
+    // approval and target validation, before any ARIA registration mutation,
+    // handoff/spawn, or component mutation. Failure/indeterminate stops here.
+    const preflight = await checkEngramHomebrewPreflight(executor, check);
+    if (!preflight.ok) {
+        return { stage: "preflight-failed", ok: false, check, detail: preflight.reason };
+    }
     const handoff = buildUpgradeHandoff(check.available.target, check);
     const selfUpgradeFn = options.selfUpgradeFn ?? defaultSelfUpgrade;
     const selfUpgrade = await selfUpgradeFn(check.available.target, handoff);
@@ -743,9 +844,11 @@ export function formatUpgradeResult(result) {
             ? "Upgrade: blocked (explicit approval required)"
             : result.stage === "blocked-unknown-target"
                 ? "Upgrade: blocked (unknown target)"
-                : result.stage === "self-upgrade-failed"
-                    ? "Upgrade: [FAIL] self-upgrade failed before handoff"
-                    : "Upgrade: handoff taken";
+                : result.stage === "preflight-failed"
+                    ? "Upgrade: [FAIL] Engram Homebrew preflight failed before handoff"
+                    : result.stage === "self-upgrade-failed"
+                        ? "Upgrade: [FAIL] self-upgrade failed before handoff"
+                        : "Upgrade: handoff taken";
     return `${formatUpgradeCheck(result.check)}\n\n${stageLine}\n${result.detail}`;
 }
 /** CLI exit code: 0 only for already-current or a taken handoff. */
@@ -1099,6 +1202,21 @@ export async function runMigrateUpgrade(executor = defaultExecutor, options) {
             report: "",
         };
     }
+    // v1.0.11 hotfix: formula-scoped Engram prerequisite preflight — after the
+    // approved migrate entry passes every identity gate, before any ARIA
+    // registration mutation or in-process continuation. Failure/indeterminate
+    // stops here with zero mutation.
+    const migratePreflight = await checkEngramHomebrewPreflight(executor, check);
+    if (!migratePreflight.ok) {
+        return {
+            stage: "preflight-failed",
+            ok: false,
+            check,
+            ownTarget: own.target,
+            detail: migratePreflight.reason,
+            report: "",
+        };
+    }
     const handoff = buildUpgradeHandoff(own.target, check);
     const migrateFn = options.migrateFn ?? defaultMigrate;
     const selfUpgrade = await migrateFn(options.migrateFrom, own.target, handoff);
@@ -1139,9 +1257,11 @@ export function formatMigrateResult(result) {
             ? "Migrate: blocked (explicit approval required)"
             : result.stage === "blocked-migrate"
                 ? "Migrate: blocked (identity gate)"
-                : result.stage === "migrate-failed"
-                    ? "Migrate: [FAIL] transition failed before continuation"
-                    : `Migrate: stopped (${result.stage})`;
+                : result.stage === "preflight-failed"
+                    ? "Migrate: [FAIL] Engram Homebrew preflight failed before transition"
+                    : result.stage === "migrate-failed"
+                        ? "Migrate: [FAIL] transition failed before continuation"
+                        : `Migrate: stopped (${result.stage})`;
     const head = formatUpgradeCheck(result.check);
     const tail = result.report ? `\n\n${result.report}` : "";
     return `${head}\n\n${stageLine}\n${result.detail}${tail}`;

@@ -152,7 +152,7 @@ export async function ensureEngram(executor, options = {}) {
     if (wasMissing) {
         const brewProbe = await tryExec(executor, "which", ["brew"]);
         if (brewProbe.ok && brewProbe.stdout.trim() !== "") {
-            const installed = await tryExec(executor, "brew", ["install", "gentleman-programming/tap/engram"]);
+            const installed = await tryExec(executor, "brew", ["install", "--formula", "gentleman-programming/tap/engram"]);
             if (installed.ok) {
                 const setup = await tryExec(executor, "engram", ["setup", "opencode"]);
                 if (setup.ok) {

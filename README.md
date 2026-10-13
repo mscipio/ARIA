@@ -1,4 +1,4 @@
-# ARIA v1.0.10 — Native OpenCode 2
+# ARIA v1.0.11 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -154,10 +154,10 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Install
 
-Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.10`:
+Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.11`:
 
 ```sh
-SPEC='github:mscipio/ARIA#v1.0.10'
+SPEC='github:mscipio/ARIA#v1.0.11'
 npx --yes --allow-git=all --package="$SPEC" aria setup --plugin-spec "$SPEC"
 npx --yes --allow-git=all --package="$SPEC" aria doctor
 ```
@@ -175,7 +175,7 @@ node ./bin/aria.mjs doctor
 
 Restart OpenCode after setup to load the registered plugin.
 
-Tags v1.0.0–v1.0.9 predate the current 1.x line and are retained unchanged.
+Tags v1.0.0–v1.0.10 predate the current 1.x line and are retained unchanged.
 
 ## Configuration
 
@@ -290,7 +290,7 @@ Neither `aria setup` nor `aria update` runs as a postinstall script, daemon, bac
 
 ### `aria upgrade`
 
-`aria upgrade` moves to a new ARIA release through inventory, explicit approval, pre-removal validation, self-upgrade plus a bounded handoff, and new-release-only completion with a before/after report. It never splits scope: there is no `--aria-only` or `--deps-only` in v1.0.10 — approval covers the whole inventoried component scope and the handoff binds it.
+`aria upgrade` moves to a new ARIA release through inventory, explicit approval, pre-removal validation, self-upgrade plus a bounded handoff, and new-release-only completion with a before/after report. It never splits scope: there is no `--aria-only` or `--deps-only` in v1.0.11 — approval covers the whole inventoried component scope and the handoff binds it.
 
 `deps sync` versus `upgrade`: sync normalizes the *current* installs (idempotent, unapproved; the legacy sync path performs no Quota chase or install); upgrade moves to a *new* release. The pipeline order is inventory → explicit approval → validate the ARIA target before removal → self-upgrade plus bounded handoff → only in the new release: component upgrades → target-version normalization/registration → agent regen if required → deps sync → doctor → before/after report.
 
@@ -308,7 +308,7 @@ NPM_CONFIG_ALLOW_GIT=all npx --yes --package="$SPEC" -- aria upgrade --yes
 Run upgrade only through the exact-package invocation above, never a bare `aria upgrade ...`: `bin/aria.mjs` dispatches relative to its own location, so a bare `aria` runs whatever resolves on `PATH` (for example a development checkout) instead of the positively identified installed registration. `<spec>` denotes the positively identified installed spec (for example `github:mscipio/ARIA#v1.0.7`); an unknown, ambiguous, or foreign registration fails closed with no invocation offered. No launcher is needed: npm resolves the `aria` binary from the named package, and the dispatched release is that package's own code. The `NPM_CONFIG_ALLOW_GIT=all` prefix is process-local only, with no global `npm config` change, environment export, or `.npmrc` edit.
 
 Immutable-sender escape: when the installed registration is exactly `github:mscipio/ARIA#v1.0.7`, its own upgrade code cannot be trusted to move itself.
-Migrate with the newer release instead of a normal upgrade: `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package "github:mscipio/ARIA#v1.0.10" -- aria upgrade --migrate-from "github:mscipio/ARIA#v1.0.7" --yes`.
+Migrate with the newer release instead of a normal upgrade: `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package "github:mscipio/ARIA#v1.0.11" -- aria upgrade --migrate-from "github:mscipio/ARIA#v1.0.7" --yes`.
 Normal `aria upgrade --yes` (via the installed spec) stays the path for every other release; migrate-from requires `--yes` plus an exact from/to match and fails closed on mismatch, ambiguity, or unknown/foreign state.
 
 `--check` reports `current`, `upgrade-available`, `remote-healthy`, `unmanaged-observed`, `unsupported-ownership`, `skipped`, and `unknown-target` rows and never installs, writes, or repairs. An unknown available target blocks self-upgrade with zero mutation. After approval the exact target is validated before the current registration is touched; pre-handoff failure leaves/restores the old registration where feasible or reports the exact unresolved state. Handoff success binds the exact validated target plus the approved inventory: the new release continues without re-asking only on an exact match, and any target/scope drift stops for fresh approval. Post-handoff component failure stops with per-component completed/rolled-back/unresolved states and no global transactionality. Approval precedes all mutations; unknown ownership/version means no install; unrelated entries are preserved; everything stays XDG-contained with no prod V1, session migration, V1/0.6 removal, or `.npmrc` side effects, and any git allowlist (`NPM_CONFIG_ALLOW_GIT=all`) is process-local only.

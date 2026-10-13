@@ -318,7 +318,7 @@ async function main() {
   if (command === "upgrade") {
     // T010: only --check (strictly read-only inventory) and --yes (explicit
     // approval) are accepted. There is intentionally no --aria-only or
-    // --deps-only in v1.0.10: approval covers the whole inventoried scope and
+    // --deps-only in v1.0.11: approval covers the whole inventoried scope and
     // the bounded handoff binds it. Anything else is rejected before any
     // probe, registration, file write, or sync.
     //

@@ -148,7 +148,7 @@ describe("T016 Engram missing-install evidence (existing channels, no new instal
     const result = await depsSync(executor, configDir);
 
     expect(result.engram.action).toBe("synced (homebrew)");
-    expect(calls).toContain("brew install gentleman-programming/tap/engram");
+    expect(calls).toContain("brew install --formula gentleman-programming/tap/engram");
     // Existing ownership gates unchanged: no legacy-writing or shared-env installer ran.
     expect(calls.some((call) => call.startsWith("codegraph install"))).toBe(false);
     expect(calls.some((call) => call.startsWith("zotpilot "))).toBe(false);

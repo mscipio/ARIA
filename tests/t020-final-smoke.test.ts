@@ -285,7 +285,7 @@ describe("T020 bounded final V2 smoke (ONE live smoke, temp HOME/XDG only)", () 
         calls.push(`${command} ${args.join(" ")}`);
         const key = `${command} ${args.join(" ")}`;
         if (command === "which" && args[0] === "brew") return { stdout: "/opt/homebrew/bin/brew", stderr: "" };
-        if (key === "brew install gentleman-programming/tap/engram") {
+        if (key === "brew install --formula gentleman-programming/tap/engram") {
           engramInstalled = true;
           return { stdout: "", stderr: "" };
         }
@@ -357,7 +357,7 @@ describe("T020 bounded final V2 smoke (ONE live smoke, temp HOME/XDG only)", () 
       );
       // Demonstrated-safe paths ran (install→normalize→validate); prohibited
       // legacy/shared mutators never ran.
-      expect(calls).toContain("brew install gentleman-programming/tap/engram");
+      expect(calls).toContain("brew install --formula gentleman-programming/tap/engram");
       expect(calls).toContain("npm install -g @colbymchenry/codegraph@1.4.0");
       expect(calls).toContain("python3 -m pip install --user zotpilot==0.5.3");
       expect(calls.some((call) => call.startsWith("codegraph install"))).toBe(false);

@@ -197,11 +197,40 @@ export declare function validateAriaTargetForRemoval(target: AriaAvailableTarget
  */
 export declare function checkUpgradeInventory(executor?: Executor, options?: UpgradeCheckOptions): Promise<UpgradeCheckResult>;
 export declare function formatUpgradeCheck(result: UpgradeCheckResult): string;
+/** Fully qualified Engram Homebrew formula the preflight and upgrade use. */
+export declare const ENGRAM_HOMEBREW_FORMULA = "gentleman-programming/tap/engram";
+/** Exact argv for the read-only preflight probe (never mutates). */
+export declare function buildEngramPreflightArgv(): string[];
+/** Display form of the preflight probe (for errors and reporting). */
+export declare function formatEngramPreflightCommand(): string;
+/**
+ * Per-call environment addition for the preflight probe only. Returned as
+ * additions for the Executor `env` seam (the executor merges over a copy of
+ * `process.env` for that call); never assigned to `process.env` and never
+ * persisted to any file.
+ */
+export declare function engramPreflightEnv(): NodeJS.ProcessEnv;
+export type EngramPreflightResult = {
+    ok: true;
+    skipped: boolean;
+} | {
+    ok: false;
+    reason: string;
+};
+/**
+ * Formula-scoped prerequisite probe. Skips (ok, no probe) unless the
+ * inventoried Engram row shows an installed version AND the install
+ * positively resolves to the Homebrew-formula path. On the Homebrew path,
+ * runs the exact read-only dry-run probe; any throw (failure or
+ * indeterminate) blocks with an actionable error naming the formula, the
+ * failed command, and the manual prerequisite. Never grants trust.
+ */
+export declare function checkEngramHomebrewPreflight(executor: Executor, check: UpgradeCheckResult): Promise<EngramPreflightResult>;
 export interface UpgradeApproval {
     /** Explicit operator approval (`upgrade --yes` via the exact-package invocation). No other signal counts. */
     yes: boolean;
 }
-export type UpgradeRunStage = "already-current" | "blocked-approval" | "blocked-unknown-target" | "self-upgrade-failed" | "handoff-taken";
+export type UpgradeRunStage = "already-current" | "blocked-approval" | "blocked-unknown-target" | "preflight-failed" | "self-upgrade-failed" | "handoff-taken";
 export interface SelfUpgradeOutcome {
     ok: boolean;
     detail: string;
@@ -421,7 +450,7 @@ export declare function formatMigrateApprovalCommand(fromSpec: string, toSpec: s
  * invocation offered.
  */
 export declare function formatMigrateBlockedDetail(fromSpec: string, toSpec: string | null): string;
-export type MigrateRunStage = "blocked-approval" | "blocked-migrate" | "migrate-failed" | "drift-blocked" | "component-stopped" | "phase-stopped" | "complete";
+export type MigrateRunStage = "blocked-approval" | "blocked-migrate" | "preflight-failed" | "migrate-failed" | "drift-blocked" | "component-stopped" | "phase-stopped" | "complete";
 export interface MigrateRunResult {
     stage: MigrateRunStage;
     ok: boolean;
