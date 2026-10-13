@@ -8,6 +8,7 @@ import {
   classifyAriaRegistration,
   detectAriaRegistration,
   makeDefaultHandoffSpawn,
+  migrateAriaFromExact,
   receiveUpgradeHandoff,
   selfUpgradeAria,
   type HandoffSpawnFn,
@@ -82,6 +83,8 @@ interface FakePluginWorld {
   executor: Executor;
   calls: RecordedCall[];
   rows: Array<[string, string, string]>;
+  /** T002 persisted-config mirror (synchronous persist per T001; list may lag). */
+  persistedSpecs: string[];
   failRemove: Set<string>;
   failAdd: Set<string>;
   failListCount: number;
@@ -108,13 +111,19 @@ function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePlug
         if (world.failRemove.has(spec)) throw new Error(`opencode plugin remove ${spec} failed: backend error`);
         if (!world.rows.some((row) => row[2] === spec)) throw new Error(`plugin ${spec} is not configured`);
         world.rows = world.rows.filter((row) => row[2] !== spec);
+        // T002: synchronous persist per T001 (isolated 2.0.28 proves immediate opencode.json write).
+        world.persistedSpecs = world.persistedSpecs.filter((entry) => entry !== spec);
         return { stdout: "plugin removed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "plugin" && args[1] === "add") {
         const spec = args[2] ?? "";
         if (world.failAdd.has(spec)) throw new Error(`opencode plugin add ${spec} failed: fetch failed`);
         world.rows.push(["aria", "deadbee", spec]);
-        if (world.duplicateAddSpec === spec) world.rows.push(["aria", "deadbee", spec]);
+        world.persistedSpecs.push(spec);
+        if (world.duplicateAddSpec === spec) {
+          world.rows.push(["aria", "deadbee", spec]);
+          world.persistedSpecs.push(spec);
+        }
         return { stdout: "plugin installed", stderr: "" };
       }
       if (command === "npm" && args[0] === "exec") {
@@ -127,6 +136,7 @@ function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePlug
     },
     calls: [],
     rows: [...initial],
+    persistedSpecs: initial.map((row) => row[2]),
     failRemove: new Set(),
     failAdd: new Set(),
     failListCount: 0,
@@ -136,6 +146,14 @@ function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePlug
   };
   return world;
 }
+
+/** T002 persisted-first seam: synchronous-persist mirror (no sleep on the persisted path). */
+function persistedReaderFor(world: FakePluginWorld) {
+  return async () => ({ kind: "ok" as const, path: "fake-persisted-opencode.json", specs: [...world.persistedSpecs] });
+}
+
+/** T002 injectable delay: no-op counter (bounded list retry without slow sleeps). */
+async function noDelay(_ms: number): Promise<void> {}
 
 function initial106(): Array<[string, string, string]> {
   return [ariaRow(TARGET_106.spec), ...UNRELATED_ROWS];
@@ -208,7 +226,7 @@ describe("T011 replace, validation, and preservation", () => {
     const hadGitKey = "NPM_CONFIG_ALLOW_GIT" in process.env;
     const captured: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
     const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
-      executor: world.executor,
+      executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay,
       handoffSpawn: capturingSpawn(captured),
     });
 
@@ -237,7 +255,7 @@ describe("T011 replace, validation, and preservation", () => {
     const world = makeFakePluginWorld([ariaRow(TARGET_107.spec, "newsha1"), ...UNRELATED_ROWS]);
     const captured: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
     const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
-      executor: world.executor,
+      executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay,
       handoffSpawn: capturingSpawn(captured),
     });
     expect(outcome.ok).toBe(true);
@@ -249,7 +267,7 @@ describe("T011 replace, validation, and preservation", () => {
   it("uses the default npm-exec transport with per-call git env when no spawn seam is given", async () => {
     const world = makeFakePluginWorld(initial106());
     world.spawnStdout = `ARIA upgrade report\nUpgrade to ${TARGET_107.spec} completed (${TARGET_107.tag})`;
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(true);
     const spawn = world.calls.find((call) => call.command === "npm");
     expect(spawn?.args.slice(0, 7)).toEqual(["exec", "--yes", "--package", TARGET_107.spec, "--", "aria", "upgrade"]);
@@ -263,7 +281,7 @@ describe("T011 pre-removal gates (zero mutation on failure)", () => {
   it("validates the requested target before touching the current registration", async () => {
     const world = makeFakePluginWorld(initial106());
     const evil = { tag: "v1.0.7", version: "1.0.7", spec: "github:evil/ARIA#v1.0.7" };
-    const outcome = await selfUpgradeAria(evil, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(evil, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(world.calls).toHaveLength(0);
     expect(world.rows).toEqual(initial106());
@@ -273,6 +291,8 @@ describe("T011 pre-removal gates (zero mutation on failure)", () => {
     const world = makeFakePluginWorld(initial106());
     const outcome = await selfUpgradeAria(TARGET_107, handoffFor({ ...TARGET_107, spec: "github:mscipio/ARIA#v1.0.8", tag: "v1.0.8", version: "1.0.8" }), {
       executor: world.executor,
+      readPersistedPlugins: persistedReaderFor(world),
+      delay: noDelay,
     });
     expect(outcome.ok).toBe(false);
     expect(outcome.detail).toContain("handoff target mismatch");
@@ -281,7 +301,7 @@ describe("T011 pre-removal gates (zero mutation on failure)", () => {
 
   it("fails closed with a single read-only probe on ambiguous current state", async () => {
     const world = makeFakePluginWorld([ariaRow(TARGET_106.spec), ariaRow(TARGET_107.spec), ...UNRELATED_ROWS]);
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual(["opencode plugin list"]);
     expect(world.rows.filter((row) => row[0] === "aria").map((row) => row[2]).sort()).toEqual([TARGET_106.spec, TARGET_107.spec].sort());
@@ -294,7 +314,7 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
     world.failAdd.add(TARGET_107.spec);
     const captured: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
     const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
-      executor: world.executor,
+      executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay,
       handoffSpawn: capturingSpawn(captured),
     });
     expect(outcome.ok).toBe(false);
@@ -320,7 +340,7 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
     const world = makeFakePluginWorld(initial106());
     world.failAdd.add(TARGET_107.spec);
     world.failAdd.add(TARGET_106.spec);
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(outcome.registration).toContain("unresolved");
     expect(outcome.registration).toContain(TARGET_106.spec);
@@ -329,7 +349,7 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
   it("leaves the verified-intact original alone when removal fails (no add attempted)", async () => {
     const world = makeFakePluginWorld(initial106());
     world.failRemove.add(TARGET_106.spec);
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(outcome.registration).toContain(`original registration intact (${TARGET_106.spec})`);
     expect(world.calls.some((call) => call.args[1] === "add")).toBe(false);
@@ -343,7 +363,7 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
   it("rolls back a duplicated post-add registration to the single original", async () => {
     const world = makeFakePluginWorld(initial106());
     world.duplicateAddSpec = TARGET_107.spec;
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(outcome.registration).toContain(`original registration restored (${TARGET_106.spec})`);
     expect(world.rows.filter((row) => row[0] === "aria").map((row) => row[2])).toEqual([TARGET_106.spec]);
@@ -356,7 +376,7 @@ describe("T011 handoff target immutability and failure states", () => {
     const handoff = handoffFor(TARGET_107);
     const seen: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
     const outcome = await selfUpgradeAria(TARGET_107, handoff, {
-      executor: world.executor,
+      executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay,
       handoffSpawn: async (next, nextTarget) => {
         seen.push({ handoff: next, target: nextTarget });
         return { ok: true, detail: "stub taken", stdout: `done ${nextTarget.tag}` };
@@ -377,7 +397,7 @@ describe("T011 handoff target immutability and failure states", () => {
     const world = makeFakePluginWorld(initial106());
     world.spawnStdout = `ok ${TARGET_107.tag}`;
     const handoff = handoffFor(TARGET_107);
-    const outcome = await selfUpgradeAria(TARGET_107, handoff, { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoff, { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(true);
     const spawn = world.calls.find((call) => call.command === "npm");
     if (spawn === undefined) throw new Error("expected one npm-exec spawn");
@@ -391,7 +411,7 @@ describe("T011 handoff target immutability and failure states", () => {
   it("keeps the verified new registration and reports exactly when the handoff spawn fails", async () => {
     const world = makeFakePluginWorld(initial106());
     world.spawnError = "npm exec failed: network unavailable";
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(outcome.registration).toContain(`replaced (single registration at ${TARGET_107.spec})`);
     expect(outcome.registration).toContain("continuation not started");
@@ -410,7 +430,7 @@ describe("T011 handoff target immutability and failure states", () => {
   it("reports unconfirmed ownership when the new release does not acknowledge the target tag", async () => {
     const world = makeFakePluginWorld(initial106());
     world.spawnStdout = "some unrelated output";
-    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor });
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(false);
     expect(outcome.registration).toContain("ownership unconfirmed");
     expect(world.rows.filter((row) => row[0] === "aria").map((row) => row[2])).toEqual([TARGET_107.spec]);
@@ -432,6 +452,8 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
   it("takes the handoff with the real adapter and performs no post-handoff phases", async () => {
     const configDir = await makeIsolatedConfigDir();
     const rows: Array<[string, string, string]> = initial106();
+    // T002 persisted mirror (synchronous per T001).
+    const persistedSpecs: string[] = rows.map((row) => row[2]);
     const calls: string[] = [];
     const seen: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
     const executor: Executor = async (command, args, options) => {
@@ -443,10 +465,13 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
       }
       if (command === "opencode" && args[0] === "plugin" && args[1] === "remove") {
         rows.splice(0, rows.length, ...rows.filter((row) => row[2] !== args[2]));
+        const spec = args[2] ?? "";
+        for (let i = persistedSpecs.length - 1; i >= 0; i--) if (persistedSpecs[i] === spec) persistedSpecs.splice(i, 1);
         return { stdout: "plugin removed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "plugin" && args[1] === "add") {
         rows.push(["aria", "deadbee", args[2] ?? ""]);
+        persistedSpecs.push(args[2] ?? "");
         return { stdout: "plugin installed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "mcp") return { stdout: HEALTHY_MCP_LIST, stderr: "" };
@@ -460,6 +485,8 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
       selfUpgradeFn: (target, handoff) =>
         selfUpgradeAria(target, handoff, {
           executor,
+          readPersistedPlugins: async () => ({ kind: "ok" as const, path: "fake-persisted-opencode.json", specs: [...persistedSpecs] }),
+          delay: noDelay,
           handoffSpawn: async (next, nextTarget) => {
             seen.push({ handoff: next, target: nextTarget });
             return { ok: true, detail: "stub taken", stdout: `done ${nextTarget.tag}` };
@@ -539,5 +566,23 @@ describe("T011 new-release handoff receiver", () => {
     expect(result.report).toContain("Before:");
     expect(result.report).toContain("After:");
     expect([...UPGRADE_COMPONENTS].sort()).toEqual(["aria", "codegraph", "context7", "engram", "quota", "zotpilot"].sort());
+  });
+});
+
+describe("T003 migrate-from explicit gate (newer-CLI-owned)", () => {
+  it("fails closed with zero mutation when the detected registration differs from --migrate-from", async () => {
+    const world = makeFakePluginWorld(initial106());
+    const before = world.rows.map((row) => row[2]);
+    const outcome = await migrateAriaFromExact(TARGET_107.spec, TARGET_107, handoffFor(TARGET_107), {
+      executor: world.executor,
+      readPersistedPlugins: persistedReaderFor(world),
+      delay: noDelay,
+    });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("--migrate-from");
+    // Single read-only probe; no remove/add/spawn and no persisted change.
+    expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual(["opencode plugin list"]);
+    expect(world.rows.map((row) => row[2])).toEqual(before);
+    expect(world.persistedSpecs).toEqual(before);
   });
 });

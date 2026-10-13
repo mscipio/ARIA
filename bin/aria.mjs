@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // ARIA CLI — dependency-free, Node standard library only.
-// Supported: aria setup [--configure], aria configure, aria update, aria upgrade [--check] [--yes], aria deps sync, aria doctor, aria routes, aria --help
+// Supported: aria setup [--configure], aria configure, aria update, aria upgrade [--check] [--yes] [--migrate-from <spec> --yes], aria deps sync, aria doctor, aria routes, aria --help
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -31,6 +31,7 @@ Usage:
   aria upgrade               Show upgrade inventory (requires --yes to approve any mutation)
   aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)
   aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope
+  aria upgrade --migrate-from <spec> --yes  Migrate the exact installed release named by <spec> using this release's own transition (immutable-sender escape)
   aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria routes                Print resolved model routes for each ARIA role
@@ -317,9 +318,13 @@ async function main() {
   if (command === "upgrade") {
     // T010: only --check (strictly read-only inventory) and --yes (explicit
     // approval) are accepted. There is intentionally no --aria-only or
-    // --deps-only in v1.0.9: approval covers the whole inventoried scope and
+    // --deps-only in v1.0.10: approval covers the whole inventoried scope and
     // the bounded handoff binds it. Anything else is rejected before any
     // probe, registration, file write, or sync.
+    //
+    // T003: --migrate-from <spec> (with --yes, never with --check or
+    // --handoff-json) selects the newer-CLI-owned escape: this release
+    // replaces the exact installed spec and continues in-process.
     //
     // T011: --handoff-json <payload> receives an approved upgrade handoff in
     // the new release (the old release's one-shot spawn invokes it; it is not
@@ -329,6 +334,7 @@ async function main() {
     let check = false;
     let yes = false;
     let handoffJson;
+    let migrateFrom;
     for (let index = 0; index < rest.length; index++) {
       const arg = rest[index];
       if (arg === "--check") {
@@ -339,11 +345,32 @@ async function main() {
         yes = true;
         continue;
       }
+      if (arg === "--migrate-from") {
+        const value = rest[index + 1];
+        if (value === undefined || value.startsWith("--")) {
+          console.error("Missing value for --migrate-from (expected the exact installed spec such as github:mscipio/ARIA#v1.0.7)");
+          console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
+          return 1;
+        }
+        migrateFrom = value;
+        index++;
+        continue;
+      }
+      if (arg.startsWith("--migrate-from=")) {
+        const value = arg.slice("--migrate-from=".length);
+        if (value.length === 0) {
+          console.error("Missing value for --migrate-from (expected the exact installed spec such as github:mscipio/ARIA#v1.0.7)");
+          console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
+          return 1;
+        }
+        migrateFrom = value;
+        continue;
+      }
       if (arg === "--handoff-json") {
         const value = rest[index + 1];
         if (value === undefined) {
           console.error("Missing value for --handoff-json (expected the JSON handoff payload from the approved upgrade)");
-          console.error("Usage: aria upgrade [--check] [--yes]");
+          console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
           return 1;
         }
         handoffJson = value;
@@ -354,24 +381,34 @@ async function main() {
         const value = arg.slice("--handoff-json=".length);
         if (value.length === 0) {
           console.error("Missing value for --handoff-json (expected the JSON handoff payload from the approved upgrade)");
-          console.error("Usage: aria upgrade [--check] [--yes]");
+          console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
           return 1;
         }
         handoffJson = value;
         continue;
       }
       console.error(`Unknown upgrade option: ${arg}`);
-      console.error("Usage: aria upgrade [--check] [--yes]");
+      console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
       return 1;
     }
     if (check && yes) {
       console.error("Options --check and --yes cannot be combined (--check is strictly read-only)");
-      console.error("Usage: aria upgrade [--check] [--yes]");
+      console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
       return 1;
     }
     if (handoffJson !== undefined && (check || yes)) {
       console.error("Option --handoff-json cannot be combined with --check or --yes (the handoff carries its own approval)");
-      console.error("Usage: aria upgrade [--check] [--yes]");
+      console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
+      return 1;
+    }
+    if (migrateFrom !== undefined && check) {
+      console.error("Option --migrate-from cannot be combined with --check (--check is strictly read-only)");
+      console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
+      return 1;
+    }
+    if (migrateFrom !== undefined && handoffJson !== undefined) {
+      console.error("Option --migrate-from cannot be combined with --handoff-json (migrate carries its own from-gate)");
+      console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
       return 1;
     }
 
@@ -385,6 +422,30 @@ async function main() {
         return result.ok ? 0 : 1;
       } catch (err) {
         console.error(`Upgrade: [FAIL] ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+    }
+
+    // T003 migrate-from: this release owns the transition of the exact
+    // installed spec (immutable-sender escape). Run ONLY via the exact-package
+    // invocation naming the NEWER release (`npm exec --package <to-spec> --
+    // aria upgrade --migrate-from <from-spec> --yes`): this dispatcher imports
+    // ../dist relative to its own location, so the running code is the
+    // selected release's own. Without --yes the orchestration blocks with
+    // re-run guidance and zero mutation.
+    if (migrateFrom !== undefined) {
+      try {
+        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode } = await import("../dist/upgrade.js");
+        const { migrateAriaFromExact } = await import("../dist/aria-upgrade.js");
+        const result = await runMigrateUpgrade(undefined, {
+          migrateFrom,
+          approval: { yes },
+          migrateFn: (fromSpec, target, handoff) => migrateAriaFromExact(fromSpec, target, handoff),
+        });
+        console.log(formatMigrateResult(result));
+        return migrateExitCode(result);
+      } catch (err) {
+        console.error(`Migrate: [FAIL] ${err instanceof Error ? err.message : String(err)}`);
         return 1;
       }
     }

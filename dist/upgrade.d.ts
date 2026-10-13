@@ -378,4 +378,92 @@ export declare function describeSyncVsUpgrade(): {
         phases: string[];
     };
 };
+/**
+ * Validate an explicit `--migrate-from` spec (pure, no mutation): exactly
+ * the approved Git namespace plus an exact `vX.Y.Z` release tag. Anything
+ * else fails closed (never guessed, never a branch, moving tag, or short
+ * SHA).
+ */
+export declare function parseMigrateFromSpec(spec: string): {
+    ok: true;
+} | {
+    ok: false;
+    reason: string;
+};
+/**
+ * Derive the migrate (to) target from the running release's own packaged
+ * version (package.json, never the installed row). Null, dev, or inexact
+ * versions fail closed: a release that cannot name its own target cannot
+ * own a transition.
+ */
+export declare function ownReleaseTarget(ownVersion: string | null): {
+    ok: true;
+    target: AriaAvailableTarget;
+} | {
+    ok: false;
+    reason: string;
+};
+/**
+ * Pure npm argv for an approved migrate run: the NEWER (to) release is
+ * selected via `--package`, the installed (from) registration via
+ * `--migrate-from`. The caller prefixes `npm` (or `npx`) and the approved
+ * per-invocation `NPM_CONFIG_ALLOW_GIT=all` env (process-local, never
+ * global/`.npmrc`); the `--` boundary keeps the `aria ...` argv from being
+ * parsed as npm options.
+ */
+export declare function buildMigrateApprovalArgv(fromSpec: string, toSpec: string): string[];
+/** Display form of the exact newer-CLI migrate invocation (pure). */
+export declare function formatMigrateApprovalCommand(fromSpec: string, toSpec: string): string;
+/**
+ * Blocked-approval detail for `runMigrateUpgrade` when `--yes` was not
+ * given (pure, no mutation). Names the exact newer-CLI invocation when the
+ * (to) target is positively identified; otherwise fails closed with no
+ * invocation offered.
+ */
+export declare function formatMigrateBlockedDetail(fromSpec: string, toSpec: string | null): string;
+export type MigrateRunStage = "blocked-approval" | "blocked-migrate" | "migrate-failed" | "drift-blocked" | "component-stopped" | "phase-stopped" | "complete";
+export interface MigrateRunResult {
+    stage: MigrateRunStage;
+    ok: boolean;
+    check: UpgradeCheckResult;
+    /** The newer release's own (to) target (absent when it was never positively identified). */
+    ownTarget?: AriaAvailableTarget;
+    handoff?: UpgradeHandoff;
+    selfUpgrade?: SelfUpgradeOutcome;
+    continuation?: UpgradeContinuationResult;
+    /** Continuation before/after report (empty unless the post-handoff pipeline ran). */
+    report: string;
+    detail: string;
+}
+/** Newer-CLI-owned transition seam (the `aria upgrade` CLI wires the real adapter). */
+export type MigrateFn = (fromSpec: string, target: AriaAvailableTarget, handoff: UpgradeHandoff) => Promise<SelfUpgradeOutcome>;
+/** Default migrate seam: fail closed (the adapter owns the transition). */
+export declare function defaultMigrate(): Promise<SelfUpgradeOutcome>;
+export interface MigrateRunOptions extends UpgradeCheckOptions {
+    /** Exact installed spec the newer release must replace (operator-approved `--migrate-from`). */
+    migrateFrom: string;
+    approval: UpgradeApproval;
+    /**
+     * Pin the running release's packaged version (test/operator override;
+     * `undefined` reads package.json, `null` forces unknown). Never the
+     * installed row.
+     */
+    ownVersion?: string | null;
+    /** Newer-CLI-owned transition (default: fail closed). */
+    migrateFn?: MigrateFn;
+    /** Post-handoff pipeline seams (defaults: the real shared lifecycle). */
+    continuation?: UpgradeContinuationOptions;
+}
+/**
+ * Newer-CLI migrate pipeline: read-only inventory → explicit approval →
+ * validate `--migrate-from` plus the own (to) target from package.json →
+ * require the installed registration to exactly equal `--migrate-from` →
+ * newer-CLI-owned remove→add→persisted-verify→bounded-list-converge
+ * transition (never the old release's mutation logic: no from-release
+ * spawn) → in-process post-handoff continuation in the new release.
+ */
+export declare function runMigrateUpgrade(executor: Executor | undefined, options: MigrateRunOptions): Promise<MigrateRunResult>;
+export declare function formatMigrateResult(result: MigrateRunResult): string;
+/** CLI exit code: 0 only when the migrate transition plus continuation completed. */
+export declare function migrateExitCode(result: MigrateRunResult): number;
 //# sourceMappingURL=upgrade.d.ts.map

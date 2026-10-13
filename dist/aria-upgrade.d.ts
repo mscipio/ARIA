@@ -31,6 +31,24 @@ export type AriaRegistrationDetection = {
 export declare function classifyAriaRegistration(stdout: string): AriaRegistrationDetection;
 /** Read-only current-registration probe (`opencode plugin list`; never mutates). */
 export declare function detectAriaRegistration(executor: Executor): Promise<AriaRegistrationDetection>;
+export type PersistedPluginRead = {
+    kind: "ok";
+    path: string;
+    specs: string[];
+} | {
+    kind: "ambiguous";
+    reason: string;
+    path?: string;
+} | {
+    kind: "unreadable";
+    reason: string;
+    path?: string;
+};
+export type PersistedReader = () => Promise<PersistedPluginRead>;
+export interface ListConvergenceBound {
+    attempts?: number;
+    delayMs?: number;
+}
 export interface HandoffSpawnResult {
     ok: boolean;
     detail: string;
@@ -72,6 +90,39 @@ export interface AriaSelfUpgradeOptions {
     executor?: Executor;
     /** One-shot new-release handoff transport (default: npm-exec the exact spec). */
     handoffSpawn?: HandoffSpawnFn;
+    /**
+     * T002 persisted-config seam: explicit global config path for isolated
+     * HOME/XDG fixtures and deterministic tests (default: canonical
+     * `defaultGlobalConfigPath()` discovery). Never a launcher or publisher.
+     */
+    globalConfigPath?: string;
+    /**
+     * T002 injectable persisted reader (default: filesystem read at
+     * `globalConfigPath` via `readPersistedPluginSpecs`). Tests inject an
+     * in-memory synchronous-persist view; production reads the authoritative
+     * `opencode.json(c)` without arbitrary sleep.
+     */
+    readPersistedPlugins?: PersistedReader;
+    /**
+     * T002 injectable delay for list-convergence backoff only (default:
+     * real `setTimeout`). Tests inject a no-op counter; the persisted path
+     * never sleeps.
+     */
+    delay?: (ms: number) => Promise<void>;
+    /**
+     * T002 bounded list-convergence bound (default 5 polls/~5s: 1s delay).
+     * Applies ONLY to the runtime `list` surface T001 proved eventually
+     * consistent; persisted verification has no retry/sleep.
+     */
+    listConvergence?: ListConvergenceBound;
+    /**
+     * T003 explicit-from gate for the newer-CLI migrate path
+     * (`migrateAriaFromExact` sets this to the operator-approved
+     * `--migrate-from` spec): the detected registration must exactly equal
+     * it AND the persisted config must agree, before any mutation. Absent on
+     * the normal path (no behavior change there).
+     */
+    expectedFromSpec?: string;
 }
 /**
  * T011 self-upgrade: exact-ref remove/replace/re-register plus the one-shot
@@ -91,4 +142,18 @@ export declare function selfUpgradeAria(target: AriaAvailableTarget, handoff: Up
  * stops for fresh approval with zero mutation.
  */
 export declare function receiveUpgradeHandoff(payloadJson: string, ownVersion: string, options?: UpgradeContinuationOptions): Promise<UpgradeContinuationResult>;
+/**
+ * Migrate an exact installed registration (`--migrate-from`) to this
+ * release's own exact target using the CURRENT code paths only: shape
+ * gates, then the shared remove→add→persisted-verify→bounded-list-converge
+ * transition (`selfUpgradeAria` with the explicit-from gate), then the
+ * caller continues the normal post-handoff pipeline in-process.
+ *
+ * Already in the newer release, so there is no handoff spawn of any
+ * release (old or new): the default transport is an in-process
+ * continuation ack carrying the exact tag (an explicit `handoffSpawn`
+ * seam, e.g. in tests, still wins). `plugin update` is never invoked and
+ * this module writes no files.
+ */
+export declare function migrateAriaFromExact(fromSpec: string, target: AriaAvailableTarget, handoff: UpgradeHandoff, options?: AriaSelfUpgradeOptions): Promise<SelfUpgradeOutcome>;
 //# sourceMappingURL=aria-upgrade.d.ts.map

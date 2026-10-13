@@ -959,4 +959,195 @@ export function describeSyncVsUpgrade() {
         },
     };
 }
+// ---------------------------------------------------------------------------
+// T003 migrate-from: newer-CLI-owned escape for an immutable sender (e.g.
+// installed v1.0.7).
+//
+// A normal `aria upgrade --yes` runs the INSTALLED release's own transition
+// code (selected via `npm exec --package <installed-spec>`). When that code
+// cannot be trusted, the NEWER release owns the transition instead:
+//
+//   NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package <to-spec> -- aria upgrade --migrate-from <from-spec> --yes
+//
+// `--package` names the newer (to) release whose code runs; `--migrate-from`
+// names the installed (from) registration that must be replaced. Gates: the
+// installed registration must positively equal `--migrate-from` (list
+// inventory plus the adapter's persisted+list check), the running release
+// must positively be the (to) target from its own package.json (never the
+// installed row), `--yes` is required, and any mismatch, ambiguity, unknown,
+// or foreign state fails closed with zero mutation. On success the corrected
+// remove→add→persisted-verify→bounded-list-converge transition runs under
+// the CURRENT (newer) code paths only (the old release's mutation logic is
+// never invoked: no spawn of the from-release), and the normal post-handoff
+// pipeline continues in-process in the new release.
+// ---------------------------------------------------------------------------
+/**
+ * Validate an explicit `--migrate-from` spec (pure, no mutation): exactly
+ * the approved Git namespace plus an exact `vX.Y.Z` release tag. Anything
+ * else fails closed (never guessed, never a branch, moving tag, or short
+ * SHA).
+ */
+export function parseMigrateFromSpec(spec) {
+    if (!spec.startsWith(ARIA_GIT_SPEC_PREFIX)) {
+        return { ok: false, reason: `--migrate-from ${spec} is not an exact ARIA Git spec (expected ${ARIA_GIT_SPEC_PREFIX}vX.Y.Z)` };
+    }
+    const ref = spec.slice(ARIA_GIT_SPEC_PREFIX.length);
+    if (!isExactReleaseTag(ref)) {
+        return { ok: false, reason: `--migrate-from ref ${ref} is not an exact vX.Y.Z release tag` };
+    }
+    return { ok: true };
+}
+/**
+ * Derive the migrate (to) target from the running release's own packaged
+ * version (package.json, never the installed row). Null, dev, or inexact
+ * versions fail closed: a release that cannot name its own target cannot
+ * own a transition.
+ */
+export function ownReleaseTarget(ownVersion) {
+    if (ownVersion === null) {
+        return { ok: false, reason: "this release's packaged version is not positively identified (package.json unreadable); migrate blocked with zero mutation" };
+    }
+    if (!/^\d+\.\d+\.\d+$/.test(ownVersion)) {
+        return { ok: false, reason: `this release's packaged version (${ownVersion}) is not an exact release identity; migrate blocked with zero mutation` };
+    }
+    const target = { tag: `v${ownVersion}`, version: ownVersion, spec: `${ARIA_GIT_SPEC_PREFIX}v${ownVersion}` };
+    const validated = validateAriaTargetForRemoval(target);
+    if (!validated.ok)
+        return { ok: false, reason: validated.reason };
+    return { ok: true, target };
+}
+/**
+ * Pure npm argv for an approved migrate run: the NEWER (to) release is
+ * selected via `--package`, the installed (from) registration via
+ * `--migrate-from`. The caller prefixes `npm` (or `npx`) and the approved
+ * per-invocation `NPM_CONFIG_ALLOW_GIT=all` env (process-local, never
+ * global/`.npmrc`); the `--` boundary keeps the `aria ...` argv from being
+ * parsed as npm options.
+ */
+export function buildMigrateApprovalArgv(fromSpec, toSpec) {
+    return ["exec", "--yes", "--package", toSpec, "--", "aria", "upgrade", "--migrate-from", fromSpec, "--yes"];
+}
+/** Display form of the exact newer-CLI migrate invocation (pure). */
+export function formatMigrateApprovalCommand(fromSpec, toSpec) {
+    return `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package ${toSpec} -- aria upgrade --migrate-from ${fromSpec} --yes`;
+}
+/**
+ * Blocked-approval detail for `runMigrateUpgrade` when `--yes` was not
+ * given (pure, no mutation). Names the exact newer-CLI invocation when the
+ * (to) target is positively identified; otherwise fails closed with no
+ * invocation offered.
+ */
+export function formatMigrateBlockedDetail(fromSpec, toSpec) {
+    if (toSpec === null) {
+        return "Explicit approval is required before any mutation, and this release is not positively identified as an exact ARIA release, so no migrate invocation can be offered. Establish identity, then re-run with fresh approval. No changes were made.";
+    }
+    return `Explicit approval is required before any mutation. Re-run with \`${formatMigrateApprovalCommand(fromSpec, toSpec)}\` to approve the migrate-from transition (${fromSpec} → ${toSpec}). No changes were made.`;
+}
+/** Default migrate seam: fail closed (the adapter owns the transition). */
+export async function defaultMigrate() {
+    return {
+        ok: false,
+        detail: "ARIA migrate adapter unavailable (aria-upgrade owns the newer-CLI transition); no changes made",
+    };
+}
+/**
+ * Newer-CLI migrate pipeline: read-only inventory → explicit approval →
+ * validate `--migrate-from` plus the own (to) target from package.json →
+ * require the installed registration to exactly equal `--migrate-from` →
+ * newer-CLI-owned remove→add→persisted-verify→bounded-list-converge
+ * transition (never the old release's mutation logic: no from-release
+ * spawn) → in-process post-handoff continuation in the new release.
+ */
+export async function runMigrateUpgrade(executor = defaultExecutor, options) {
+    const check = await checkUpgradeInventory(executor, options);
+    const ownVersion = options.ownVersion !== undefined ? options.ownVersion : readCurrentAriaVersion();
+    const own = ownReleaseTarget(ownVersion);
+    const from = parseMigrateFromSpec(options.migrateFrom);
+    if (!options.approval.yes) {
+        return {
+            stage: "blocked-approval",
+            ok: false,
+            check,
+            detail: formatMigrateBlockedDetail(options.migrateFrom, own.ok ? own.target.spec : null),
+            report: "",
+        };
+    }
+    if (!from.ok) {
+        return { stage: "blocked-migrate", ok: false, check, detail: `${from.reason}; migrate blocked with zero mutation. No changes were made.`, report: "" };
+    }
+    if (!own.ok) {
+        return { stage: "blocked-migrate", ok: false, check, detail: `${own.reason} No changes were made.`, report: "" };
+    }
+    if (options.migrateFrom === own.target.spec) {
+        return {
+            stage: "blocked-migrate",
+            ok: false,
+            check,
+            ownTarget: own.target,
+            detail: `--migrate-from ${options.migrateFrom} equals this release (${own.target.spec}); nothing to migrate. Use the normal exact-package upgrade path. No changes were made.`,
+            report: "",
+        };
+    }
+    if (check.installedSpec !== options.migrateFrom) {
+        const observed = check.installedSpec ?? check.blockReason ?? "unknown";
+        return {
+            stage: "blocked-migrate",
+            ok: false,
+            check,
+            ownTarget: own.target,
+            detail: `migrate-from mismatch: approved ${options.migrateFrom} but the installed registration is ${observed}; refusing to mutate. No changes were made.`,
+            report: "",
+        };
+    }
+    const handoff = buildUpgradeHandoff(own.target, check);
+    const migrateFn = options.migrateFn ?? defaultMigrate;
+    const selfUpgrade = await migrateFn(options.migrateFrom, own.target, handoff);
+    if (!selfUpgrade.ok) {
+        return {
+            stage: "migrate-failed",
+            ok: false,
+            check,
+            ownTarget: own.target,
+            handoff,
+            selfUpgrade,
+            detail: `ARIA migrate failed before continuation: ${selfUpgrade.detail}${selfUpgrade.registration ? ` Registration: ${selfUpgrade.registration}` : ""} No component upgrades, normalization, regen, sync, doctor, or reporting ran.`,
+            report: "",
+        };
+    }
+    const continuation = await continueUpgradeInNewRelease(handoff, own.target, UPGRADE_COMPONENTS, {
+        ...options.continuation,
+        executor,
+        configDir: options.continuation?.configDir ?? options.configDir,
+    });
+    const stage = continuation.stage;
+    return {
+        stage,
+        ok: continuation.ok,
+        check,
+        ownTarget: own.target,
+        handoff,
+        selfUpgrade,
+        continuation,
+        report: continuation.report,
+        detail: `Migrate ${options.migrateFrom} → ${own.target.spec}: ${selfUpgrade.handoffNote ?? selfUpgrade.detail} ${continuation.detail}`,
+    };
+}
+export function formatMigrateResult(result) {
+    const stageLine = result.stage === "complete"
+        ? "Migrate: complete"
+        : result.stage === "blocked-approval"
+            ? "Migrate: blocked (explicit approval required)"
+            : result.stage === "blocked-migrate"
+                ? "Migrate: blocked (identity gate)"
+                : result.stage === "migrate-failed"
+                    ? "Migrate: [FAIL] transition failed before continuation"
+                    : `Migrate: stopped (${result.stage})`;
+    const head = formatUpgradeCheck(result.check);
+    const tail = result.report ? `\n\n${result.report}` : "";
+    return `${head}\n\n${stageLine}\n${result.detail}${tail}`;
+}
+/** CLI exit code: 0 only when the migrate transition plus continuation completed. */
+export function migrateExitCode(result) {
+    return result.ok ? 0 : 1;
+}
 //# sourceMappingURL=upgrade.js.map
