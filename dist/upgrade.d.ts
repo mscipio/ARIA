@@ -368,6 +368,21 @@ export interface UpgradeContinuationOptions {
     doctorFn?: PostUpgradePhaseFn;
 }
 export type ContinuationStage = "complete" | "drift-blocked" | "component-stopped" | "phase-stopped";
+/**
+ * T002 post-handoff managed-agent regen phase (strict reconciliation).
+ *
+ * Runs ONLY in the new release after registration/normalization and before
+ * deps-sync/doctor (phase order owned by `continueUpgradeInNewRelease` below:
+ * normalize → regen → deps-sync → doctor). Uses the strict
+ * `reconcileManagedAgents` wrapper (T001: packaged defaults plus the
+ * supported global overlay via `resolveSetupAriaConfig`, fail-closed on
+ * unowned/ambiguous role paths, unrelated files untouched) — never the
+ * tolerant standalone-setup `installAgentFiles` (preserved in
+ * `src/lifecycle.ts`). Reconciliation conflicts return a failed phase
+ * (`ok: false`) so the continuation stops as `phase-stopped` with the
+ * actionable conflict detail; nothing is thrown past the phase boundary.
+ */
+export declare function runManagedAgentRegenPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome>;
 export interface UpgradeContinuationResult {
     stage: ContinuationStage;
     ok: boolean;

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { getPackageRoot } from "./defaults.js";
 import { ROLES } from "./overrides.js";
@@ -346,5 +346,117 @@ export async function rollbackAgentInstall(dir, result) {
     }
     if (hasPending)
         throw pending;
+}
+export class AgentReconciliationError extends Error {
+    conflicts;
+    constructor(conflicts, dir) {
+        const lines = conflicts.map((conflict) => `  ${conflict.role} (${conflict.path}): ${conflict.kind} — ${conflict.detail}`);
+        super(`Managed-agent reconciliation found ${conflicts.length} conflict(s) in ${dir}:\n${lines.join("\n")}\n` +
+            `No files were created, modified, renamed, or backed up, and unrelated files were left untouched. ` +
+            `Move each listed path aside (or remove it) to let ARIA manage that role, then re-run.`);
+        this.name = "AgentReconciliationError";
+        this.conflicts = conflicts;
+    }
+}
+/** Preflight probe of one expected role path; returns a conflict or null when reconcilable. */
+async function preflightRolePath(dir, role, wanted) {
+    const path = join(dir, agentFileName(role));
+    let probe;
+    try {
+        probe = await lstat(path);
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return null;
+        const reason = error instanceof Error ? error.message : String(error);
+        return { role, path, kind: "ambiguous", detail: `could not inspect role path (${reason}); refusing to guess` };
+    }
+    if (probe.isDirectory()) {
+        return { role, path, kind: "ambiguous", detail: "role path is a directory, not a regular file" };
+    }
+    if (probe.isSymbolicLink() || !probe.isFile()) {
+        return { role, path, kind: "ambiguous", detail: "role path is not a regular file" };
+    }
+    let existing;
+    try {
+        existing = await readFile(path, "utf8");
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { role, path, kind: "ambiguous", detail: `role path could not be read (${reason}); refusing to guess` };
+    }
+    if (existing === wanted)
+        return null;
+    if (!isAriaManaged(existing)) {
+        return {
+            role,
+            path,
+            kind: "unowned",
+            detail: "pre-existing file carries no ARIA ownership marker (never silently overwritten)",
+        };
+    }
+    return null;
+}
+export async function reconcileManagedAgents(resolved, options = {}) {
+    const dir = options.dir ?? defaultAgentsDir();
+    const version = options.version ?? readPackageVersion();
+    const files = generateAgentFiles(resolved, version);
+    // Phase 1 — preflight every role path before overwriting anything.
+    const conflicts = [];
+    for (const role of ROLES) {
+        const conflict = await preflightRolePath(dir, role, files[role]);
+        if (conflict)
+            conflicts.push(conflict);
+    }
+    if (conflicts.length > 0)
+        throw new AgentReconciliationError(conflicts, dir);
+    await mkdir(dir, { recursive: true });
+    // Phase 2 — same write/skip decisions as `installAgentFiles`. The unowned
+    // branch is unreachable after preflight except on a concurrent rename, so
+    // it fails closed (never backs up silently) instead of backing up.
+    const result = {
+        dir,
+        version,
+        written: [],
+        unchanged: [],
+        tampered: [],
+        backups: {},
+        previousContents: {},
+    };
+    try {
+        for (const role of ROLES) {
+            const path = join(dir, agentFileName(role));
+            const wanted = files[role];
+            const existing = await readExisting(path);
+            if (existing === undefined) {
+                await writeFileAtomic(path, wanted);
+                result.written.push(role);
+                continue;
+            }
+            if (existing === wanted) {
+                result.unchanged.push(role);
+                continue;
+            }
+            if (!isAriaManaged(existing)) {
+                throw new AgentReconciliationError([{
+                        role,
+                        path,
+                        kind: "unowned",
+                        detail: "role path changed under reconciliation (pre-existing file carries no ARIA ownership marker); refusing to overwrite",
+                    }], dir);
+            }
+            if (!verifyManagedContent(existing))
+                result.tampered.push(role);
+            result.previousContents[role] = existing;
+            await writeFileAtomic(path, wanted);
+            result.written.push(role);
+        }
+    }
+    catch (error) {
+        await rollbackAgentInstall(dir, result).catch(() => undefined);
+        error.partialResult = result;
+        throw error;
+    }
+    return result;
 }
 //# sourceMappingURL=agents.js.map

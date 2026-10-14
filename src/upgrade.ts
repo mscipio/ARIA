@@ -21,6 +21,7 @@ import {
 import { doctorExitCode, runDoctor } from "./doctor.js";
 import { engramUpgradeComponent } from "./engram.js";
 import { classifyAriaRegistration, parsePluginList } from "./lifecycle.js";
+import { reconcileManagedAgents } from "./model-config.js";
 import { openCodeGlobalDir } from "./paths.js";
 import { checkQuotaUpgrade } from "./quota.js";
 import { zotpilotUpgradeComponent } from "./zotpilot.js";
@@ -1214,6 +1215,36 @@ export interface UpgradeContinuationOptions {
 }
 
 export type ContinuationStage = "complete" | "drift-blocked" | "component-stopped" | "phase-stopped";
+
+/**
+ * T002 post-handoff managed-agent regen phase (strict reconciliation).
+ *
+ * Runs ONLY in the new release after registration/normalization and before
+ * deps-sync/doctor (phase order owned by `continueUpgradeInNewRelease` below:
+ * normalize → regen → deps-sync → doctor). Uses the strict
+ * `reconcileManagedAgents` wrapper (T001: packaged defaults plus the
+ * supported global overlay via `resolveSetupAriaConfig`, fail-closed on
+ * unowned/ambiguous role paths, unrelated files untouched) — never the
+ * tolerant standalone-setup `installAgentFiles` (preserved in
+ * `src/lifecycle.ts`). Reconciliation conflicts return a failed phase
+ * (`ok: false`) so the continuation stops as `phase-stopped` with the
+ * actionable conflict detail; nothing is thrown past the phase boundary.
+ */
+export async function runManagedAgentRegenPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome> {
+  try {
+    const dir = ctx.configDir ? join(openCodeGlobalDir(ctx.configDir), "agents") : undefined;
+    const result = await reconcileManagedAgents(process.cwd(), dir ? { dir } : {});
+    const tamperedNote = result.tampered.length > 0 ? ` (tampered regenerated: ${result.tampered.join(", ")})` : "";
+    return {
+      ok: true,
+      detail: `managed-agent reconciliation: ${result.written.length} written, ${result.unchanged.length} unchanged${tamperedNote} in ${result.dir} (v${result.version})`,
+      mutated: result.written.length > 0,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, detail: `managed-agent reconciliation failed: ${reason}`, mutated: false };
+  }
+}
 
 export interface UpgradeContinuationResult {
   stage: ContinuationStage;

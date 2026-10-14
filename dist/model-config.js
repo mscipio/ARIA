@@ -5,9 +5,10 @@ import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadDefaultConfig } from "./defaults.js";
-import { defaultAgentsDir, installAgentFiles } from "./agents.js";
+import { defaultAgentsDir, installAgentFiles, reconcileManagedAgents as reconcileAgentFiles } from "./agents.js";
 import { parseOverrides, readGlobalAriaOverrides, readProjectAriaOverrides, resolveAriaConfig } from "./overrides.js";
 import { openCodeGlobalDir } from "./paths.js";
+import { resolveSetupAriaConfig } from "./setup-config.js";
 /**
  * Discovery failed; no configuration has been written or changed.
  */
@@ -575,17 +576,37 @@ async function finalizeGlobalConfiguration(params) {
  * T003 — Regenerate managed agent files from freshly resolved routes.
  *
  * Project-neutral (packaged defaults plus global overrides only, never
- * CWD project models) so global files never bake in project state; the
- * worktree argument only anchors project-neutral resolution. Unmanaged
- * pre-existing files are backed up and unrelated files untouched via
- * `installAgentFiles`. Callers invoke this only after a successful route
- * write; failed writes must never rewrite agents.
+ * CWD project models) via `resolveSetupAriaConfig`, so global files never
+ * bake in project state; the worktree argument only anchors
+ * project-neutral resolution. Unmanaged pre-existing files are backed up
+ * and unrelated files untouched via `installAgentFiles`. Callers invoke this
+ * only after a successful route write; failed writes must never rewrite
+ * agents. Standalone setup behavior is preserved (tolerant, never
+ * fail-closed); post-handoff continuation uses `reconcileManagedAgents`
+ * below instead.
  */
 export async function regenerateManagedAgents(worktree, options = {}) {
     const dir = options.dir ?? defaultAgentsDir();
     // Fresh read after the route write: defaults + global overrides only.
-    const fresh = resolveAriaConfig(worktree, { skipProject: true });
+    const fresh = resolveSetupAriaConfig(worktree);
     return installAgentFiles(fresh, { dir });
+}
+/**
+ * Strict post-handoff managed-agent reconciliation from freshly resolved
+ * routes.
+ *
+ * Same project-neutral resolution as `regenerateManagedAgents` (packaged
+ * defaults plus the supported global overlay via `resolveSetupAriaConfig`,
+ * never project-local overrides; no config model is introduced), but
+ * unowned or ambiguous role paths fail closed with an actionable
+ * `AgentReconciliationError` before anything is overwritten, and unrelated
+ * files are never inspected or mutated. Standalone setup keeps
+ * `regenerateManagedAgents` above.
+ */
+export async function reconcileManagedAgents(worktree, options = {}) {
+    const dir = options.dir ?? defaultAgentsDir();
+    const fresh = resolveSetupAriaConfig(worktree);
+    return reconcileAgentFiles(fresh, { dir });
 }
 /**
  * Lightweight interactive model configuration for `aria setup --configure`.

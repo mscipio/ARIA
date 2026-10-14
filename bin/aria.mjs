@@ -415,7 +415,13 @@ async function main() {
     if (handoffJson !== undefined) {
       try {
         const { receiveUpgradeHandoff } = await import("../dist/aria-upgrade.js");
-        const result = await receiveUpgradeHandoff(handoffJson, loadVersion());
+        const { runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
+        const result = await receiveUpgradeHandoff(handoffJson, loadVersion(), {
+          // T002: post-handoff continuation reconciles managed agents with
+          // the strict fail-closed phase (after normalization, before
+          // deps-sync/doctor); conflicts stop as a failed phase.
+          regenFn: (ctx) => runManagedAgentRegenPhase(ctx),
+        });
         if (result.report) console.log(result.report);
         console.log(result.stage === "complete" ? "Upgrade: complete" : `Upgrade: stopped (${result.stage})`);
         console.log(result.detail);
@@ -435,12 +441,18 @@ async function main() {
     // re-run guidance and zero mutation.
     if (migrateFrom !== undefined) {
       try {
-        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode } = await import("../dist/upgrade.js");
+        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode, runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
         const { migrateAriaFromExact } = await import("../dist/aria-upgrade.js");
         const result = await runMigrateUpgrade(undefined, {
           migrateFrom,
           approval: { yes },
           migrateFn: (fromSpec, target, handoff) => migrateAriaFromExact(fromSpec, target, handoff),
+          // T002: in-process post-handoff continuation reconciles managed
+          // agents with the strict fail-closed phase (after normalization,
+          // before deps-sync/doctor); conflicts stop as a failed phase.
+          continuation: {
+            regenFn: (ctx) => runManagedAgentRegenPhase(ctx),
+          },
         });
         console.log(formatMigrateResult(result));
         return migrateExitCode(result);

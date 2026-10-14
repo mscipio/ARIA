@@ -1,4 +1,4 @@
-import { installAgentFiles } from "./agents.js";
+import { installAgentFiles, reconcileManagedAgents as reconcileAgentFiles } from "./agents.js";
 import type { RoleName } from "./types.js";
 /**
  * An available model, normalized to ARIA's providerID/modelID identifier.
@@ -111,15 +111,33 @@ export interface ModelConfigurationResult {
  * T003 — Regenerate managed agent files from freshly resolved routes.
  *
  * Project-neutral (packaged defaults plus global overrides only, never
- * CWD project models) so global files never bake in project state; the
- * worktree argument only anchors project-neutral resolution. Unmanaged
- * pre-existing files are backed up and unrelated files untouched via
- * `installAgentFiles`. Callers invoke this only after a successful route
- * write; failed writes must never rewrite agents.
+ * CWD project models) via `resolveSetupAriaConfig`, so global files never
+ * bake in project state; the worktree argument only anchors
+ * project-neutral resolution. Unmanaged pre-existing files are backed up
+ * and unrelated files untouched via `installAgentFiles`. Callers invoke this
+ * only after a successful route write; failed writes must never rewrite
+ * agents. Standalone setup behavior is preserved (tolerant, never
+ * fail-closed); post-handoff continuation uses `reconcileManagedAgents`
+ * below instead.
  */
 export declare function regenerateManagedAgents(worktree: string, options?: {
     dir?: string;
 }): ReturnType<typeof installAgentFiles>;
+/**
+ * Strict post-handoff managed-agent reconciliation from freshly resolved
+ * routes.
+ *
+ * Same project-neutral resolution as `regenerateManagedAgents` (packaged
+ * defaults plus the supported global overlay via `resolveSetupAriaConfig`,
+ * never project-local overrides; no config model is introduced), but
+ * unowned or ambiguous role paths fail closed with an actionable
+ * `AgentReconciliationError` before anything is overwritten, and unrelated
+ * files are never inspected or mutated. Standalone setup keeps
+ * `regenerateManagedAgents` above.
+ */
+export declare function reconcileManagedAgents(worktree: string, options?: {
+    dir?: string;
+}): ReturnType<typeof reconcileAgentFiles>;
 /**
  * Lightweight interactive model configuration for `aria setup --configure`.
  *
