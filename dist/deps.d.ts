@@ -7,6 +7,12 @@ export type ExecutorOptions = {
      * persisted to any file). Absent means inherit the ambient environment.
      */
     env?: NodeJS.ProcessEnv;
+    /**
+     * Per-call stdout/stderr buffer cap (bytes) for the spawned process.
+     * Absent means Node's default limit. Set only where a response is known
+     * to exceed it (Engram releases list); all other calls omit it.
+     */
+    maxBuffer?: number;
 };
 export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{
     stdout: string;

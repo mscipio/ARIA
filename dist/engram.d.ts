@@ -25,6 +25,26 @@ export interface EngramLifecycleOptions {
     configDir?: string;
     /** Filesystem seam for channel detection + GitHub-asset verification. */
     fileOps?: DependencyFileOps;
+    /** Injectable delay for the MCP-list convergence backoff only (default: real setTimeout). */
+    delay?: (ms: number) => Promise<void>;
+    /**
+     * Bounded `opencode mcp list` convergence bound (default 3 polls/100ms:
+     * 1 initial read + 2 additional polls, 200ms worst-case added latency,
+     * sub-second). Shape mirrors `ListConvergenceBound` in
+     * `src/aria-upgrade.ts`; version + statusline checks ignore it.
+     */
+    mcpConvergence?: McpConvergenceBound;
+}
+/**
+ * Bound for the MCP connectivity read only. Mirrors the
+ * `ListConvergenceBound` seam shape in `src/aria-upgrade.ts`
+ * (`pollListConvergence`): `attempts` caps total polls (first read plus
+ * retries), `delayMs` separates retries. Both injectable so tests use a
+ * fake delay with no real sleeps.
+ */
+export interface McpConvergenceBound {
+    attempts?: number;
+    delayMs?: number;
 }
 export interface EngramState {
     found: boolean;

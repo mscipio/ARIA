@@ -21,12 +21,19 @@
 //   T007 Quota adapter). Dual `opencode.json` + `opencode.jsonc` ambiguity
 //   likewise fails closed with zero mutation (T002).
 // - Validation is version + `opencode mcp list` connectivity + statusline
-//   absence; validation/setup failures restore the snapshotted global config
+//   absence; the connectivity read alone retries on a bounded,
+//   injectable-delay convergence bound (version + statusline stay
+//   single-shot) and fails closed after exhaustion. Validation/setup
+//   failures restore the snapshotted global config — the four managed JSONs
+//   plus the demonstrated `plugins/engram.ts` side effect, byte-precise —
 //   where feasible (the installed binary itself is left in place and
-//   reported, same rule as the T016 bootstrap + T007 adapters).
+//   reported, same rule as the T016 bootstrap + T007 adapters). Unsnapshottable
+//   prior state (unreadable/unstatable pre-existing file) fails closed before
+//   setup with zero mutation and zero deletion; rollback deletes only
+//   proven-absent (ENOENT-stat) files, never unknown state.
 // ---------------------------------------------------------------------------
 
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { BOOTSTRAP_EVIDENCE } from "./bootstrap.js";
@@ -40,6 +47,7 @@ import {
   syncEngramHomebrew,
   type DependencyFileOps,
   type Executor,
+  type McpStatus,
 } from "./deps.js";
 import { openCodeGlobalDir } from "./paths.js";
 import type { ComponentContext, ComponentUpgradeOutcome } from "./upgrade.js";
@@ -81,6 +89,27 @@ export interface EngramLifecycleOptions {
   configDir?: string;
   /** Filesystem seam for channel detection + GitHub-asset verification. */
   fileOps?: DependencyFileOps;
+  /** Injectable delay for the MCP-list convergence backoff only (default: real setTimeout). */
+  delay?: (ms: number) => Promise<void>;
+  /**
+   * Bounded `opencode mcp list` convergence bound (default 3 polls/100ms:
+   * 1 initial read + 2 additional polls, 200ms worst-case added latency,
+   * sub-second). Shape mirrors `ListConvergenceBound` in
+   * `src/aria-upgrade.ts`; version + statusline checks ignore it.
+   */
+  mcpConvergence?: McpConvergenceBound;
+}
+
+/**
+ * Bound for the MCP connectivity read only. Mirrors the
+ * `ListConvergenceBound` seam shape in `src/aria-upgrade.ts`
+ * (`pollListConvergence`): `attempts` caps total polls (first read plus
+ * retries), `delayMs` separates retries. Both injectable so tests use a
+ * fake delay with no real sleeps.
+ */
+export interface McpConvergenceBound {
+  attempts?: number;
+  delayMs?: number;
 }
 
 export interface EngramState {
@@ -104,20 +133,98 @@ export async function detectEngramState(executor: Executor, fileOps?: Dependency
   return { found: true, version: detected.version, channel };
 }
 
-type FileSnapshot = { path: string; raw: Buffer | null };
+type FileSnapshot =
+  | { path: string; raw: Buffer; state: "present" }
+  | { path: string; raw: null; state: "absent" }
+  | { path: string; raw: null; state: "unknown"; error: string };
 
 function managedPaths(base: string): string[] {
-  return [join(base, "opencode.json"), join(base, "opencode.jsonc"), join(base, "cli.json"), join(base, "tui.json")];
+  return [
+    join(base, "opencode.json"),
+    join(base, "opencode.jsonc"),
+    join(base, "cli.json"),
+    join(base, "tui.json"),
+    // Demonstrated `engram setup opencode` side effect only (isolated
+    // scratch-XDG tree-diff 2026-10-14, engram 3.4.0): the OpenCode plugin
+    // adapter — created at 54945 bytes when absent, rewritten with identical
+    // bytes when present, merged-preserved neighbors otherwise. No other
+    // file appeared anywhere in the isolated tree, so no wider scope.
+    join(base, "plugins", "engram.ts"),
+  ];
+}
+
+function defaultDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Default MCP-list convergence: 3 polls/100ms — 1 initial read plus 2
+ * additional polls, 200ms worst-case added latency (sub-second total).
+ */
+const DEFAULT_MCP_CONVERGENCE: Required<McpConvergenceBound> = { attempts: 3, delayMs: 100 };
+
+/**
+ * Bounded `opencode mcp list` connectivity read: returns the first sample
+ * reporting Engram connected, else the last sample once the bound is
+ * exhausted. ONLY this read retries; the version (`detectEngram`) and
+ * statusline checks stay single-shot. Callers fail closed on exhaustion
+ * (validation-failed + rollback).
+ */
+async function pollMcpConnectivity(
+  executor: Executor,
+  bound: McpConvergenceBound,
+  delay: (ms: number) => Promise<void>,
+): Promise<McpStatus> {
+  const attempts = bound.attempts ?? DEFAULT_MCP_CONVERGENCE.attempts;
+  const delayMs = bound.delayMs ?? DEFAULT_MCP_CONVERGENCE.delayMs;
+  const total = Math.max(1, attempts);
+  let last: McpStatus = { engram: false, context7: false, codegraph: false, listFailed: true };
+  for (let poll = 1; poll <= total; poll++) {
+    if (poll > 1) await delay(delayMs);
+    const sample = await detectMcpConnectivity(executor);
+    if (sample.engram === true) return sample;
+    last = sample;
+  }
+  return last;
+}
+
+function snapshotErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code ? `${code}: ${error.message}` : error.message;
+  }
+  return String(error);
+}
+
+async function snapshotOneFile(path: string): Promise<FileSnapshot> {
+  // Stat first so genuine absence (ENOENT) is proven by the stat itself —
+  // never inferred from a failed read. A stat success means something exists
+  // at the path, so a subsequent read failure (EACCES or otherwise) leaves
+  // the prior state unsnapshottable (unknown), never absent.
+  try {
+    await stat(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") return { path, raw: null, state: "absent" };
+    // Unstatable (EACCES or other): attempt one read — an unexpected success
+    // still yields exact bytes, otherwise the state is unknown.
+    try {
+      return { path, raw: await readFile(path), state: "present" };
+    } catch (readError) {
+      return { path, raw: null, state: "unknown", error: snapshotErrorMessage(readError) };
+    }
+  }
+  try {
+    return { path, raw: await readFile(path), state: "present" };
+  } catch (error) {
+    return { path, raw: null, state: "unknown", error: snapshotErrorMessage(error) };
+  }
 }
 
 async function snapshotManagedFiles(base: string): Promise<FileSnapshot[]> {
   const snapshots: FileSnapshot[] = [];
   for (const path of managedPaths(base)) {
-    try {
-      snapshots.push({ path, raw: await readFile(path) });
-    } catch {
-      snapshots.push({ path, raw: null });
-    }
+    snapshots.push(await snapshotOneFile(path));
   }
   return snapshots;
 }
@@ -126,10 +233,15 @@ async function restoreSnapshots(snapshots: FileSnapshot[]): Promise<boolean> {
   let ok = true;
   for (const snapshot of snapshots) {
     try {
-      if (snapshot.raw === null) {
+      if (snapshot.state === "absent") {
+        // Deletion is permitted ONLY here: genuine absence was proven by an
+        // ENOENT stat before any mutation, so only an invocation-created
+        // file can be removed. Unknown prior state is never deleted.
         await rm(snapshot.path, { force: true });
-      } else {
+      } else if (snapshot.state === "present") {
         await writeFile(snapshot.path, snapshot.raw);
+      } else {
+        ok = false;
       }
     } catch {
       ok = false;
@@ -140,14 +252,15 @@ async function restoreSnapshots(snapshots: FileSnapshot[]): Promise<boolean> {
 
 async function snapshotsChanged(snapshots: FileSnapshot[]): Promise<boolean> {
   for (const snapshot of snapshots) {
+    if (snapshot.state === "unknown") return true;
     let current: Buffer | null = null;
     try {
       current = await readFile(snapshot.path);
     } catch {
       current = null;
     }
-    if (snapshot.raw === null && current === null) continue;
-    if (snapshot.raw === null || current === null) return true;
+    if (snapshot.state === "absent" && current === null) continue;
+    if (snapshot.state === "absent" || current === null) return true;
     if (!snapshot.raw.equals(current)) return true;
   }
   return false;
@@ -204,6 +317,27 @@ export async function ensureEngram(executor: Executor, options: EngramLifecycleO
 
   const base = openCodeGlobalDir(configDir);
   const snapshots = await snapshotManagedFiles(base);
+
+  // T006 snapshot guard: when prior state cannot be snapshotted (unstatable
+  // or unreadable pre-existing file — EACCES or other non-ENOENT failure),
+  // fail closed BEFORE any setup mutation with zero rollback deletion. Only
+  // a proven-absent (ENOENT stat) snapshot may later be deleted; unknown
+  // state is never removed.
+  const unsnapshotted = snapshots.filter((snapshot) => snapshot.state === "unknown");
+  if (unsnapshotted.length > 0) {
+    const statusline = await detectIncompatibleStatusline(configDir);
+    return {
+      status: "validation-failed",
+      installedVersion: null,
+      resultingVersion: null,
+      channel: "unknown",
+      detail: `pre-change snapshot failed for ${unsnapshotted.map((snapshot) => `${snapshot.path} (${snapshot.error})`).join(", ")}; prior state cannot be safely restored, leaving Engram untouched with zero setup mutation and zero deletion`,
+      mutated: false,
+      rolledBack: false,
+      mcpConnected: false,
+      statuslineAbsent: !statusline.present,
+    };
+  }
 
   // Dual-file ambiguity (T002): never guess which file is redundant.
   const beforeJson = snapshots[0]?.raw ?? null;
@@ -351,7 +485,7 @@ export async function ensureEngram(executor: Executor, options: EngramLifecycleO
     // Surfaced below via the absence check.
   }
   const final = await detectEngram(executor);
-  const mcp = await detectMcpConnectivity(executor);
+  const mcp = await pollMcpConnectivity(executor, options.mcpConvergence ?? {}, options.delay ?? defaultDelay);
   const statusline = await detectIncompatibleStatusline(configDir);
   const connected = mcp.engram === true;
   const absent = !statusline.present;

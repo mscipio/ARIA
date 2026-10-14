@@ -2335,3 +2335,57 @@ describe("defaultExecutor ComSpec branch", () => {
     expect(file).toBe("cmd.exe");
   });
 });
+
+// ---------------------------------------------------------------------------
+// T003 oversized releases-list fetch (v1.0.12): a releases response above
+// Node's ~1MB default execFile buffer but below the 4MiB bound succeeds, and
+// only that fetch carries the raised maxBuffer — all other calls keep the
+// existing defaults. No Homebrew argv changes.
+// ---------------------------------------------------------------------------
+
+describe("T003 releases-list fetch buffer bound", () => {
+  it("reads an oversized (>1MB, <4MiB) releases payload with maxBuffer 4194304 on that fetch alone", async () => {
+    const root = await mkdtemp(resolve(tmpdir(), "rdc-t003-buffer-"));
+    tempDirs.push(root);
+    const configDir = resolve(root, ".config", "opencode");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ mcp: {} }));
+
+    const base = buildReleasesJson([
+      {
+        tag: "v1.20.0",
+        assets: [
+          "engram_1.20.0_darwin_amd64.tar.gz",
+          "engram_1.20.0_darwin_arm64.tar.gz",
+          "engram_1.20.0_linux_amd64.tar.gz",
+          "engram_1.20.0_linux_arm64.tar.gz",
+        ],
+      },
+    ]);
+    // Pad above Node's ~1MB default execFile buffer, still below the 4MiB bound.
+    const payload = `${base}${" ".repeat(1_200_000)}`;
+    expect(payload.length).toBeGreaterThan(1_048_576);
+    expect(payload.length).toBeLessThan(4_194_304);
+
+    const seenMaxBuffer = new Map<string, number | undefined>();
+    const executor: Executor = async (command, args, options) => {
+      const key = `${command} ${args.join(" ")}`;
+      seenMaxBuffer.set(key, options?.maxBuffer);
+      if (command === "curl" && args.some((a) => a.includes("api.github.com"))) return { stdout: payload, stderr: "" };
+      if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
+      if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+      throw new Error(`unexpected: ${key}`);
+    };
+
+    const result = await syncEngramGitHub(executor, githubFileOps(""), configDir);
+    expect(result.action).toBe("already-latest");
+    expect(result.version).toBe("1.20.0");
+    const releasesKey = "curl -fsSL https://api.github.com/repos/Gentleman-Programming/engram/releases?per_page=100";
+    expect(seenMaxBuffer.get(releasesKey)).toBe(4194304);
+    // Every other invocation keeps the existing default (no maxBuffer).
+    for (const [key, maxBuffer] of seenMaxBuffer) {
+      if (key === releasesKey) continue;
+      expect(maxBuffer, key).toBeUndefined();
+    }
+  });
+});

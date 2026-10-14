@@ -19,6 +19,12 @@ export type ExecutorOptions = {
    * persisted to any file). Absent means inherit the ambient environment.
    */
   env?: NodeJS.ProcessEnv;
+  /**
+   * Per-call stdout/stderr buffer cap (bytes) for the spawned process.
+   * Absent means Node's default limit. Set only where a response is known
+   * to exceed it (Engram releases list); all other calls omit it.
+   */
+  maxBuffer?: number;
 };
 export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{ stdout: string; stderr: string }>;
 
@@ -178,6 +184,9 @@ const defaultExecutor: Executor = async (command, args, options) => {
     // Per-call additions only (never assigned to `process.env`); inherit the
     // ambient environment untouched when no additions are given.
     ...(options?.env ? { env: { ...process.env, ...options.env } } : {}),
+    // Finite buffer only when the caller sets one; otherwise Node's default
+    // limit applies (all unrelated invocations omit maxBuffer).
+    ...(options?.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
   };
 
   if (resolved.useComSpec) {
@@ -245,14 +254,18 @@ export interface SyncResult {
 // Command execution helpers
 // ---------------------------------------------------------------------------
 
-async function run(executor: Executor, command: string, ...args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+async function runWithOptions(executor: Executor, options: ExecutorOptions | undefined, command: string, ...args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
   try {
-    const result = await executor(command, args);
+    const result = await executor(command, args, options);
     return { ok: true, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { ok: false, stdout: "", stderr: message };
   }
+}
+
+async function run(executor: Executor, command: string, ...args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  return runWithOptions(executor, undefined, command, ...args);
 }
 
 // ---------------------------------------------------------------------------
@@ -635,8 +648,9 @@ async function syncEngramGitHub(executor: Executor, fileOps: DependencyFileOps =
     return { action: "unsupported-platform", error: `Unsupported platform: ${process.platform}/${process.arch}` };
   }
 
-  // Fetch releases list from GitHub API
-  const releasesResult = await run(executor, "curl", "-fsSL", "https://api.github.com/repos/Gentleman-Programming/engram/releases?per_page=100");
+  // Fetch releases list from GitHub API (4 MiB cap: the ~1.8 MB response
+  // exceeds Node's ~1 MB default execFile buffer; all other calls keep defaults).
+  const releasesResult = await runWithOptions(executor, { maxBuffer: 4194304 }, "curl", "-fsSL", "https://api.github.com/repos/Gentleman-Programming/engram/releases?per_page=100");
   if (!releasesResult.ok) {
     return { action: "fetch-failed", error: `Failed to fetch releases: ${releasesResult.stderr}` };
   }

@@ -129,6 +129,9 @@ const defaultExecutor = async (command, args, options) => {
         // Per-call additions only (never assigned to `process.env`); inherit the
         // ambient environment untouched when no additions are given.
         ...(options?.env ? { env: { ...process.env, ...options.env } } : {}),
+        // Finite buffer only when the caller sets one; otherwise Node's default
+        // limit applies (all unrelated invocations omit maxBuffer).
+        ...(options?.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
     };
     if (resolved.useComSpec) {
         const comSpecArgs = buildComSpecArgs(resolved.command, args);
@@ -141,15 +144,18 @@ const defaultExecutor = async (command, args, options) => {
 // ---------------------------------------------------------------------------
 // Command execution helpers
 // ---------------------------------------------------------------------------
-async function run(executor, command, ...args) {
+async function runWithOptions(executor, options, command, ...args) {
     try {
-        const result = await executor(command, args);
+        const result = await executor(command, args, options);
         return { ok: true, stdout: result.stdout.trim(), stderr: result.stderr.trim() };
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return { ok: false, stdout: "", stderr: message };
     }
+}
+async function run(executor, command, ...args) {
+    return runWithOptions(executor, undefined, command, ...args);
 }
 // ---------------------------------------------------------------------------
 // OpenCode config path discovery (supports .json and .jsonc)
@@ -504,8 +510,9 @@ async function syncEngramGitHub(executor, fileOps = defaultFileOps, configDir) {
     if (!platform) {
         return { action: "unsupported-platform", error: `Unsupported platform: ${process.platform}/${process.arch}` };
     }
-    // Fetch releases list from GitHub API
-    const releasesResult = await run(executor, "curl", "-fsSL", "https://api.github.com/repos/Gentleman-Programming/engram/releases?per_page=100");
+    // Fetch releases list from GitHub API (4 MiB cap: the ~1.8 MB response
+    // exceeds Node's ~1 MB default execFile buffer; all other calls keep defaults).
+    const releasesResult = await runWithOptions(executor, { maxBuffer: 4194304 }, "curl", "-fsSL", "https://api.github.com/repos/Gentleman-Programming/engram/releases?per_page=100");
     if (!releasesResult.ok) {
         return { action: "fetch-failed", error: `Failed to fetch releases: ${releasesResult.stderr}` };
     }

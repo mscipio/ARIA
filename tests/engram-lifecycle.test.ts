@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -395,6 +395,274 @@ describe("T012 shared component wrapper", () => {
         configDir: other,
       });
       expect(skipped).toMatchObject({ component: "engram", status: "skipped", mutated: false });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T003 bounded MCP convergence + precise rollback regressions (v1.0.12).
+//
+// Uses only the existing seams (withTempXdg/snapshotTree/expectByteIdentical
+// plus the injectable `delay`/`mcpConvergence` options as a fake clock): no
+// real sleeps, no live mutation, no Homebrew argv changes.
+// ---------------------------------------------------------------------------
+
+const T003_STALE_MCP = ["engram disconnected", "1 server(s)"].join("\n");
+const T003_CONNECTED_MCP = ["engram connected", "1 server(s)"].join("\n");
+const T003_EXACT_BREW_INSTALL = "brew install --formula gentleman-programming/tap/engram";
+
+describe("T003 bounded MCP-list convergence (stale-then-connected)", () => {
+  it("converges within the bound on a scripted stale queue with a fake clock and no real sleeps", async () => {
+    await withTempXdg(async () => {
+      const configDir = openCodeGlobalDir();
+      assertNotCallerGlobalPath(configDir, "temp XDG global dir");
+      await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["unrelated-plugin"] }));
+
+      const calls: string[] = [];
+      const delays: number[] = [];
+      let installed = false;
+      let mcpPolls = 0;
+      let versionCalls = 0;
+      const executor: Executor = async (command, args) => {
+        calls.push(`${command} ${args.join(" ")}`);
+        if (command === "engram" && args[0] === "version") {
+          versionCalls += 1;
+          if (!installed) throw new Error("not found");
+          return { stdout: "engram 1.20.0", stderr: "" };
+        }
+        if (command === "which" && args[0] === "brew") return { stdout: "/opt/homebrew/bin/brew", stderr: "" };
+        if (command === "brew" && args[0] === "install") {
+          installed = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+        if (command === "opencode" && args[0] === "mcp") {
+          mcpPolls += 1;
+          // Stale twice, then connected — converges inside 1 initial + 2 retries.
+          return { stdout: mcpPolls <= 2 ? T003_STALE_MCP : T003_CONNECTED_MCP, stderr: "" };
+        }
+        throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+      };
+
+      const result = await ensureEngram(executor, {
+        delay: async (ms) => {
+          delays.push(ms);
+        },
+        mcpConvergence: { attempts: 3, delayMs: 100 },
+      });
+
+      expect(result.status).toBe("installed");
+      expect(result.mcpConnected).toBe(true);
+      expect(result.statuslineAbsent).toBe(true);
+      // Bound honored: 3 polls with 2 injected delays and zero real sleeps.
+      expect(mcpPolls).toBe(3);
+      expect(delays).toEqual([100, 100]);
+      // Version + statusline stay single-shot: exactly the lifecycle's own
+      // reads (initial detect, post-install verify, final validation).
+      expect(versionCalls).toBe(3);
+      // Brew path unchanged: exact formula argv, no GitHub fetch.
+      expect(calls).toContain(T003_EXACT_BREW_INSTALL);
+      expect(calls.some((call) => call.includes("api.github.com"))).toBe(false);
+      // Unrelated entries preserved.
+      const main = JSON.parse(await readFile(resolve(configDir, "opencode.json"), "utf8"));
+      expect(main.plugins).toEqual(["unrelated-plugin"]);
+    });
+  });
+});
+
+describe("T003 never-converging mcp-list fails closed with rollback", () => {
+  it("exhausts the bound, reports validation-failed, and restores the byte-identical tree", async () => {
+    await withTempXdg(async () => {
+      const configDir = openCodeGlobalDir();
+      assertNotCallerGlobalPath(configDir, "temp XDG global dir");
+      await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["unrelated-plugin"] }));
+      await writeFile(resolve(configDir, "cli.json"), JSON.stringify({ plugins: ["keep-me"] }));
+      await writeFile(resolve(configDir, "notes.txt"), "unrelated note");
+      const before = await snapshotTree(configDir);
+
+      const delays: number[] = [];
+      let installed = false;
+      let mcpPolls = 0;
+      const executor: Executor = async (command, args) => {
+        if (command === "engram" && args[0] === "version") {
+          if (!installed) throw new Error("not found");
+          return { stdout: "engram 1.20.0", stderr: "" };
+        }
+        if (command === "which" && args[0] === "brew") return { stdout: "/opt/homebrew/bin/brew", stderr: "" };
+        if (command === "brew" && args[0] === "install") {
+          installed = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+        if (command === "opencode" && args[0] === "mcp") {
+          mcpPolls += 1;
+          return { stdout: T003_STALE_MCP, stderr: "" };
+        }
+        throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+      };
+
+      const result = await ensureEngram(executor, {
+        delay: async (ms) => {
+          delays.push(ms);
+        },
+        mcpConvergence: { attempts: 3, delayMs: 100 },
+      });
+
+      expect(result.status).toBe("validation-failed");
+      expect(result.rolledBack).toBe(true);
+      expect(result.mcpConnected).toBe(false);
+      expect(mcpPolls).toBe(3);
+      expect(delays).toEqual([100, 100]);
+      await expectByteIdentical(configDir, before);
+    });
+  });
+});
+
+describe("T003 rollback restores only the demonstrated plugin side effect", () => {
+  it("restores a pre-existing plugins/engram.ts byte-exact while leaving unrelated files untouched", async () => {
+    await withTempXdg(async () => {
+      const configDir = openCodeGlobalDir();
+      assertNotCallerGlobalPath(configDir, "temp XDG global dir");
+      await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["unrelated-plugin"] }));
+      await mkdir(join(configDir, "plugins"), { recursive: true });
+      const pluginPath = join(configDir, "plugins", "engram.ts");
+      const original = "// original engram plugin adapter\n";
+      await writeFile(pluginPath, original);
+      await writeFile(resolve(configDir, "notes.txt"), "unrelated note");
+      const before = await snapshotTree(configDir);
+
+      let installed = false;
+      const executor: Executor = async (command, args) => {
+        if (command === "engram" && args[0] === "version") {
+          if (!installed) throw new Error("not found");
+          return { stdout: "engram 1.20.0", stderr: "" };
+        }
+        if (command === "which" && args[0] === "brew") return { stdout: "/opt/homebrew/bin/brew", stderr: "" };
+        if (command === "brew" && args[0] === "install") {
+          installed = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "engram" && args[0] === "setup") {
+          // Simulate the native rewrite of the demonstrated adapter.
+          await writeFile(pluginPath, "// rewritten by native setup\n");
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "opencode" && args[0] === "mcp") return { stdout: T003_STALE_MCP, stderr: "" };
+        throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+      };
+
+      const result = await ensureEngram(executor, {
+        delay: async () => {},
+        mcpConvergence: { attempts: 3, delayMs: 100 },
+      });
+
+      expect(result.status).toBe("validation-failed");
+      expect(result.rolledBack).toBe(true);
+      expect(await readFile(pluginPath, "utf8")).toBe(original);
+      await expectByteIdentical(configDir, before);
+    });
+  });
+
+  it("deletes an invocation-created plugins/engram.ts orphan while preserving everything else", async () => {
+    await withTempXdg(async () => {
+      const configDir = openCodeGlobalDir();
+      assertNotCallerGlobalPath(configDir, "temp XDG global dir");
+      await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["unrelated-plugin"] }));
+      await writeFile(resolve(configDir, "notes.txt"), "unrelated note");
+      const before = await snapshotTree(configDir);
+      const pluginPath = join(configDir, "plugins", "engram.ts");
+
+      let installed = false;
+      const executor: Executor = async (command, args) => {
+        if (command === "engram" && args[0] === "version") {
+          if (!installed) throw new Error("not found");
+          return { stdout: "engram 1.20.0", stderr: "" };
+        }
+        if (command === "which" && args[0] === "brew") return { stdout: "/opt/homebrew/bin/brew", stderr: "" };
+        if (command === "brew" && args[0] === "install") {
+          installed = true;
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "engram" && args[0] === "setup") {
+          // Simulate the native creation of the demonstrated adapter.
+          await mkdir(join(configDir, "plugins"), { recursive: true });
+          await writeFile(pluginPath, "// created by native setup\n");
+          return { stdout: "", stderr: "" };
+        }
+        if (command === "opencode" && args[0] === "mcp") return { stdout: T003_STALE_MCP, stderr: "" };
+        throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+      };
+
+      const result = await ensureEngram(executor, {
+        delay: async () => {},
+        mcpConvergence: { attempts: 3, delayMs: 100 },
+      });
+
+      expect(result.status).toBe("validation-failed");
+      expect(result.rolledBack).toBe(true);
+      // Absent before and created by this invocation: deleted, not kept.
+      await expect(readFile(pluginPath, "utf8")).rejects.toThrow();
+      await expectByteIdentical(configDir, before);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T006 unreadable-pre-existing plugin fails closed (mode 0200).
+//
+// The snapshot path proves genuine absence by ENOENT stat — never by a failed
+// read. A statable-but-unreadable pre-existing plugins/engram.ts (EACCES)
+// leaves the prior state unsnapshottable, so ensureEngram fails closed BEFORE
+// setup with zero mutation and zero rollback deletion. Genuine-absent-created
+// cleanup above still applies.
+// ---------------------------------------------------------------------------
+
+describe("T006 unreadable pre-existing plugin fails closed without deletion", () => {
+  it("preserves a mode-0200 plugins/engram.ts (mode+bytes) with zero setup mutation", async () => {
+    await withTempXdg(async () => {
+      const configDir = openCodeGlobalDir();
+      assertNotCallerGlobalPath(configDir, "temp XDG global dir");
+      await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["unrelated-plugin"] }));
+      await mkdir(join(configDir, "plugins"), { recursive: true });
+      const pluginPath = join(configDir, "plugins", "engram.ts");
+      const original = "// original engram plugin adapter (unreadable)\n";
+      await writeFile(pluginPath, original);
+      await chmod(pluginPath, 0o200);
+
+      const calls: string[] = [];
+      const json = releasesJson("v1.20.0", ["engram_1.20.0_linux_amd64.tar.gz"]);
+      const executor: Executor = async (command, args) => {
+        calls.push(`${command} ${args.join(" ")}`);
+        if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
+        if (command === "brew" && args[0] === "list") return { stdout: "node\nyarn", stderr: "" };
+        if (command === "which" && args[0] === "engram") return { stdout: "/home/u/.local/bin/engram", stderr: "" };
+        if (command === "brew" && args[0] === "--cellar") return { stdout: "/Cellar", stderr: "" };
+        if (command === "curl" && args.some((arg) => arg.includes("api.github.com"))) return { stdout: json, stderr: "" };
+        if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+        if (command === "opencode" && args[0] === "mcp") return { stdout: T003_STALE_MCP, stderr: "" };
+        throw new Error(`unexpected: ${command} ${args.join(" ")}`);
+      };
+
+      const result = await ensureEngram(executor, {
+        fileOps: stubFileOps(),
+        delay: async () => {},
+        mcpConvergence: { attempts: 3, delayMs: 100 },
+      });
+
+      expect(result.status).toBe("validation-failed");
+      expect(result.mutated).toBe(false);
+      expect(result.rolledBack).toBe(false);
+      // Zero setup mutation: the native setup and any install/update never ran,
+      // and validation never polled.
+      expect(calls).not.toContain("engram setup opencode");
+      expect(calls.some((call) => call.startsWith("brew install"))).toBe(false);
+      expect(calls.some((call) => call.startsWith("opencode mcp"))).toBe(false);
+
+      // Pre-existing file preserved: still present with the unreadable mode,
+      // then byte-identical once readable again. Never deleted.
+      expect(((await stat(pluginPath)).mode & 0o777)).toBe(0o200);
+      await chmod(pluginPath, 0o600);
+      expect(await readFile(pluginPath, "utf8")).toBe(original);
     });
   });
 });
