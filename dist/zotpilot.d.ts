@@ -1,4 +1,5 @@
 import { type Executor } from "./deps.js";
+import { type DelayFn, type ListConvergenceBound } from "./list-convergence.js";
 import type { ComponentContext, ComponentUpgradeOutcome } from "./upgrade.js";
 /** Demonstrated-safe missing-install evidence owning this adapter's install path (T016). */
 export declare const ZOTPILOT_BOOTSTRAP_EVIDENCE: import("./bootstrap.js").BootstrapEvidence | undefined;
@@ -35,6 +36,13 @@ export interface ZotpilotLifecycleOptions {
     configDir?: string;
     /** Explicit home dir for the user-scoped ownership check (defaults to the invoking user's home). */
     homeDir?: string;
+    /**
+     * Bounded runtime MCP-list window (defaults to the shared 3 polls/100ms).
+     * Retries repeat read-only probes only, never another `pip install`.
+     */
+    convergence?: ListConvergenceBound;
+    /** Injectable clock (defaults to real setTimeout; fakes record, never sleep). */
+    delay?: DelayFn;
 }
 /**
  * Positive user-scoped ownership predicate (pure, testable): `user-scoped`

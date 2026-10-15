@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { stripJsoncComments } from "./deps.js";
+import { defaultDelay, verifyPersistedThenConverge, } from "./list-convergence.js";
 import { openCodeGlobalDir } from "./paths.js";
 // ---------------------------------------------------------------------------
 // Quota 5 dual policy (T007) — upgrade-only single owner
@@ -448,51 +449,62 @@ export async function upgradeQuota(executor, options = {}) {
             rolledBack,
         };
     }
-    // Validate: TUI + server surfaces survived.
-    const afterListResult = await runPluginList(executor);
-    const afterEntries = afterListResult.ok ? quotaEntriesFromPluginList(afterListResult.stdout) : null;
-    const afterState = await readQuotaConfigState(configDir);
-    const validationProblems = [];
-    if (afterEntries === null) {
-        validationProblems.push("post-upgrade plugin list is unavailable or unrecognized; registration surface not positively confirmed");
-    }
-    else if (afterEntries.length !== 1) {
-        validationProblems.push(afterEntries.length === 0
-            ? "quota plugin is no longer listed; registration surface lost"
-            : "quota plugin is listed more than once; registration surface ambiguous");
-    }
-    let afterQuotaSpec = null;
-    if (afterState.kind !== "single") {
-        if (snapshot !== null) {
-            validationProblems.push("global config is missing or ambiguous after the upgrade; config surface lost");
+    // Validate: persisted global config first (authoritative — the updater
+    // may rewrite the exact pin, so any surviving quota entry plus
+    // byte-preserved unrelated entries verifies it), then bounded runtime
+    // plugin-list convergence. A stale first list sample retries
+    // observation-only within the bound instead of rolling back a successful
+    // update. Exactly one `update --yes` ran above; polls below repeat
+    // `opencode plugin list` observation only, never mutation.
+    // Malformed/unrecognized list output fails closed (never success).
+    const verification = await verifyPersistedThenConverge(async () => {
+        const persisted = await readQuotaConfigState(configDir);
+        if (persisted.kind === "ambiguous") {
+            return {
+                kind: "ambiguous",
+                reason: "global opencode.json and opencode.jsonc both exist after the upgrade; dual-file ambiguity fails closed with neither file mutated",
+            };
         }
-    }
-    else if (afterState.unparseable) {
-        validationProblems.push(`global config is unparseable after the upgrade (${afterState.path}); config surface lost`);
-    }
-    else {
-        const afterQuotaSpecs = quotaSpecsFromConfig(afterState.parsed);
-        if (afterQuotaSpecs.length === 0) {
-            validationProblems.push("global config no longer carries a quota entry; config surface lost");
+        if (persisted.kind === "missing") {
+            return { kind: "unreadable", reason: "global config is missing after the upgrade; config surface lost" };
         }
-        else {
-            afterQuotaSpec = afterQuotaSpecs[0] ?? null;
+        if (persisted.unparseable) {
+            return { kind: "unreadable", reason: `${persisted.path}: invalid JSON after the upgrade; config surface lost` };
+        }
+        return { kind: "ok", value: { parsed: persisted.parsed, path: persisted.path, raw: persisted.raw, specs: persisted.specs } };
+    }, (config) => {
+        if (config.specs.length === 0) {
+            return { ok: false, reason: "global config no longer carries a quota entry; config surface lost" };
         }
         if (beforeNonQuota !== null) {
-            const afterNonQuota = allPluginSpecsFromConfig(afterState.parsed).filter((spec) => !mentionsQuotaPackage(spec));
+            const afterNonQuota = allPluginSpecsFromConfig(config.parsed).filter((spec) => !mentionsQuotaPackage(spec));
             if (!multisetEqual(beforeNonQuota, afterNonQuota)) {
-                validationProblems.push("unrelated global plugin entries changed during the upgrade");
+                return { ok: false, reason: "unrelated global plugin entries changed during the upgrade" };
             }
         }
-    }
-    if (validationProblems.length > 0) {
+        return { ok: true };
+    }, async () => {
+        const listResult = await runPluginList(executor);
+        return listResult.ok ? quotaEntriesFromPluginList(listResult.stdout) : null;
+    }, (entries) => {
+        if (entries.length === 1)
+            return { ok: true };
+        return {
+            ok: false,
+            reason: entries.length === 0
+                ? "quota plugin is no longer listed; registration surface lost"
+                : "quota plugin is listed more than once; registration surface ambiguous",
+        };
+    }, options.convergence ?? {}, options.delay ?? defaultDelay);
+    if (verification.outcome !== "converged") {
         const rolledBack = await restoreSnapshot(snapshot);
+        const problem = verification.reason ?? "runtime plugin list did not converge within the bound";
         return {
             status: "validation-failed",
             installedSpec: identified.spec,
             installedVersion: identified.version,
             resultingSpec: null,
-            detail: `upgrade validation failed (${validationProblems.join("; ")}). ${snapshot === null
+            detail: `upgrade validation failed (${problem}). ${snapshot === null
                 ? "No global config snapshot existed; state is exactly as the updater left it."
                 : rolledBack
                     ? `Global config restored to the pre-upgrade bytes (${snapshot.path}).`
@@ -501,12 +513,14 @@ export async function upgradeQuota(executor, options = {}) {
             rolledBack,
         };
     }
+    const afterEntries = verification.runtime;
+    const afterQuotaSpec = quotaSpecsFromConfig(verification.persisted.parsed)[0] ?? null;
     // The updater is a no-op when already current: bytes prove it, so report
     // it instead of claiming an upgrade.
-    const configIdentical = snapshot === null
-        ? afterState.kind === "missing"
-        : afterState.kind === "single" && afterState.raw.equals(snapshot.raw);
-    const listIdentical = beforeListText === null ? afterEntries === null : JSON.stringify(afterEntries) === beforeListText;
+    // Convergence implies a single post-upgrade config read, so a missing
+    // pre-upgrade snapshot means the config newly appeared (never identical).
+    const configIdentical = snapshot === null ? false : verification.persisted.raw.equals(snapshot.raw);
+    const listIdentical = beforeListText === null ? false : JSON.stringify(afterEntries) === beforeListText;
     if (configIdentical && listIdentical) {
         return {
             status: "already-current",
@@ -518,12 +532,12 @@ export async function upgradeQuota(executor, options = {}) {
             rolledBack: false,
         };
     }
-    const keptId = afterEntries !== null && afterEntries.length === 1 ? afterEntries[0]?.id ?? QUOTA_PLUGIN_ID : QUOTA_PLUGIN_ID;
+    const keptId = afterEntries[0]?.id ?? QUOTA_PLUGIN_ID;
     return {
         status: "upgraded",
         installedSpec: identified.spec,
         installedVersion: identified.version,
-        resultingSpec: afterQuotaSpec ?? (afterEntries !== null && afterEntries.length === 1 ? (afterEntries[0]?.target ?? null) : null),
+        resultingSpec: afterQuotaSpec ?? (afterEntries[0]?.target ?? null),
         detail: `Quota ${identified.version} upgraded via the native update; plugin list carries ${keptId} exactly once and unrelated global entries are preserved (restart OpenCode to load)`,
         mutated: true,
         rolledBack: false,

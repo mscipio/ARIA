@@ -212,7 +212,10 @@ export async function ensureCodegraph(executor, options = {}) {
     // Clean system: delegate to the demonstrated-safe T016 install-if-missing
     // mechanism (exact npm spec + binary-only install + ARIA file-based V2
     // registration + validation with config-snapshot rollback).
-    const installed = await installCodegraphIfMissing(executor, configDir);
+    const installed = await installCodegraphIfMissing(executor, configDir, {
+        convergence: options.convergence,
+        delay: options.delay,
+    });
     switch (installed.status) {
         case "installed":
             return {

@@ -1,4 +1,5 @@
 import { type Executor } from "./deps.js";
+import { type DelayFn, type ListConvergenceBound } from "./list-convergence.js";
 export interface BootstrapEvidence {
     component: "engram" | "codegraph" | "zotpilot" | "quota";
     /** `install` = demonstrated-safe missing-install path below; `report-only` = documented fallback. */
@@ -25,6 +26,12 @@ export interface BootstrapInstallResult {
     /** True when a config snapshot was restored after a failure. */
     rolledBack?: boolean;
 }
+export interface BootstrapConvergenceOptions {
+    /** Bounded runtime-list window (defaults to the shared 3 polls/100ms). */
+    convergence?: ListConvergenceBound;
+    /** Injectable clock (defaults to real setTimeout; fakes record, never sleep). */
+    delay?: DelayFn;
+}
 export declare const CODEGRAPH_NPM_PACKAGE = "@colbymchenry/codegraph";
 export declare const CODEGRAPH_MCP_COMMAND: string[];
 /** Discover current CodeGraph upstream via npm's normal mechanism (no database). */
@@ -35,7 +42,7 @@ export declare function discoverCodegraphLatest(executor: Executor): Promise<{
     ok: false;
     reason: string;
 }>;
-export declare function installCodegraphIfMissing(executor: Executor, configDir?: string): Promise<BootstrapInstallResult>;
+export declare function installCodegraphIfMissing(executor: Executor, configDir?: string, options?: BootstrapConvergenceOptions): Promise<BootstrapInstallResult>;
 export declare const ZOTPILOT_PIP_PACKAGE = "zotpilot";
 export declare const ZOTPILOT_MCP_COMMAND: string[];
 /** Discover current ZotPilot upstream via pip's normal mechanism (no database). */
@@ -46,7 +53,7 @@ export declare function discoverZotpilotLatest(executor: Executor): Promise<{
     ok: false;
     reason: string;
 }>;
-export declare function installZotpilotIfMissing(executor: Executor, configDir?: string): Promise<BootstrapInstallResult>;
+export declare function installZotpilotIfMissing(executor: Executor, configDir?: string, options?: BootstrapConvergenceOptions): Promise<BootstrapInstallResult>;
 /** Discover current Quota upstream via npm's normal mechanism (no database). Only exact Quota 5 proceeds. */
 export declare function discoverQuotaLatest(executor: Executor): Promise<{
     ok: true;
@@ -63,6 +70,14 @@ export interface QuotaInstallOptions {
      * T007 upgrade adapter). Omit in production to use the effective root.
      */
     configDir?: string;
+    /**
+     * Bounded runtime plugin-list window (defaults to the shared 3
+     * polls/100ms). Retries repeat `opencode plugin list` observation only,
+     * never another `plugin add`.
+     */
+    convergence?: ListConvergenceBound;
+    /** Injectable clock (defaults to real setTimeout; fakes record, never sleep). */
+    delay?: DelayFn;
 }
 export declare function installQuotaIfMissing(executor: Executor, options?: QuotaInstallOptions): Promise<BootstrapInstallResult>;
 //# sourceMappingURL=bootstrap.d.ts.map

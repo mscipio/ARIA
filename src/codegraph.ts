@@ -43,6 +43,7 @@ import {
   installCodegraphIfMissing,
 } from "./bootstrap.js";
 import { detectCodeGraph, parseMcpList, stripJsoncComments, type Executor } from "./deps.js";
+import type { DelayFn, ListConvergenceBound } from "./list-convergence.js";
 import { openCodeGlobalDir } from "./paths.js";
 import type { ComponentContext, ComponentUpgradeOutcome } from "./upgrade.js";
 
@@ -87,6 +88,13 @@ export interface CodegraphLifecycleResult {
 export interface CodegraphLifecycleOptions {
   /** Explicit global config dir (XDG-contained; omits to the effective root). */
   configDir?: string;
+  /**
+   * Bounded runtime MCP-list window (defaults to the shared 3 polls/100ms).
+   * Retries repeat read-only probes only, never another `npm install`.
+   */
+  convergence?: ListConvergenceBound;
+  /** Injectable clock (defaults to real setTimeout; fakes record, never sleep). */
+  delay?: DelayFn;
 }
 
 type SingleConfigState =
@@ -291,7 +299,10 @@ export async function ensureCodegraph(
   // Clean system: delegate to the demonstrated-safe T016 install-if-missing
   // mechanism (exact npm spec + binary-only install + ARIA file-based V2
   // registration + validation with config-snapshot rollback).
-  const installed = await installCodegraphIfMissing(executor, configDir);
+  const installed = await installCodegraphIfMissing(executor, configDir, {
+    convergence: options.convergence,
+    delay: options.delay,
+  });
   switch (installed.status) {
     case "installed":
       return {

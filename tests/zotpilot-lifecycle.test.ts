@@ -436,12 +436,15 @@ describe("T014 install validation rolls the config snapshot back", () => {
     await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["unrelated-plugin"] }));
     const before = await snapshotTree(root);
     let installed = false;
+    let mcpLists = 0;
+    const delays: number[] = [];
     const executor: Executor = async (command, args) => {
       if (command === "zotpilot" && args[0] === "--version") {
         if (!installed) throw new Error("not found");
         return { stdout: "zotpilot 0.5.3", stderr: "" };
       }
       if (command === "opencode" && args[0] === "mcp") {
+        mcpLists += 1;
         return { stdout: ["zotpilot disconnected", "1 server(s)"].join("\n"), stderr: "" };
       }
       if (command === "python3" && args.includes("index")) return { stdout: "Available versions: 0.5.3\n", stderr: "" };
@@ -452,12 +455,28 @@ describe("T014 install validation rolls the config snapshot back", () => {
       throw new Error(`unexpected: ${command} ${args.join(" ")}`);
     };
 
-    const result = await ensureZotpilot(executor, { configDir, homeDir });
+    // R001: injected fake clock — records the bounded retry delays with zero
+    // real sleeps (default 3 polls/100ms would otherwise sleep 2x100ms).
+    const started = Date.now();
+    const result = await ensureZotpilot(executor, {
+      configDir,
+      homeDir,
+      delay: async (ms) => {
+        delays.push(ms);
+      },
+    });
+    const elapsed = Date.now() - started;
 
     expect(result.status).toBe("validation-failed");
     expect(result.mutated).toBe(true);
     expect(result.rolledBack).toBe(true);
     expect(result.mcpConnected).toBe(false);
+    // Exact-bound proof: 1 pre-check mcp probe + 3 post-mutation polls with
+    // 2x100ms recorded (never lengthened) delays.
+    expect(mcpLists).toBe(4);
+    expect(delays).toEqual([100, 100]);
+    // Zero-real-sleep proof: 200ms of real delays would exceed this bound.
+    expect(elapsed).toBeLessThan(100);
     await expectByteIdentical(root, before);
   });
 });

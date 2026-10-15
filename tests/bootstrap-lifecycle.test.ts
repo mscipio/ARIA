@@ -347,13 +347,20 @@ describe("T016 Quota install-if-missing", () => {
         if (command === "npm" && args[0] === "view") return { stdout: "5.1.0\n", stderr: "" };
         if (command === "opencode" && args[0] === "plugin" && args[1] === "add") {
           added = true;
+          // Simulate the native installer persisting the registration to the
+          // XDG-contained global config (T003 persisted-first contract: the
+          // installer owns creation and the config positively carries the
+          // installed spec before any runtime list sample is accepted).
+          await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["@slkiser/opencode-quota@5.1.0"] }));
           return { stdout: "", stderr: "" };
         }
         throw new Error(`unexpected: ${command} ${args.join(" ")}`);
       };
 
-      // No pre-existing config file: the native installer owns creation; the
-      // plugin list is the registration source of truth.
+      // No pre-existing config file: the native installer owns creation and
+      // persists the registration to the XDG-contained global config, which
+      // the persisted-first verification requires before accepting the
+      // runtime plugin list.
       const result = await installQuotaIfMissing(executor);
 
       expect(result.status).toBe("installed");

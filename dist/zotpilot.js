@@ -54,6 +54,7 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { BOOTSTRAP_EVIDENCE, discoverZotpilotLatest, installZotpilotIfMissing, } from "./bootstrap.js";
 import { parseMcpList, stripJsoncComments } from "./deps.js";
+import { defaultDelay, verifyPersistedThenConverge, } from "./list-convergence.js";
 import { openCodeGlobalDir } from "./paths.js";
 /** Demonstrated-safe missing-install evidence owning this adapter's install path (T016). */
 export const ZOTPILOT_BOOTSTRAP_EVIDENCE = BOOTSTRAP_EVIDENCE.find((entry) => entry.component === "zotpilot");
@@ -288,7 +289,10 @@ export async function ensureZotpilot(executor, options = {}) {
     // mechanism (exact pip `==` spec + user-scoped install + ARIA file-based V2
     // registration + validation with config-snapshot rollback).
     if (!initial.found && initial.registration === "absent") {
-        const installed = await installZotpilotIfMissing(executor, configDir);
+        const installed = await installZotpilotIfMissing(executor, configDir, {
+            convergence: options.convergence,
+            delay: options.delay,
+        });
         switch (installed.status) {
             case "installed":
                 return {
@@ -416,37 +420,72 @@ export async function ensureZotpilot(executor, options = {}) {
             ownership: ownershipProbe.ownership,
         };
     }
-    const verify = await detectZotpilotBinary(executor);
-    const afterConnected = await mcpConnected(executor);
-    const afterState = await detectZotpilotState(executor, configDir);
-    const problems = [];
-    if (!verify.found)
-        problems.push("zotpilot binary not found after update");
-    else if (verify.version !== available)
-        problems.push(`zotpilot version is ${verify.version ?? "unknown"} after update (expected ${available})`);
-    if (!afterConnected)
-        problems.push("zotpilot not connected in `opencode mcp list`");
-    if (afterState.registration !== "v2")
-        problems.push("direct V2 zotpilot registration not preserved after update");
-    if (problems.length > 0) {
+    // T003 persisted-first verification: the update path never rewrites
+    // config, so the direct V2 registration must still be present
+    // (authoritative) before any runtime sample is accepted. A stale first
+    // `opencode mcp list` sample retries observation-only within the bound
+    // instead of failing a successful update. Exactly one
+    // `pip install --user` ran above; polls below repeat the read-only
+    // `--version`/`mcp list` probes only, never mutation.
+    const verification = await verifyPersistedThenConverge(async () => {
+        const persisted = await readSingleConfigState(configDir);
+        if (persisted.kind === "ambiguous") {
+            return {
+                kind: "ambiguous",
+                reason: "global opencode.json and opencode.jsonc both exist after the update; dual-file ambiguity fails closed with neither file mutated",
+            };
+        }
+        if (persisted.kind === "missing") {
+            return { kind: "unreadable", reason: "global config is missing after the update; direct V2 zotpilot registration not preserved" };
+        }
+        if (persisted.unparseable) {
+            return {
+                kind: "unreadable",
+                reason: `${persisted.path}: invalid JSON after the update; direct V2 zotpilot registration not preserved`,
+            };
+        }
+        return { kind: "ok", value: persisted.parsed };
+    }, (parsed) => {
+        if (classifyRegistration(parsed) !== "v2") {
+            return { ok: false, reason: "direct V2 zotpilot registration not preserved after update" };
+        }
+        return { ok: true };
+    }, async () => {
+        const detected = await detectZotpilotBinary(executor);
+        const connected = await mcpConnected(executor);
+        return { found: detected.found, version: detected.version, connected };
+    }, (sample) => {
+        if (!sample.found)
+            return { ok: false, reason: "zotpilot binary not found after update" };
+        if (sample.version !== available) {
+            return { ok: false, reason: `zotpilot version is ${sample.version ?? "unknown"} after update (expected ${available})` };
+        }
+        if (!sample.connected)
+            return { ok: false, reason: "zotpilot not connected in `opencode mcp list`" };
+        return { ok: true };
+    }, options.convergence ?? {}, options.delay ?? defaultDelay);
+    if (verification.outcome !== "converged") {
+        const problem = verification.reason ?? "runtime MCP list did not converge within the bound";
+        const runtime = verification.outcome === "persisted-ok-runtime-stale" ? verification.runtime : null;
         return {
             status: "validation-failed",
             installedVersion: initial.version,
-            resultingVersion: verify.version,
+            resultingVersion: runtime?.version ?? null,
             availableVersion: available,
-            detail: `post-update validation failed (${problems.join("; ")}). No config file was written by the update (V2 preserved by never rewriting it); the installed package is left in place and reported, never guessed.`,
+            detail: `post-update validation failed (${problem}). No config file was written by the update (V2 preserved by never rewriting it); the installed package is left in place and reported, never guessed.`,
             mutated: true,
             rolledBack: false,
-            mcpConnected: afterConnected,
+            mcpConnected: runtime?.connected ?? false,
             ownership: ownershipProbe.ownership,
         };
     }
+    const updatedVersion = verification.runtime.version ?? available;
     return {
         status: "updated",
         installedVersion: initial.version,
-        resultingVersion: verify.version ?? available,
+        resultingVersion: updatedVersion,
         availableVersion: available,
-        detail: `ZotPilot ${initial.version} updated to ${verify.version ?? available} via user-scoped pip install --user ${spec} with the direct V2 registration preserved byte-exact and the pinned permission policy untouched; validated via zotpilot --version + opencode mcp list`,
+        detail: `ZotPilot ${initial.version} updated to ${updatedVersion} via user-scoped pip install --user ${spec} with the direct V2 registration preserved byte-exact and the pinned permission policy untouched; validated via zotpilot --version + opencode mcp list`,
         mutated: true,
         rolledBack: false,
         mcpConnected: true,

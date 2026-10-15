@@ -43,6 +43,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { detectCodeGraph, parseMcpList, stripJsoncComments } from "./deps.js";
+import { defaultDelay, verifyPersistedThenConverge, } from "./list-convergence.js";
 import { openCodeGlobalDir } from "./paths.js";
 import { QUOTA_MAJOR, QUOTA_PACKAGE_NAME, quotaEntriesFromPluginList, quotaMajor, quotaSpecsFromConfig, } from "./quota.js";
 export const BOOTSTRAP_EVIDENCE = [
@@ -247,7 +248,7 @@ export async function discoverCodegraphLatest(executor) {
         return { ok: false, reason: `npm view ${CODEGRAPH_NPM_PACKAGE} version failed: ${error instanceof Error ? error.message : String(error)}` };
     }
 }
-export async function installCodegraphIfMissing(executor, configDir) {
+export async function installCodegraphIfMissing(executor, configDir, options = {}) {
     const detected = await detectCodeGraph(executor);
     if (detected.found) {
         return report("already-present", detected.version, `CodeGraph ${detected.version ?? "unknown"} already installed; existing installations stay ownership-gated/report-only (T006/T013) with zero mutation`);
@@ -282,20 +283,66 @@ export async function installCodegraphIfMissing(executor, configDir) {
     if (!registered.ok) {
         return { status: "install-failed", installedVersion: discovered.version, detail: `${registered.reason} (binary ${spec} is installed; only the V2 registration failed)`, mutated: true };
     }
-    const verify = await detectCodeGraph(executor);
-    const connected = await mcpConnected(executor, "codegraph");
-    if (!verify.found || !connected) {
+    // T003 persisted-first verification: the ARIA file-based V2 registration
+    // written above is authoritative, so it is verified before the
+    // eventually consistent `opencode mcp list` surface is polled. A stale
+    // first list sample retries observation-only within the bound instead of
+    // rolling back a successful install. Exactly one `npm install -g` ran
+    // above; polls below repeat read-only probes only, never mutation.
+    const verification = await verifyPersistedThenConverge(async () => {
+        const persisted = await readSingleConfigState(configDir);
+        if (persisted.kind === "ambiguous") {
+            return {
+                kind: "ambiguous",
+                reason: `global opencode.json and opencode.jsonc both exist after the install (${persisted.jsonPath}); dual-file ambiguity fails closed with neither file mutated`,
+            };
+        }
+        if (persisted.kind === "missing") {
+            return { kind: "unreadable", reason: "global config is missing after the install; V2 registration surface lost" };
+        }
+        if (persisted.unparseable) {
+            return { kind: "unreadable", reason: `${persisted.path}: invalid JSON after the install; V2 registration surface lost` };
+        }
+        return { kind: "ok", value: { parsed: persisted.parsed, path: persisted.path } };
+    }, (config) => {
+        const classification = classifyLocalMcp(config.parsed, "codegraph", config.path);
+        if (classification.kind === "present" && classification.shape === "v2")
+            return { ok: true };
+        if (classification.kind === "present") {
+            return {
+                ok: false,
+                reason: `${config.path}: existing legacy codegraph registration observed after the install; V2 registration surface not positively confirmed`,
+            };
+        }
+        return {
+            ok: false,
+            reason: classification.kind === "conflicting"
+                ? classification.reason
+                : `${config.path}: V2 codegraph registration missing after the install; config surface lost`,
+        };
+    }, async () => {
+        const detected = await detectCodeGraph(executor);
+        const connected = await mcpConnected(executor, "codegraph");
+        return { found: detected.found, version: detected.version, connected };
+    }, (sample) => {
+        if (sample.found && sample.connected)
+            return { ok: true };
+        if (!sample.found)
+            return { ok: false, reason: "codegraph binary not found after install" };
+        return { ok: false, reason: "codegraph not connected in `opencode mcp list`" };
+    }, options.convergence ?? {}, options.delay ?? defaultDelay);
+    if (verification.outcome !== "converged") {
         const rolledBack = await restoreSnapshot(snapshot);
-        const problems = [!verify.found ? "codegraph binary not found after install" : null, !connected ? "codegraph not connected in `opencode mcp list`" : null].filter(Boolean).join("; ");
+        const problem = verification.reason ?? "runtime MCP list did not converge within the bound";
         return {
             status: "validation-failed",
             installedVersion: discovered.version,
-            detail: `post-install validation failed (${problems}). ${rolledBack ? `Global config restored (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed binary is left in place and reported, never guessed.`,
+            detail: `post-install validation failed (${problem}). ${rolledBack ? `Global config restored (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed binary is left in place and reported, never guessed.`,
             mutated: true,
             rolledBack,
         };
     }
-    return { status: "installed", installedVersion: verify.version ?? discovered.version, detail: `CodeGraph ${verify.version ?? discovered.version} installed (${spec}) with native V2 MCP registration; validated via codegraph --version + opencode mcp list`, mutated: true, rolledBack: false };
+    return { status: "installed", installedVersion: verification.runtime.version ?? discovered.version, detail: `CodeGraph ${verification.runtime.version ?? discovered.version} installed (${spec}) with native V2 MCP registration; validated via codegraph --version + opencode mcp list`, mutated: true, rolledBack: false };
 }
 // ---------------------------------------------------------------------------
 // ZotPilot — install-if-missing (new, T016)
@@ -330,7 +377,7 @@ export async function discoverZotpilotLatest(executor) {
         return { ok: false, reason: `pip index versions ${ZOTPILOT_PIP_PACKAGE} failed: ${error instanceof Error ? error.message : String(error)}` };
     }
 }
-export async function installZotpilotIfMissing(executor, configDir) {
+export async function installZotpilotIfMissing(executor, configDir, options = {}) {
     const detected = await detectZotpilot(executor);
     if (detected.found) {
         return report("already-present", detected.version, `ZotPilot ${detected.version ?? "unknown"} already installed; existing installations stay ownership-gated/report-only (T006/T014) with zero mutation`);
@@ -365,20 +412,66 @@ export async function installZotpilotIfMissing(executor, configDir) {
     if (!registered.ok) {
         return { status: "install-failed", installedVersion: discovered.version, detail: `${registered.reason} (package ${spec} is installed; only the V2 registration failed)`, mutated: true };
     }
-    const verify = await detectZotpilot(executor);
-    const connected = await mcpConnected(executor, "zotpilot");
-    if (!verify.found || !connected) {
+    // T003 persisted-first verification: the ARIA file-based V2 registration
+    // written above is authoritative, so it is verified before the
+    // eventually consistent `opencode mcp list` surface is polled. A stale
+    // first list sample retries observation-only within the bound instead of
+    // rolling back a successful install. Exactly one `pip install --user`
+    // ran above; polls below repeat read-only probes only, never mutation.
+    const verification = await verifyPersistedThenConverge(async () => {
+        const persisted = await readSingleConfigState(configDir);
+        if (persisted.kind === "ambiguous") {
+            return {
+                kind: "ambiguous",
+                reason: `global opencode.json and opencode.jsonc both exist after the install (${persisted.jsonPath}); dual-file ambiguity fails closed with neither file mutated`,
+            };
+        }
+        if (persisted.kind === "missing") {
+            return { kind: "unreadable", reason: "global config is missing after the install; V2 registration surface lost" };
+        }
+        if (persisted.unparseable) {
+            return { kind: "unreadable", reason: `${persisted.path}: invalid JSON after the install; V2 registration surface lost` };
+        }
+        return { kind: "ok", value: { parsed: persisted.parsed, path: persisted.path } };
+    }, (config) => {
+        const classification = classifyLocalMcp(config.parsed, "zotpilot", config.path);
+        if (classification.kind === "present" && classification.shape === "v2")
+            return { ok: true };
+        if (classification.kind === "present") {
+            return {
+                ok: false,
+                reason: `${config.path}: existing legacy zotpilot registration observed after the install; V2 registration surface not positively confirmed`,
+            };
+        }
+        return {
+            ok: false,
+            reason: classification.kind === "conflicting"
+                ? classification.reason
+                : `${config.path}: V2 zotpilot registration missing after the install; config surface lost`,
+        };
+    }, async () => {
+        const detected = await detectZotpilot(executor);
+        const connected = await mcpConnected(executor, "zotpilot");
+        return { found: detected.found, version: detected.version, connected };
+    }, (sample) => {
+        if (sample.found && sample.connected)
+            return { ok: true };
+        if (!sample.found)
+            return { ok: false, reason: "zotpilot binary not found after install" };
+        return { ok: false, reason: "zotpilot not connected in `opencode mcp list`" };
+    }, options.convergence ?? {}, options.delay ?? defaultDelay);
+    if (verification.outcome !== "converged") {
         const rolledBack = await restoreSnapshot(snapshot);
-        const problems = [!verify.found ? "zotpilot binary not found after install" : null, !connected ? "zotpilot not connected in `opencode mcp list`" : null].filter(Boolean).join("; ");
+        const problem = verification.reason ?? "runtime MCP list did not converge within the bound";
         return {
             status: "validation-failed",
             installedVersion: discovered.version,
-            detail: `post-install validation failed (${problems}). ${rolledBack ? `Global config restored (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed package is left in place and reported, never guessed.`,
+            detail: `post-install validation failed (${problem}). ${rolledBack ? `Global config restored (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed package is left in place and reported, never guessed.`,
             mutated: true,
             rolledBack,
         };
     }
-    return { status: "installed", installedVersion: verify.version ?? discovered.version, detail: `ZotPilot ${verify.version ?? discovered.version} installed (${spec}) with native V2 MCP registration; validated via zotpilot --version + opencode mcp list`, mutated: true, rolledBack: false };
+    return { status: "installed", installedVersion: verification.runtime.version ?? discovered.version, detail: `ZotPilot ${verification.runtime.version ?? discovered.version} installed (${spec}) with native V2 MCP registration; validated via zotpilot --version + opencode mcp list`, mutated: true, rolledBack: false };
 }
 // ---------------------------------------------------------------------------
 // Quota — install-if-missing (new, T016; setup/sync wiring is T017's job)
@@ -463,46 +556,73 @@ export async function installQuotaIfMissing(executor, options = {}) {
     catch (error) {
         return { status: "install-failed", installedVersion: null, detail: `opencode plugin add ${spec} failed (${error instanceof Error ? error.message : String(error)}); no config snapshot needed restoration`, mutated: true };
     }
-    let afterEntries = null;
-    try {
-        const result = await executor("opencode", ["plugin", "list"]);
-        afterEntries = quotaEntriesFromPluginList(result.stdout);
-    }
-    catch {
-        afterEntries = null;
-    }
-    const afterState = await readSingleConfigState(configDir);
-    const problems = [];
-    if (afterEntries === null) {
-        problems.push("post-install plugin list is unavailable or unrecognized; registration surface not positively confirmed");
-    }
-    else if (afterEntries.length !== 1) {
-        problems.push(afterEntries.length === 0 ? "quota plugin is not listed; registration surface missing" : "quota plugin is listed more than once; registration surface ambiguous");
-    }
-    if (afterState.kind !== "single") {
-        if (snapshot !== null)
-            problems.push("global config is missing or ambiguous after the install; config surface lost");
-    }
-    else if (afterState.unparseable) {
-        problems.push(`global config is unparseable after the install (${afterState.path}); config surface lost`);
-    }
-    else {
-        if (quotaSpecsFromConfig(afterState.parsed).length === 0)
-            problems.push("global config carries no quota entry; config surface missing");
+    // T003 persisted-first verification: the global OpenCode config must
+    // positively contain exactly the expected Quota registration before any
+    // runtime plugin-list sample is accepted, so a stale first
+    // `opencode plugin list` cannot roll back a successful fresh install.
+    // Unrelated plugin entries are preserved byte-for-byte and the
+    // pre-install snapshot is restored after a genuine persisted failure or
+    // convergence exhaustion. Exactly one `opencode plugin add` ran above;
+    // polls below repeat `opencode plugin list` observation only, never
+    // mutation. Malformed/unrecognized list output fails closed (never
+    // treated as not-present).
+    const expectedSpec = spec;
+    const verification = await verifyPersistedThenConverge(async () => {
+        const persisted = await readSingleConfigState(configDir);
+        if (persisted.kind === "ambiguous") {
+            return {
+                kind: "ambiguous",
+                reason: "global opencode.json and opencode.jsonc both exist after the install; dual-file ambiguity fails closed with neither file mutated",
+            };
+        }
+        if (persisted.kind === "missing") {
+            return { kind: "unreadable", reason: "global config is missing after the install; config surface lost" };
+        }
+        if (persisted.unparseable) {
+            return { kind: "unreadable", reason: `${persisted.path}: invalid JSON after the install; config surface lost` };
+        }
+        return { kind: "ok", value: { parsed: persisted.parsed, path: persisted.path } };
+    }, (config) => {
+        const specs = quotaSpecsFromConfig(config.parsed);
+        if (specs.length === 0) {
+            return { ok: false, reason: "global config carries no quota entry; config surface missing" };
+        }
+        if (specs.length !== 1 || specs[0] !== expectedSpec) {
+            return {
+                ok: false,
+                reason: `global config quota registration is not exactly ${expectedSpec} (${specs.join(", ")}); registration surface ambiguous`,
+            };
+        }
         if (beforeNonQuota !== null) {
-            const afterNonQuota = allPluginSpecs(afterState.parsed).filter((entry) => !entry.includes(QUOTA_PACKAGE_NAME));
+            const afterNonQuota = allPluginSpecs(config.parsed).filter((entry) => !entry.includes(QUOTA_PACKAGE_NAME));
             const beforeSet = [...beforeNonQuota].sort().join("\0");
             const afterSet = [...afterNonQuota].sort().join("\0");
             if (beforeSet !== afterSet)
-                problems.push("unrelated global plugin entries changed during the install");
+                return { ok: false, reason: "unrelated global plugin entries changed during the install" };
         }
-    }
-    if (problems.length > 0) {
+        return { ok: true };
+    }, async () => {
+        try {
+            const result = await executor("opencode", ["plugin", "list"]);
+            return quotaEntriesFromPluginList(result.stdout);
+        }
+        catch {
+            return null;
+        }
+    }, (entries) => {
+        if (entries.length === 1)
+            return { ok: true };
+        if (entries.length === 0)
+            return { ok: false, reason: "quota plugin is not listed; registration surface missing" };
+        return { ok: false, reason: "quota plugin is listed more than once; registration surface ambiguous" };
+    }, options.convergence ?? {}, options.delay ?? defaultDelay);
+    if (verification.outcome !== "converged") {
         const rolledBack = snapshot === null ? false : await restoreSnapshot({ path: snapshot.path, raw: snapshot.raw });
+        const problem = verification.reason ?? "runtime plugin list did not converge within the bound";
         return {
             status: "validation-failed",
             installedVersion: discovered.version,
-            detail: `install validation failed (${problems.join("; ")}). ${snapshot === null ? "No global config snapshot existed; state is exactly as the installer left it." : rolledBack ? `Global config restored to the pre-install bytes (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as the installer left it.`}`,
+            detail: `install validation failed (${problem}). ${snapshot === null ? "No global config snapshot existed; state is exactly as the installer left it." : rolledBack ? `Global config restored to the pre-install bytes (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as the installer left it.`}`,
             mutated: true,
             rolledBack,
         };

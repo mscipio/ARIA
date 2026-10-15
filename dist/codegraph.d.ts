@@ -1,4 +1,5 @@
 import { type Executor } from "./deps.js";
+import type { DelayFn, ListConvergenceBound } from "./list-convergence.js";
 import type { ComponentContext, ComponentUpgradeOutcome } from "./upgrade.js";
 /** Demonstrated-safe missing-install evidence owning this adapter's install path (T016). */
 export declare const CODEGRAPH_BOOTSTRAP_EVIDENCE: import("./bootstrap.js").BootstrapEvidence | undefined;
@@ -30,6 +31,13 @@ export interface CodegraphLifecycleResult {
 export interface CodegraphLifecycleOptions {
     /** Explicit global config dir (XDG-contained; omits to the effective root). */
     configDir?: string;
+    /**
+     * Bounded runtime MCP-list window (defaults to the shared 3 polls/100ms).
+     * Retries repeat read-only probes only, never another `npm install`.
+     */
+    convergence?: ListConvergenceBound;
+    /** Injectable clock (defaults to real setTimeout; fakes record, never sleep). */
+    delay?: DelayFn;
 }
 /**
  * Read-only installed-state probe: binary presence/version via

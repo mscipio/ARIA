@@ -1,4 +1,5 @@
 import { type Executor } from "./deps.js";
+import { type DelayFn, type ListConvergenceBound } from "./list-convergence.js";
 /** npm package providing Quota. */
 export declare const QUOTA_PACKAGE_NAME = "@slkiser/opencode-quota";
 /** V2 server plugin ID registered by the Quota package. */
@@ -123,6 +124,14 @@ export interface QuotaUpgradeOptions {
      * production to use the effective global dir.
      */
     configDir?: string;
+    /**
+     * Bounded runtime plugin-list window (defaults to the shared 3
+     * polls/100ms). Retries repeat `opencode plugin list` observation only,
+     * never another `update --yes`.
+     */
+    convergence?: ListConvergenceBound;
+    /** Injectable clock (defaults to real setTimeout; fakes record, never sleep). */
+    delay?: DelayFn;
 }
 /**
  * Gated Quota 5 upgrade for `aria upgrade` (T010 wires this; setup and sync

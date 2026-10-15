@@ -140,7 +140,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
     const root = await tempRoot("aria-t009-tworoot-");
     const worktree = join(root, "worktree");
     const version = readPackageVersion();
-    expect(version).toBe("1.0.14");
+    expect(version).toBe("1.0.15");
 
     // Three representative install roots whose ephemeral prefixes must never
     // persist in canonical bytes (npx cache, checkout, extracted package).
@@ -502,7 +502,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
       version?: unknown;
       files?: unknown;
     };
-    expect(pkg.version).toBe("1.0.14");
+    expect(pkg.version).toBe("1.0.15");
     expect(pkg.files).toContain("skills");
     expect(pkg.files).toContain("defaults");
   });
