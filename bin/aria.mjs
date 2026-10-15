@@ -415,8 +415,13 @@ async function main() {
     if (handoffJson !== undefined) {
       try {
         const { receiveUpgradeHandoff } = await import("../dist/aria-upgrade.js");
-        const { runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
+        const { runAriaSkillsRefreshPhase, runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
         const result = await receiveUpgradeHandoff(handoffJson, loadVersion(), {
+          // T007: post-handoff continuation refreshes a single stale owned
+          // packaged skills path to the current release location with the
+          // strict fail-closed phase (normalize, before regen); ambiguous
+          // ownership stops as a failed phase with no write.
+          normalizeFn: (ctx) => runAriaSkillsRefreshPhase(ctx),
           // T002: post-handoff continuation reconciles managed agents with
           // the strict fail-closed phase (after normalization, before
           // deps-sync/doctor); conflicts stop as a failed phase.
@@ -441,16 +446,20 @@ async function main() {
     // re-run guidance and zero mutation.
     if (migrateFrom !== undefined) {
       try {
-        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode, runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
+        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode, runAriaSkillsRefreshPhase, runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
         const { migrateAriaFromExact } = await import("../dist/aria-upgrade.js");
         const result = await runMigrateUpgrade(undefined, {
           migrateFrom,
           approval: { yes },
           migrateFn: (fromSpec, target, handoff) => migrateAriaFromExact(fromSpec, target, handoff),
+          // T007: in-process post-handoff continuation refreshes a single
+          // stale owned packaged skills path to the current release location
+          // with the strict fail-closed phase (normalize, before regen).
           // T002: in-process post-handoff continuation reconciles managed
           // agents with the strict fail-closed phase (after normalization,
           // before deps-sync/doctor); conflicts stop as a failed phase.
           continuation: {
+            normalizeFn: (ctx) => runAriaSkillsRefreshPhase(ctx),
             regenFn: (ctx) => runManagedAgentRegenPhase(ctx),
           },
         });

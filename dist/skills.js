@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { getPackageRoot } from "./defaults.js";
 /**
  * T007 — Packaged skills, single source: V2 config `skills: string[]`.
@@ -69,16 +69,56 @@ export function getPackageSkillsRoot(packageRoot = getPackageRoot()) {
     return join(packageRoot, "skills");
 }
 /**
+ * T007 v1.0.14 — positively owned packaged skills path predicate.
+ *
+ * True only for absolute paths whose normalized form ends with the packaged
+ * install suffix `node_modules/aria/skills` (npx/npm cache, extracted
+ * `node_modules/aria`). This is the only lexical shape that positively proves
+ * ARIA ownership: the 21 namespaced `SKILL.md` files ship only under that
+ * suffix, while user entries (`/user/skills`, `/custom/skills`, URLs,
+ * relative paths) never do. Checkout roots (`<checkout>/skills`) do NOT
+ * match and are treated as unrelated (preserved, never guessed) — the live
+ * stale path (v1.0.7 npx cache `.../_npx/<hash>/node_modules/aria/skills`)
+ * and the current release location (same suffix, different prefix) both
+ * match, so stale-to-current refresh is proven without guessing user paths.
+ * Non-strings, relative paths, URLs, and empty strings are never owned.
+ */
+export function isAriaPackageSkillsPath(entry) {
+    if (typeof entry !== "string" || entry.length === 0)
+        return false;
+    if (!isAbsolute(entry))
+        return false;
+    const normalized = entry.replace(/\\/g, "/").replace(/\/+$/, "");
+    return normalized.endsWith("/node_modules/aria/skills");
+}
+/**
  * Idempotently ensure the single version-locked ARIA skills root is present
  * in a V2 `skills: string[]` config value.
  *
  * - Missing `skills` → set to `[root]`.
- * - Existing array → append `root` once; user entries (including non-string
- *   entries, which validation flags) keep their order and are never removed.
+ * - Existing array with exactly one stale packaged entry (see
+ *   `isAriaPackageSkillsPath`, not the current root) and no current root →
+ *   replace it in place with `root` (unrelated entries keep their order and
+ *   bytes; no old cache is deleted, only the config string is refreshed).
+ *   Returns `added: true` (the current root was installed by this call).
+ * - Existing array with the current root exactly once and no stale packaged
+ *   entry → idempotent, returns `added: false`.
+ * - Existing array with zero owned entries (all unrelated, non-empty) →
+ *   append `root` once; user entries (including non-string entries, which
+ *   validation flags) keep their order and are never removed.
+ * - Empty array (`[]`, an explicit user choice to disable discovery) →
+ *   throws (ambiguous, fail closed, no mutation).
+ * - Multiple owned entries (two or more packaged paths, or a packaged stale
+ *   plus the current root, or duplicate current roots aside — duplicate
+ *   current is left for validation to report) → throws when a stale is
+ *   involved (ambiguous ownership, fail closed, no mutation); duplicate
+ *   current alone returns `added: false` so `validateAriaSkillsConfig`
+ *   reports it in `ensureAriaSetupConfigFile` before any write.
  * - Legacy non-array `skills` (e.g. V1 `{ paths: [...] }`) → left untouched;
  *   T008 owns migration with backup. Returns `added: false`.
  *
- * Never emits `skills.paths`/`skills.urls` or any other legacy key.
+ * Never emits `skills.paths`/`skills.urls` or any other legacy key. Never
+ * deletes skills directories; never rewrites unrelated config keys.
  */
 export function applyAriaSkillsToConfig(config, packageSkillsRoot = getPackageSkillsRoot()) {
     const current = config.skills;
@@ -87,6 +127,28 @@ export function applyAriaSkillsToConfig(config, packageSkillsRoot = getPackageSk
         return { added: true };
     }
     if (!Array.isArray(current)) {
+        return { added: false };
+    }
+    if (current.length === 0) {
+        throw new Error("skills[] is explicitly empty (ambiguous ownership: refusing to guess whether discovery was disabled on purpose). No changes were made.");
+    }
+    const currentCount = current.filter((entry) => entry === packageSkillsRoot).length;
+    const staleIndices = [];
+    current.forEach((entry, index) => {
+        if (entry !== packageSkillsRoot && isAriaPackageSkillsPath(entry))
+            staleIndices.push(index);
+    });
+    if (staleIndices.length > 1) {
+        throw new Error(`skills[] holds ${staleIndices.length} positively owned ARIA package paths (ambiguous ownership: refusing to guess which is stale). No changes were made.`);
+    }
+    if (staleIndices.length === 1 && currentCount >= 1) {
+        throw new Error("skills[] holds both the current ARIA skills root and a stale packaged ARIA path (ambiguous ownership: refusing to guess). No changes were made.");
+    }
+    if (staleIndices.length === 1) {
+        current[staleIndices[0]] = packageSkillsRoot;
+        return { added: true };
+    }
+    if (currentCount > 1) {
         return { added: false };
     }
     if (current.includes(packageSkillsRoot)) {

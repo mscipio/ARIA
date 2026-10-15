@@ -2,13 +2,15 @@ import { Plugin } from "@opencode/plugin";
 
 import { createPlanTool, resolvePlanRootFromLocation } from "./plan-tool.js";
 import {
+  applyArchivistRuntimeTransform,
   applyProjectModelTransforms,
   readProjectAgentModelOverrides,
 } from "./project-overrides.js";
 
 /**
- * ARIA native V2 plugin foundation (T002) with project model overlays (T005)
- * and the native RDC plan tool (T006).
+ * ARIA native V2 plugin foundation (T002) with project model overlays (T005),
+ * the native RDC plan tool (T006), and location-independent archivist runtime
+ * binding (v1.0.14 T006).
  *
  * T005 production wiring: the real plugin setup path resolves the
  * project-local `opencode.json(c)` overlay with the accepted resolver and
@@ -17,6 +19,13 @@ import {
  * model/variant fields only). Prompts, permissions, modes, unrelated agents,
  * and global agent files are never touched; project overrides are read-only
  * here and never written to disk.
+ *
+ * v1.0.14 T006 archivist runtime binding: canonical managed files keep
+ * `{{packageRoot}}` / `{{WIKI_DIR}}` placeholders (byte-identical from any
+ * install root); the same `agent.transform` resolves them in-memory for the
+ * `archivist` agent only (`system` placeholders plus scoped permissions when
+ * `WIKI_DIR` is set). No files are written; other roles are untouched except
+ * via the T005 overlay above.
  *
  * T006 production wiring: the shared plan tool is registered natively via
  * `ctx.tool.transform(editor => editor.add(...))` — no command workaround,
@@ -72,25 +81,31 @@ const aria = Plugin.define({
     // Invalid project models throw per the accepted helper semantics
     // (ConfigValidationError/SyntaxError) — never silently reinterpreted.
     const overlay = readProjectAgentModelOverrides(worktree);
-    // Absent => no change: with no overlaid roles there is nothing to
-    // patch, so no transform is registered.
-    if (Object.keys(overlay).length === 0) {
+    const hasOverlay = Object.keys(overlay).length > 0;
+    // Archivist runtime binding always runs when an agent domain exists (it
+    // resolves location-independent placeholders in-memory); model overlays
+    // run only when present. Guarded for agent-less hosts: with no overlay
+    // and no agent domain there is nothing to patch.
+    const agentDomain = (ctx as { agent?: { transform?: unknown } } | undefined)?.agent;
+    if (!hasOverlay && typeof agentDomain?.transform !== "function") {
       return () => {
         // Plan tool (T006) already registered above when a tool domain exists.
       };
     }
     await ctx.agent.transform((editor) => {
-      applyProjectModelTransforms(
-        {
-          get: (id) => editor.get(id) as { model?: unknown } | undefined,
-          update: (id, update) => {
-            editor.update(id, (agent) => {
-              update(agent as unknown as Record<string, unknown>);
-            });
-          },
+      const adapter = {
+        get: (id: string) =>
+          editor.get(id) as unknown as { model?: unknown; system?: unknown; permissions?: unknown } | undefined,
+        update: (id: string, update: (agent: Record<string, unknown>) => void) => {
+          editor.update(id, (agent) => {
+            update(agent as unknown as Record<string, unknown>);
+          });
         },
-        overlay,
-      );
+      };
+      if (hasOverlay) {
+        applyProjectModelTransforms(adapter, overlay);
+      }
+      applyArchivistRuntimeTransform(adapter, worktree);
     });
     return () => {
       // No registrations yet beyond the narrow T005 transform; reserved for T003+ disposables.

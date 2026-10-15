@@ -70,4 +70,40 @@ export interface ProjectModelAgentEditor {
  * @returns roles whose model was patched, in canonical role order.
  */
 export declare function applyProjectModelTransforms(editor: ProjectModelAgentEditor, overlay: ProjectModelOverlay): RoleName[];
+/**
+ * T006 v1.0.14 — location-independent canonical archivist with runtime binding.
+ *
+ * Canonical managed files retain `{{packageRoot}}` / `{{WIKI_DIR}}`
+ * placeholders so the same version+config is byte-identical from any install
+ * root (npx cache, checkout, extracted package). This narrow runtime patch
+ * resolves those placeholders in-memory via the existing `agent.transform`
+ * path: `system` placeholders become the live package root + `WIKI_DIR`
+ * (empty string when unset, matching the archivist prompt's stop-and-explain
+ * contract), and `permissions` expand to the scoped archivist Rule[] only
+ * when `WIKI_DIR` is set — otherwise the deny-by-default base from the
+ * managed file is left untouched. Only `archivist` is ever touched; a missing
+ * archivist agent is skipped (never materialized); no files are written.
+ */
+export declare function resolveArchivistRuntimeSystem(system: string, options?: {
+    packageRoot?: string;
+    wikiDir?: string;
+}): string;
+/** Minimal editor surface needed for the narrow archivist runtime patch. */
+export interface ArchivistRuntimeAgentEditor {
+    get(id: string): {
+        system?: unknown;
+        permissions?: unknown;
+    } | undefined;
+    update(id: string, update: (agent: Record<string, unknown>) => void): void;
+}
+/**
+ * Narrow runtime patch for the archivist only. Returns true when the
+ * archivist agent was patched (system and/or permissions), false when there
+ * was nothing to do (missing agent, already resolved, or no WIKI_DIR for
+ * permissions). Unrelated agents are never touched.
+ */
+export declare function applyArchivistRuntimeTransform(editor: ArchivistRuntimeAgentEditor, worktree: string, options?: {
+    packageRoot?: string;
+    wikiDir?: string;
+}): boolean;
 //# sourceMappingURL=project-overrides.d.ts.map

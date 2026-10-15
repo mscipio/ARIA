@@ -369,6 +369,21 @@ export interface UpgradeContinuationOptions {
 }
 export type ContinuationStage = "complete" | "drift-blocked" | "component-stopped" | "phase-stopped";
 /**
+ * T007 v1.0.14 post-handoff skills normalize phase (strict refresh).
+ *
+ * Runs ONLY in the new release as the `normalize` phase (before regen,
+ * deps-sync, doctor). Refreshes a single stale positively owned packaged
+ * entry (`node_modules/aria/skills`, e.g. the v1.0.7 npx cache) to the
+ * current release location via the existing skills-only writer
+ * (`ensureAriaSkillsRefreshFile` with backup/atomic/idempotence); current
+ * is idempotent, unrelated entries and all other keys are preserved
+ * byte-for-byte, ambiguous ownership (missing file/key, non-array, empty,
+ * multiple owned, duplicate, non-string) fails closed as a failed phase
+ * (`ok: false`, no write). Never deletes old caches; never rewrites
+ * unrelated config. Nothing is thrown past the phase boundary.
+ */
+export declare function runAriaSkillsRefreshPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome>;
+/**
  * T002 post-handoff managed-agent regen phase (strict reconciliation).
  *
  * Runs ONLY in the new release after registration/normalization and before

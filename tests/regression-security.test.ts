@@ -116,7 +116,7 @@ describe("T009 regression/security aggregate", () => {
     ).toBeNull();
   });
 
-  it("plugin cleanup is idempotent and reload re-registers without extra agent work", async () => {
+  it("plugin cleanup is idempotent and reload re-registers the narrow archivist runtime binding", async () => {
     const root = await worktree();
     const toolTransform = vi.fn(async (callback: (editor: { add: (tool: never) => void }) => void) => {
       callback({ add: () => undefined });
@@ -132,15 +132,16 @@ describe("T009 regression/security aggregate", () => {
     const cleanupFirst = await aria.setup(ctx);
     expect(typeof cleanupFirst).toBe("function");
     expect(toolTransform).toHaveBeenCalledTimes(1);
-    // No overlay means no agent patch.
-    expect(agentTransform).not.toHaveBeenCalled();
+    // No model overlay, but the location-independent archivist runtime binding
+    // still registers its narrow in-memory transform (v1.0.14 T006).
+    expect(agentTransform).toHaveBeenCalledTimes(1);
     await cleanupFirst?.();
     // Second cleanup call never throws (idempotent no-op).
     await cleanupFirst?.();
 
     const cleanupSecond = await aria.setup(ctx);
     expect(toolTransform).toHaveBeenCalledTimes(2);
-    expect(agentTransform).not.toHaveBeenCalled();
+    expect(agentTransform).toHaveBeenCalledTimes(2);
     await cleanupSecond?.();
   });
 

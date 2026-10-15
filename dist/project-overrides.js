@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { stripJsoncComments } from "./deps.js";
+import { getPackageRoot } from "./defaults.js";
 import { ConfigValidationError, ROLES } from "./overrides.js";
+import { getArchivistScopedPermissions } from "./permissions.js";
 const ROLE_SET = new Set(ROLES);
 // V2 `ConfigModel.Selection` short form: `provider/model[#variant]`.
 const SHORT_SELECTION_RE = /^[^/#]+\/[^#]+(?:#[^#]+)?$/;
@@ -169,5 +171,57 @@ export function applyProjectModelTransforms(editor, overlay) {
         patched.push(role);
     }
     return patched;
+}
+/**
+ * T006 v1.0.14 — location-independent canonical archivist with runtime binding.
+ *
+ * Canonical managed files retain `{{packageRoot}}` / `{{WIKI_DIR}}`
+ * placeholders so the same version+config is byte-identical from any install
+ * root (npx cache, checkout, extracted package). This narrow runtime patch
+ * resolves those placeholders in-memory via the existing `agent.transform`
+ * path: `system` placeholders become the live package root + `WIKI_DIR`
+ * (empty string when unset, matching the archivist prompt's stop-and-explain
+ * contract), and `permissions` expand to the scoped archivist Rule[] only
+ * when `WIKI_DIR` is set — otherwise the deny-by-default base from the
+ * managed file is left untouched. Only `archivist` is ever touched; a missing
+ * archivist agent is skipped (never materialized); no files are written.
+ */
+export function resolveArchivistRuntimeSystem(system, options = {}) {
+    const packageRoot = options.packageRoot ?? getPackageRoot();
+    const wikiDir = options.wikiDir ?? process.env.WIKI_DIR ?? "";
+    return system
+        .replaceAll("{{packageRoot}}", packageRoot)
+        .replaceAll("{{WIKI_DIR}}", wikiDir);
+}
+/**
+ * Narrow runtime patch for the archivist only. Returns true when the
+ * archivist agent was patched (system and/or permissions), false when there
+ * was nothing to do (missing agent, already resolved, or no WIKI_DIR for
+ * permissions). Unrelated agents are never touched.
+ */
+export function applyArchivistRuntimeTransform(editor, worktree, options = {}) {
+    const current = editor.get("archivist");
+    if (!current)
+        return false;
+    const packageRoot = options.packageRoot ?? getPackageRoot();
+    const wikiDir = options.wikiDir ?? process.env.WIKI_DIR ?? "";
+    const originalSystem = current.system;
+    const resolvedSystem = typeof originalSystem === "string"
+        ? resolveArchivistRuntimeSystem(originalSystem, { packageRoot, wikiDir })
+        : undefined;
+    const needsSystem = resolvedSystem !== undefined && resolvedSystem !== originalSystem;
+    // Scoped permissions only when WIKI_DIR is configured; otherwise the
+    // deny-by-default base from the managed file stays (safe).
+    const needsPermissions = wikiDir.trim().length > 0;
+    if (!needsSystem && !needsPermissions)
+        return false;
+    const scoped = needsPermissions ? getArchivistScopedPermissions(worktree) : undefined;
+    editor.update("archivist", (agent) => {
+        if (needsSystem)
+            agent["system"] = resolvedSystem;
+        if (scoped)
+            agent["permissions"] = scoped;
+    });
+    return true;
 }
 //# sourceMappingURL=project-overrides.js.map

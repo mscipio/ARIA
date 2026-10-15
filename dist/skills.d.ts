@@ -47,20 +47,53 @@ export interface SkillsConfig {
     skills?: unknown;
 }
 export interface ApplySkillsResult {
-    /** True when the ARIA entry was appended by this call. */
+    /** True when the ARIA entry was installed by this call (appended or refreshed in place). */
     added: boolean;
 }
+/**
+ * T007 v1.0.14 — positively owned packaged skills path predicate.
+ *
+ * True only for absolute paths whose normalized form ends with the packaged
+ * install suffix `node_modules/aria/skills` (npx/npm cache, extracted
+ * `node_modules/aria`). This is the only lexical shape that positively proves
+ * ARIA ownership: the 21 namespaced `SKILL.md` files ship only under that
+ * suffix, while user entries (`/user/skills`, `/custom/skills`, URLs,
+ * relative paths) never do. Checkout roots (`<checkout>/skills`) do NOT
+ * match and are treated as unrelated (preserved, never guessed) — the live
+ * stale path (v1.0.7 npx cache `.../_npx/<hash>/node_modules/aria/skills`)
+ * and the current release location (same suffix, different prefix) both
+ * match, so stale-to-current refresh is proven without guessing user paths.
+ * Non-strings, relative paths, URLs, and empty strings are never owned.
+ */
+export declare function isAriaPackageSkillsPath(entry: unknown): boolean;
 /**
  * Idempotently ensure the single version-locked ARIA skills root is present
  * in a V2 `skills: string[]` config value.
  *
  * - Missing `skills` → set to `[root]`.
- * - Existing array → append `root` once; user entries (including non-string
- *   entries, which validation flags) keep their order and are never removed.
+ * - Existing array with exactly one stale packaged entry (see
+ *   `isAriaPackageSkillsPath`, not the current root) and no current root →
+ *   replace it in place with `root` (unrelated entries keep their order and
+ *   bytes; no old cache is deleted, only the config string is refreshed).
+ *   Returns `added: true` (the current root was installed by this call).
+ * - Existing array with the current root exactly once and no stale packaged
+ *   entry → idempotent, returns `added: false`.
+ * - Existing array with zero owned entries (all unrelated, non-empty) →
+ *   append `root` once; user entries (including non-string entries, which
+ *   validation flags) keep their order and are never removed.
+ * - Empty array (`[]`, an explicit user choice to disable discovery) →
+ *   throws (ambiguous, fail closed, no mutation).
+ * - Multiple owned entries (two or more packaged paths, or a packaged stale
+ *   plus the current root, or duplicate current roots aside — duplicate
+ *   current is left for validation to report) → throws when a stale is
+ *   involved (ambiguous ownership, fail closed, no mutation); duplicate
+ *   current alone returns `added: false` so `validateAriaSkillsConfig`
+ *   reports it in `ensureAriaSetupConfigFile` before any write.
  * - Legacy non-array `skills` (e.g. V1 `{ paths: [...] }`) → left untouched;
  *   T008 owns migration with backup. Returns `added: false`.
  *
- * Never emits `skills.paths`/`skills.urls` or any other legacy key.
+ * Never emits `skills.paths`/`skills.urls` or any other legacy key. Never
+ * deletes skills directories; never rewrites unrelated config keys.
  */
 export declare function applyAriaSkillsToConfig<T extends SkillsConfig>(config: T, packageSkillsRoot?: string): ApplySkillsResult;
 /**

@@ -257,14 +257,13 @@ export function resolveAriaConfig(
     generateRouting({ roles }),
   );
 
-  // Interpolate package root and WIKI_DIR paths ONLY into the archivist prompt.
-  if (roles["archivist"]) {
-    const wikiDir = process.env.WIKI_DIR ?? "";
-    roles["archivist"].promptText = roles["archivist"].promptText
-      .replace(/\{\{packageRoot\}\}/g, packageRoot)
-      .replace(/\{\{WIKI_DIR\}\}/g, wikiDir);
-    // Ensure missing WIKI_DIR does not block startup: pass empty string.
-  }
+  // T006 v1.0.14: canonical output stays package-location independent. The
+  // archivist template placeholders (`{{packageRoot}}` / `{{WIKI_DIR}}`) are
+  // preserved verbatim so the same version+config renders byte-identical
+  // bytes (and checksum) from an npx cache, a checkout, or an extracted
+  // package. Runtime resolution happens in-memory via the existing
+  // `agent.transform` path (`applyArchivistRuntimeTransform`); nothing
+  // ephemeral is baked into persisted files.
 
   return { roles };
 }

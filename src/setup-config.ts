@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { opencodeConfigPath, stripJsoncComments } from "./deps.js";
 import { resolveAriaConfig } from "./overrides.js";
 import { applyExperimentalSubagentDepthDefault } from "./permissions.js";
-import { applyAriaSkillsToConfig, getPackageSkillsRoot, validateAriaSkillsConfig } from "./skills.js";
+import { applyAriaSkillsToConfig, getPackageSkillsRoot, isAriaPackageSkillsPath, validateAriaSkillsConfig } from "./skills.js";
 import type { ResolvedAriaConfig } from "./types.js";
 
 /**
@@ -605,6 +605,275 @@ export async function ensureAriaSetupConfigFile(options: {
     backupPath,
     previousContents: existing,
   };
+}
+
+/**
+ * T011 — splice the owned skills entry into the original config source
+ * without rewriting any other byte.
+ *
+ * The parsed decision stays single-sourced with `applyAriaSkillsToConfig`
+ * (same `isAriaPackageSkillsPath` ownership predicate: exactly one stale
+ * packaged entry with no current root refreshes in place; zero owned
+ * entries with no current root appends alongside unrelated entries;
+ * anything else is ambiguous and throws before any mutation). This helper
+ * only serializes that already-validated decision into `source`:
+ * - refresh: replace the stale entry's string literal span with the
+ *   `JSON.stringify` literal of `skillsRoot`;
+ * - append: insert `, "<root>"` immediately after the last element's
+ *   literal (an existing trailing comma stays where it is, so no second
+ *   comma is ever emitted).
+ *
+ * The `skills` array is located JSONC-tolerantly (whitespace, `//` line and
+ * `/* ... *\/` block comments skipped, string escapes honored) at the
+ * config root; the located element values must decode exactly to
+ * `beforeSkills`, otherwise this throws fail-closed (never a guessed
+ * rewrite). Comments, whitespace, key order, separators, and the trailing
+ * newline of `source` are preserved verbatim.
+ */
+function spliceOwnedSkillsIntoSource(
+  source: string,
+  beforeSkills: unknown[],
+  skillsRoot: string,
+  path: string,
+): string {
+  const failClosed = (reason: string): Error =>
+    new Error(`${path}: skills refresh cannot locate the owned entry surgically (${reason}). No changes were made.`);
+
+  const skipTrivia = (index: number): number => {
+    let cursor = index;
+    while (cursor < source.length) {
+      const char = source[cursor];
+      if (char === " " || char === "\t" || char === "\n" || char === "\r") {
+        cursor += 1;
+        continue;
+      }
+      if (char === "/" && source[cursor + 1] === "/") {
+        cursor += 2;
+        while (cursor < source.length && source[cursor] !== "\n" && source[cursor] !== "\r") cursor += 1;
+        continue;
+      }
+      if (char === "/" && source[cursor + 1] === "*") {
+        const close = source.indexOf("*/", cursor + 2);
+        if (close === -1) return source.length;
+        cursor = close + 2;
+        continue;
+      }
+      break;
+    }
+    return cursor;
+  };
+
+  const readStringEnd = (start: number): number => {
+    let cursor = start + 1;
+    let escaped = false;
+    while (cursor < source.length) {
+      const char = source[cursor];
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        return cursor + 1;
+      }
+      cursor += 1;
+    }
+    return -1;
+  };
+
+  const decodeString = (start: number, end: number): string => {
+    try {
+      const value: unknown = JSON.parse(source.slice(start, end));
+      if (typeof value !== "string") throw new Error("not a string");
+      return value;
+    } catch {
+      throw failClosed("a skills string literal does not decode");
+    }
+  };
+
+  // Locate the top-level `skills` array open bracket (root object depth 1,
+  // outside any nested array).
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let arrayOpen = -1;
+  let cursor = 0;
+  while (cursor < source.length) {
+    cursor = skipTrivia(cursor);
+    if (cursor >= source.length) break;
+    const char = source[cursor];
+    if (char === '"') {
+      const end = readStringEnd(cursor);
+      if (end === -1) throw failClosed("unterminated string literal");
+      const value = decodeString(cursor, end);
+      const after = skipTrivia(end);
+      if (value === "skills" && braceDepth === 1 && bracketDepth === 0 && source[after] === ":") {
+        const open = skipTrivia(after + 1);
+        if (source[open] !== "[") throw failClosed("the skills value is not an array in source");
+        arrayOpen = open;
+        break;
+      }
+      cursor = end;
+      continue;
+    }
+    if (char === "{") braceDepth += 1;
+    else if (char === "}") braceDepth -= 1;
+    else if (char === "[") bracketDepth += 1;
+    else if (char === "]") bracketDepth -= 1;
+    cursor += 1;
+  }
+  if (arrayOpen === -1) throw failClosed("no top-level skills array found");
+
+  // Collect the array element string spans (depth 1 only; nested values skipped).
+  const spans: Array<{ start: number; end: number; value: string }> = [];
+  let depth = 1;
+  cursor = arrayOpen + 1;
+  let arrayClosed = false;
+  while (cursor < source.length) {
+    cursor = skipTrivia(cursor);
+    if (cursor >= source.length) break;
+    const char = source[cursor];
+    if (char === '"') {
+      const end = readStringEnd(cursor);
+      if (end === -1) throw failClosed("unterminated string literal in the skills array");
+      if (depth === 1) spans.push({ start: cursor, end, value: decodeString(cursor, end) });
+      cursor = end;
+      continue;
+    }
+    if (char === "[" || char === "{") {
+      depth += 1;
+      cursor += 1;
+      continue;
+    }
+    if (char === "]" || char === "}") {
+      depth -= 1;
+      cursor += 1;
+      if (depth === 0) {
+        arrayClosed = true;
+        break;
+      }
+      continue;
+    }
+    cursor += 1;
+  }
+  if (!arrayClosed) throw failClosed("the skills array never closes in source");
+
+  if (spans.length !== beforeSkills.length) {
+    throw failClosed(`source holds ${spans.length} skills strings but the parsed config holds ${beforeSkills.length}`);
+  }
+  for (const [index, span] of spans.entries()) {
+    const expected = beforeSkills[index];
+    if (typeof expected !== "string" || span === undefined || span.value !== expected) {
+      throw failClosed(`skills entry ${index} differs between source and parsed config`);
+    }
+  }
+
+  const currentCount = beforeSkills.filter((entry) => entry === skillsRoot).length;
+  const staleIndices: number[] = [];
+  beforeSkills.forEach((entry, index) => {
+    if (entry !== skillsRoot && isAriaPackageSkillsPath(entry)) staleIndices.push(index);
+  });
+
+  if (staleIndices.length === 1 && currentCount === 0) {
+    const staleIndex = staleIndices[0];
+    const span = staleIndex === undefined ? undefined : spans[staleIndex];
+    if (span === undefined) throw failClosed("the stale skills entry is not in source");
+    return `${source.slice(0, span.start)}${JSON.stringify(skillsRoot)}${source.slice(span.end)}`;
+  }
+  if (staleIndices.length === 0 && currentCount === 0 && spans.length > 0) {
+    const last = spans[spans.length - 1];
+    if (last === undefined) throw failClosed("the skills array is empty in source");
+    return `${source.slice(0, last.end)}, ${JSON.stringify(skillsRoot)}${source.slice(last.end)}`;
+  }
+  throw failClosed("the parsed skills decision is not a single refresh or append");
+}
+
+export interface SkillsRefreshFileResult {
+  path: string;
+  changed: boolean;
+  /** True when a stale packaged entry was replaced in place with the current root. */
+  refreshed: boolean;
+  /** True when the current root was appended alongside unrelated entries. */
+  added: boolean;
+  /** Backup holding the pre-existing bytes, when an existing file was replaced. */
+  backupPath?: string;
+  /** Pre-existing raw bytes replaced by this call (rollback fallback). */
+  previousContents?: string;
+}
+
+/**
+ * T007 v1.0.14 — skills-only refresh for the upgrade continuation
+ * (strict, fail-closed, no plugin/depth/agent touch).
+ *
+ * Reads the canonical discovery target (single existing `opencode.json` or
+ * `opencode.jsonc` updated in place; both existing fails closed; missing
+ * file fails closed — setup owns creation, upgrade never creates), applies
+ * only `applyAriaSkillsToConfig` (single stale packaged
+ * `node_modules/aria/skills` → current in place; current idempotent;
+ * unrelated entries preserved in order), validates only
+ * `validateAriaSkillsConfig`, and splices only the owned entry into the
+ * original source bytes atomically with backup only when the skills value
+ * changed (T011: a single stale string is replaced in place, an append
+ * inserts after the last element — comments, whitespace, key order, and
+ * the trailing newline are preserved verbatim). No skills directory is
+ * deleted; no unrelated config is rewritten.
+ *
+ * Fails closed without touching the file when ownership is ambiguous:
+ * missing file, missing `skills` key, non-array `skills` (legacy objects
+ * stay with T008 migration), explicitly empty `[]`, multiple owned entries
+ * (two packaged paths, or packaged stale plus current), duplicate current,
+ * or non-string/empty-string entries. The throw happens before any backup
+ * or replacement, so the original bytes stay intact with no stray files.
+ */
+export async function ensureAriaSkillsRefreshFile(options: {
+  configPath?: string;
+  skillsRoot?: string;
+}): Promise<SkillsRefreshFileResult> {
+  const requestedPath = options.configPath ?? defaultGlobalConfigPath();
+  const path = await resolveSetupConfigPath(requestedPath, options.configPath !== undefined);
+  const skillsRoot = options.skillsRoot ?? getPackageSkillsRoot();
+  const existing = await readExistingConfig(path);
+  if (existing === undefined) {
+    throw new Error(`${path}: skills refresh blocked (config file is missing; refusing to guess). No changes were made.`);
+  }
+  const parsed: Record<string, unknown> = parseConfigFile(existing, path);
+  const before = JSON.stringify(parsed);
+  if ((parsed as SetupConfig).skills === undefined) {
+    throw new Error(`${path}: skills entry is missing (no positively owned ARIA path to refresh; refusing to guess). No changes were made.`);
+  }
+
+  const beforeSkills = JSON.stringify((parsed as SetupConfig).skills);
+  applyAriaSkillsToConfig(parsed as SetupConfig, skillsRoot);
+
+  const issues = validateAriaSkillsConfig(parsed, skillsRoot);
+  if (issues.length > 0) {
+    throw new Error(`${path}: invalid skills config (${issues.join("; ")}). No changes were made.`);
+  }
+
+  if (JSON.stringify(parsed) === before) {
+    return { path, changed: false, refreshed: false, added: false };
+  }
+
+  const beforeArray = (JSON.parse(beforeSkills) as unknown[]);
+  const afterArray = ((parsed as SetupConfig).skills as unknown[]);
+  // Replace-in-place keeps the array length (single stale → current);
+  // append grows it (zero owned → current alongside unrelated).
+  const refreshed = Array.isArray(beforeArray) && Array.isArray(afterArray)
+    && beforeArray.length === afterArray.length;
+  const added = !refreshed;
+
+  // T011 surgical write: only the owned string changes; every other source
+  // byte (comments, whitespace, key order, trailing newline) is preserved.
+  // A locate failure throws fail-closed before any backup or replacement.
+  const content = spliceOwnedSkillsIntoSource(existing, beforeArray, skillsRoot, path);
+  await mkdir(dirname(path), { recursive: true });
+  const backupPath = `${path}.aria-backup-${backupStamp()}`;
+  await writeFile(backupPath, existing, { encoding: "utf8", flag: "wx" });
+  try {
+    await writeFileAtomic(path, content);
+  } catch (error) {
+    await unlink(backupPath).catch(() => undefined);
+    throw error;
+  }
+  return { path, changed: true, refreshed, added, backupPath, previousContents: existing };
 }
 
 /**

@@ -1,16 +1,16 @@
 import { constants as fsConstants } from "node:fs";
 import { access as fsAccess, readFile, stat as fsStat } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { getPackageRoot } from "./defaults.js";
-import { defaultExecutor, doctor as dependencyDoctor, extractVersion, probeSubagentDepth, } from "./deps.js";
+import { defaultExecutor, doctor as dependencyDoctor, extractVersion, probeSubagentDepth, stripJsoncComments, } from "./deps.js";
 import { discoverAvailableModels } from "./model-config.js";
 import { agentFileName, defaultAgentsDir, generateAgentFiles, parseManagedHeader, readPackageVersion, } from "./agents.js";
 import { PLAN_TOOL_NAME } from "./plan-tool.js";
 import { CODING_ROLES, PACKAGE_SKILL_NAMES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
 import { deriveRoutes, ROLES } from "./routes.js";
-import { isSameLocalPluginIdentity, resolveSetupAriaConfig } from "./setup-config.js";
+import { defaultGlobalConfigPath, isSameLocalPluginIdentity, resolveSetupAriaConfig } from "./setup-config.js";
 import { classifyAriaRegistration, normalizeIdentityVersion, parsePluginList, pluginSpecTagVersion } from "./lifecycle.js";
-import { ARIA_SKILL_NAMES } from "./skills.js";
+import { ARIA_SKILL_NAMES, getPackageSkillsRoot, isAriaPackageSkillsPath } from "./skills.js";
 const defaultFileOps = {
     readText: (path) => readFile(path, "utf8"),
     stat: (path) => fsStat(path),
@@ -1170,6 +1170,154 @@ async function collectSkillFindings(packageRoot, fileOps) {
     return findings;
 }
 /**
+ * T008 v1.0.14 — read-only configured-skills staleness (never written,
+ * never guessed).
+ *
+ * Compares the canonical global config's `skills: string[]` value against
+ * the current package skills root using the T007 owned-only predicate
+ * (`isAriaPackageSkillsPath`):
+ * - one positively owned stale entry with no current root → FAIL (a forward
+ *   reconcile through setup/upgrade would refresh it in place; this finding
+ *   only reports, nothing is changed);
+ * - the current root present (idempotent) or zero owned entries → PASS;
+ * - ambiguous ownership (stale plus current, multiple stale, an explicitly
+ *   empty array whose disabling may be deliberate), a legacy non-array
+ *   shape, or a missing/unreadable/unparseable config (including dual-file
+ *   ambiguity) → SKIP, never a guess about the underlying state.
+ */
+async function collectConfiguredSkillsFinding(fileOps) {
+    const skillsRoot = getPackageSkillsRoot();
+    const jsonPath = defaultGlobalConfigPath();
+    const jsoncPath = join(dirname(jsonPath), "opencode.jsonc");
+    const stat = fileOps.stat ?? ((path) => fsStat(path));
+    const exists = async (path) => {
+        try {
+            return (await stat(path)).isFile();
+        }
+        catch (error) {
+            if (error.code === "ENOENT")
+                return false;
+            return null;
+        }
+    };
+    const [jsonExists, jsoncExists] = await Promise.all([exists(jsonPath), exists(jsoncPath)]);
+    if (jsonExists === null || jsoncExists === null) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: "global config readability unknown; staleness not determined (never guessed)",
+            }];
+    }
+    if (jsonExists && jsoncExists) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: `ambiguous global config: both ${jsonPath} and ${jsoncPath} exist; staleness not determined (never guessed)`,
+            }];
+    }
+    if (!jsonExists && !jsoncExists) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: "global config absent; setup owns creation, staleness not determined",
+            }];
+    }
+    const configPath = jsonExists ? jsonPath : jsoncPath;
+    let raw;
+    try {
+        raw = await fileOps.readText(configPath);
+    }
+    catch (error) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: `${configPath} unreadable (${describeError(error)}); staleness not determined`,
+            }];
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(raw);
+    }
+    catch {
+        try {
+            parsed = JSON.parse(stripJsoncComments(raw));
+        }
+        catch (error) {
+            return [{
+                    severity: "SKIP",
+                    area: "skills",
+                    title: "configured skills",
+                    detail: `${configPath} is not parseable (${describeError(error)}); staleness not determined`,
+                }];
+        }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: `${configPath} does not hold a JSON object; staleness not determined`,
+            }];
+    }
+    const skills = parsed.skills;
+    if (skills === undefined) {
+        return [{
+                severity: "PASS",
+                area: "skills",
+                title: "configured skills",
+                detail: "no positively owned ARIA skills entry; nothing stale to report",
+            }];
+    }
+    if (!Array.isArray(skills)) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: "skills is not the canonical V2 string[] (legacy shape); staleness not determined (never guessed)",
+            }];
+    }
+    if (skills.length === 0) {
+        return [{
+                severity: "SKIP",
+                area: "skills",
+                title: "configured skills",
+                detail: "skills[] is explicitly empty (ambiguous ownership: refusing to guess whether discovery was disabled on purpose)",
+            }];
+    }
+    const currentCount = skills.filter((entry) => entry === skillsRoot).length;
+    const stale = skills.filter((entry) => entry !== skillsRoot && isAriaPackageSkillsPath(entry));
+    if (stale.length === 1 && currentCount === 0) {
+        return [{
+                severity: "FAIL",
+                area: "skills",
+                title: "configured skills",
+                detail: `stale owned ARIA skills path ${stale[0]} (expected ${skillsRoot}; re-run setup or upgrade to refresh; nothing was changed)`,
+            }];
+    }
+    if (stale.length === 0) {
+        return [{
+                severity: "PASS",
+                area: "skills",
+                title: "configured skills",
+                detail: currentCount > 0
+                    ? `ARIA skills root is current (${skillsRoot}; idempotent, no changes)`
+                    : "no positively owned ARIA skills entry; nothing stale to report",
+            }];
+    }
+    return [{
+            severity: "SKIP",
+            area: "skills",
+            title: "configured skills",
+            detail: currentCount > 0
+                ? `ambiguous owned ARIA skills entries (stale ${stale.join(", ")} alongside current ${skillsRoot}); staleness not determined (never guessed)`
+                : `ambiguous owned ARIA skills entries (${stale.join(", ")}); staleness not determined (never guessed)`,
+        }];
+}
+/**
  * Canonical role policy findings. The ZotPilot policy finding compares the
  * canonical expected IDs with the effective researcher entries and truthfully
  * reports present/missing/unexpected package-policy IDs; this is internal
@@ -1495,6 +1643,7 @@ export async function runDoctor(options = {}) {
     findings.push(...collectRuntimeFindings(options.v2));
     // Packaged skills and canonical role/ZotPilot policy validation.
     findings.push(...await collectSkillFindings(getPackageRoot(), fileOps));
+    findings.push(...await collectConfiguredSkillsFinding(fileOps));
     findings.push(...rolePolicyFindings());
     // Wiki: packaged pipeline assets and optional WIKI_DIR accessibility.
     findings.push(...await collectWikiFindings(getPackageRoot(), fileOps));

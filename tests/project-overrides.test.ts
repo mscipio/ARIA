@@ -7,11 +7,13 @@ import { generateAgentFiles, readPackageVersion } from "../src/agents";
 import aria from "../src/index";
 import { resolveAriaConfig, ROLES } from "../src/overrides";
 import {
+  applyArchivistRuntimeTransform,
   applyProjectModelOverlay,
   applyProjectModelTransforms,
   parseProjectAgentOverrides,
   parseProjectModelValue,
   readProjectAgentModelOverrides,
+  resolveArchivistRuntimeSystem,
   toRuntimeModelRef,
 } from "../src/project-overrides";
 
@@ -166,71 +168,139 @@ describe("T005 project overrides", () => {
   });
 
   it("production setup applies project opencode.json overrides via agent.transform only", async () => {
-    const root = await worktree();
-    await writeFile(
-      resolve(root, "opencode.json"),
-      JSON.stringify({
-        agents: {
-          planner: { model: "openai/gpt-5.4-mini#high" },
-          reviewer: { model: { providerID: "opencode-go", model: "custom-reviewer" } },
-        },
-      }),
-    );
-    const canonical = resolveAriaConfig(root);
-    const version = readPackageVersion();
-    const globalDefs = generateAgentFiles(canonical, version);
+    const savedWikiDir = process.env.WIKI_DIR;
+    delete process.env.WIKI_DIR;
+    try {
+      const root = await worktree();
+      await writeFile(
+        resolve(root, "opencode.json"),
+        JSON.stringify({
+          agents: {
+            planner: { model: "openai/gpt-5.4-mini#high" },
+            reviewer: { model: { providerID: "opencode-go", model: "custom-reviewer" } },
+          },
+        }),
+      );
+      const canonical = resolveAriaConfig(root);
+      const version = readPackageVersion();
+      const globalDefs = generateAgentFiles(canonical, version);
 
-    // Seed the effective V2 agent surface from canonical defaults.
-    const store = new Map<string, Record<string, unknown>>();
-    for (const role of ROLES) {
-      const route = canonical.roles[role];
-      const slash = route.model.indexOf("/");
-      store.set(role, {
-        model: route.variant === undefined
-          ? { providerID: route.model.slice(0, slash), id: route.model.slice(slash + 1) }
-          : { providerID: route.model.slice(0, slash), id: route.model.slice(slash + 1), variant: route.variant },
+      // Seed the effective V2 agent surface from canonical defaults.
+      const store = new Map<string, Record<string, unknown>>();
+      for (const role of ROLES) {
+        const route = canonical.roles[role];
+        const slash = route.model.indexOf("/");
+        store.set(role, {
+          model: route.variant === undefined
+            ? { providerID: route.model.slice(0, slash), id: route.model.slice(slash + 1) }
+            : { providerID: route.model.slice(0, slash), id: route.model.slice(slash + 1), variant: route.variant },
+        });
+      }
+      const coderBefore = JSON.parse(JSON.stringify(store.get("coder")));
+      const transforms: Array<(editor: never) => void> = [];
+      const updated: string[] = [];
+      const editor = {
+        get: (id: string) => store.get(id),
+        update: (id: string, fn: (agent: Record<string, unknown>) => void) => {
+          updated.push(id);
+          fn(store.get(id)!);
+        },
+      };
+
+      const cleanup = await aria.setup({
+        location: { project: { directory: root } },
+        agent: {
+          transform: (callback: (editor: never) => void) => {
+            transforms.push(callback);
+            return Promise.resolve({ dispose: async () => {} });
+          },
+        },
+      } as never);
+      expect(typeof cleanup).toBe("function");
+
+      // Plugin setup executed the override path.
+      expect(transforms).toHaveLength(1);
+      for (const transform of transforms) transform(editor as never);
+
+      // Effective V2 agent surface shows the expected model+variant for both
+      // the string form (planner) and the object form (reviewer).
+      expect(store.get("planner")).toEqual({
+        model: { providerID: "openai", id: "gpt-5.4-mini", variant: "high" },
       });
+      // Model-only object form clears the inherited variant as an intact pair.
+      expect(store.get("reviewer")).toEqual({ model: { providerID: "opencode-go", id: "custom-reviewer" } });
+      // Only overlaid roles were patched, in canonical role order.
+      expect(updated).toEqual(["planner", "reviewer"]);
+      // Non-overridden roles retain their canonical defaults.
+      expect(store.get("coder")).toEqual(coderBefore);
+      // Global generated defs are unchanged and setup wrote no files.
+      expect(generateAgentFiles(canonical, version)).toEqual(globalDefs);
+      expect(await readdir(root)).toEqual(["opencode.json"]);
+      await cleanup?.();
+    } finally {
+      if (savedWikiDir === undefined) delete process.env.WIKI_DIR;
+      else process.env.WIKI_DIR = savedWikiDir;
     }
-    const coderBefore = JSON.parse(JSON.stringify(store.get("coder")));
-    const transforms: Array<(editor: never) => void> = [];
-    const updated: string[] = [];
-    const editor = {
-      get: (id: string) => store.get(id),
-      update: (id: string, fn: (agent: Record<string, unknown>) => void) => {
-        updated.push(id);
-        fn(store.get(id)!);
-      },
-    };
+  });
 
-    const cleanup = await aria.setup({
-      location: { project: { directory: root } },
-      agent: {
-        transform: (callback: (editor: never) => void) => {
-          transforms.push(callback);
-          return Promise.resolve({ dispose: async () => {} });
+  it("archivist canonical bytes stay location-independent and runtime resolves placeholders in-memory", async () => {
+    const savedWikiDir = process.env.WIKI_DIR;
+    try {
+      // Same version+config renders byte-identical canonical bytes regardless
+      // of WIKI_DIR: no ephemeral root is baked into persisted files.
+      process.env.WIKI_DIR = "/tmp/wiki-a";
+      const root = await worktree();
+      const withWiki = resolveAriaConfig(root);
+      delete process.env.WIKI_DIR;
+      const withoutWiki = resolveAriaConfig(root);
+      const version = readPackageVersion();
+      expect(generateAgentFiles(withWiki, version).archivist).toBe(
+        generateAgentFiles(withoutWiki, version).archivist,
+      );
+      expect(withWiki.roles.archivist.promptText).toContain("{{WIKI_DIR}}");
+      expect(withWiki.roles.archivist.promptText).toContain("{{packageRoot}}");
+
+      // Runtime resolves placeholders in-memory via the narrow transform.
+      const store = new Map<string, Record<string, unknown>>([
+        ["archivist", { system: withWiki.roles.archivist.promptText }],
+        ["coder", { system: "coder system" }],
+      ]);
+      const updated: string[] = [];
+      const editor = {
+        get: (id: string) => store.get(id),
+        update: (id: string, fn: (agent: Record<string, unknown>) => void) => {
+          updated.push(id);
+          fn(store.get(id)!);
         },
-      },
-    } as never);
-    expect(typeof cleanup).toBe("function");
+      };
+      const patched = applyArchivistRuntimeTransform(editor, root, {
+        packageRoot: "/pkg/root",
+        wikiDir: "/tmp/wiki-a",
+      });
+      expect(patched).toBe(true);
+      expect(updated).toEqual(["archivist"]);
+      const resolved = resolveArchivistRuntimeSystem(withWiki.roles.archivist.promptText, {
+        packageRoot: "/pkg/root",
+        wikiDir: "/tmp/wiki-a",
+      });
+      expect(store.get("archivist")?.system).toBe(resolved);
+      expect(store.get("archivist")?.system).toContain("WIKI_DIR: `/tmp/wiki-a`");
+      expect(store.get("archivist")?.system).not.toContain("{{");
+      // Scoped permissions applied at runtime when WIKI_DIR is set.
+      expect(store.get("archivist")).toHaveProperty("permissions");
+      // Unrelated roles untouched.
+      expect(store.get("coder")).toEqual({ system: "coder system" });
 
-    // Plugin setup executed the override path.
-    expect(transforms).toHaveLength(1);
-    for (const transform of transforms) transform(editor as never);
-
-    // Effective V2 agent surface shows the expected model+variant for both
-    // the string form (planner) and the object form (reviewer).
-    expect(store.get("planner")).toEqual({
-      model: { providerID: "openai", id: "gpt-5.4-mini", variant: "high" },
-    });
-    // Model-only object form clears the inherited variant as an intact pair.
-    expect(store.get("reviewer")).toEqual({ model: { providerID: "opencode-go", id: "custom-reviewer" } });
-    // Only overlaid roles were patched, in canonical role order.
-    expect(updated).toEqual(["planner", "reviewer"]);
-    // Non-overridden roles retain their canonical defaults.
-    expect(store.get("coder")).toEqual(coderBefore);
-    // Global generated defs are unchanged and setup wrote no files.
-    expect(generateAgentFiles(canonical, version)).toEqual(globalDefs);
-    expect(await readdir(root)).toEqual(["opencode.json"]);
-    await cleanup?.();
+      // Missing archivist is skipped, never materialized.
+      const skipped = applyArchivistRuntimeTransform(
+        { get: () => undefined, update: () => { throw new Error("must not update"); } },
+        root,
+        { packageRoot: "/pkg/root", wikiDir: "/tmp/wiki-a" },
+      );
+      expect(skipped).toBe(false);
+    } finally {
+      if (savedWikiDir === undefined) delete process.env.WIKI_DIR;
+      else process.env.WIKI_DIR = savedWikiDir;
+    }
   });
 });

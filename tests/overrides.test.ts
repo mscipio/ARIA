@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 import { ConfigValidationError, parseOverrides, readGlobalAriaOverrides, resolveAriaConfig } from "../src/overrides";
+import { resolveArchivistRuntimeSystem } from "../src/project-overrides";
 
 const tempDirs: string[] = [];
 
@@ -324,29 +325,41 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).toContain("archivist: `archivist` → openai/gpt-5.4-mini [high]");
     });
 
-    it("archivist defaults resolve without WIKI_DIR env (missing env does not break startup)", () => {
+    it("archivist canonical output stays location-independent without WIKI_DIR env", () => {
       delete process.env.WIKI_DIR;
       const config = resolveAriaConfig(tmpdir());
       expect(config.roles["archivist"].model).toBe("opencode-go/muse-spark-1.3-contributor");
       expect(config.roles["archivist"].promptText).toBeDefined();
       expect(config.roles["archivist"].promptText.length).toBeGreaterThan(0);
-      // Coder prompt must never contain packageRoot or WIKI_DIR paths.
+      // Canonical bytes keep stable placeholders; nothing ephemeral is baked.
+      expect(config.roles["archivist"].promptText).toContain("{{WIKI_DIR}}");
+      expect(config.roles["archivist"].promptText).toContain("{{packageRoot}}");
+      // Coder prompt must never contain placeholders or baked paths.
       expect(config.roles.coder.promptText).not.toContain("{{packageRoot}}");
       expect(config.roles.coder.promptText).not.toContain("{{WIKI_DIR}}");
     });
 
-    it("archivist prompt receives resolved packageRoot and WIKI_DIR when set", () => {
+    it("archivist canonical output stays byte-identical across WIKI_DIR values (runtime resolves)", () => {
       process.env.WIKI_DIR = "/home/user/wiki";
-      const config = resolveAriaConfig(tmpdir());
+      const withWiki = resolveAriaConfig(tmpdir());
       delete process.env.WIKI_DIR;
-      // Path placeholders resolved in archivist prompt only.
-      expect(config.roles["archivist"].promptText).toContain("WIKI_DIR: `/home/user/wiki`");
-      expect(config.roles["archivist"].promptText).toContain("PACKAGE_ROOT:");
-      expect(config.roles["archivist"].promptText).not.toContain("{{WIKI_DIR}}");
-      expect(config.roles["archivist"].promptText).not.toContain("{{packageRoot}}");
+      const withoutWiki = resolveAriaConfig(tmpdir());
+      // Same version+config => byte-identical canonical prompt regardless of env.
+      expect(withWiki.roles["archivist"].promptText).toBe(withoutWiki.roles["archivist"].promptText);
+      expect(withWiki.roles["archivist"].promptText).toContain("{{WIKI_DIR}}");
+      expect(withWiki.roles["archivist"].promptText).toContain("{{packageRoot}}");
       // Other roles must never receive these paths.
-      expect(config.roles.coder.promptText).not.toContain("/home/user/wiki");
-      expect(config.roles.planner.promptText).not.toContain("/home/user/wiki");
+      expect(withWiki.roles.coder.promptText).not.toContain("/home/user/wiki");
+      expect(withWiki.roles.planner.promptText).not.toContain("/home/user/wiki");
+      // Runtime resolves placeholders in-memory via the agent.transform path.
+      const resolved = resolveArchivistRuntimeSystem(withWiki.roles["archivist"].promptText, {
+        packageRoot: "/pkg/root",
+        wikiDir: "/home/user/wiki",
+      });
+      expect(resolved).toContain("WIKI_DIR: `/home/user/wiki`");
+      expect(resolved).toContain("PACKAGE_ROOT: `/pkg/root`");
+      expect(resolved).not.toContain("{{WIKI_DIR}}");
+      expect(resolved).not.toContain("{{packageRoot}}");
     });
   });
 

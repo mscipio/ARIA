@@ -24,6 +24,8 @@ import { classifyAriaRegistration, parsePluginList } from "./lifecycle.js";
 import { reconcileManagedAgents } from "./model-config.js";
 import { openCodeGlobalDir } from "./paths.js";
 import { checkQuotaUpgrade } from "./quota.js";
+import { defaultGlobalConfigPath, ensureAriaSkillsRefreshFile } from "./setup-config.js";
+import { getPackageSkillsRoot } from "./skills.js";
 import { zotpilotUpgradeComponent } from "./zotpilot.js";
 
 // ---------------------------------------------------------------------------
@@ -1215,6 +1217,37 @@ export interface UpgradeContinuationOptions {
 }
 
 export type ContinuationStage = "complete" | "drift-blocked" | "component-stopped" | "phase-stopped";
+
+/**
+ * T007 v1.0.14 post-handoff skills normalize phase (strict refresh).
+ *
+ * Runs ONLY in the new release as the `normalize` phase (before regen,
+ * deps-sync, doctor). Refreshes a single stale positively owned packaged
+ * entry (`node_modules/aria/skills`, e.g. the v1.0.7 npx cache) to the
+ * current release location via the existing skills-only writer
+ * (`ensureAriaSkillsRefreshFile` with backup/atomic/idempotence); current
+ * is idempotent, unrelated entries and all other keys are preserved
+ * byte-for-byte, ambiguous ownership (missing file/key, non-array, empty,
+ * multiple owned, duplicate, non-string) fails closed as a failed phase
+ * (`ok: false`, no write). Never deletes old caches; never rewrites
+ * unrelated config. Nothing is thrown past the phase boundary.
+ */
+export async function runAriaSkillsRefreshPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome> {
+  try {
+    const configPath = ctx.configDir
+      ? join(openCodeGlobalDir(ctx.configDir), "opencode.json")
+      : defaultGlobalConfigPath();
+    const result = await ensureAriaSkillsRefreshFile({ configPath, skillsRoot: getPackageSkillsRoot() });
+    if (!result.changed) {
+      return { ok: true, detail: `ARIA skills already current in ${result.path} (idempotent, no changes)`, mutated: false };
+    }
+    const action = result.refreshed ? "refreshed stale owned path to the current release location" : "installed the current release location alongside unrelated entries";
+    return { ok: true, detail: `ARIA skills ${action} in ${result.path}`, mutated: true };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, detail: `ARIA skills refresh failed: ${reason}`, mutated: false };
+  }
+}
 
 /**
  * T002 post-handoff managed-agent regen phase (strict reconciliation).

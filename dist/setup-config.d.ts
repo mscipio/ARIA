@@ -179,6 +179,46 @@ export declare function ensureAriaSetupConfigFile(options: {
     pluginUri: string;
     skillsRoot?: string;
 }): Promise<SetupConfigFileResult>;
+export interface SkillsRefreshFileResult {
+    path: string;
+    changed: boolean;
+    /** True when a stale packaged entry was replaced in place with the current root. */
+    refreshed: boolean;
+    /** True when the current root was appended alongside unrelated entries. */
+    added: boolean;
+    /** Backup holding the pre-existing bytes, when an existing file was replaced. */
+    backupPath?: string;
+    /** Pre-existing raw bytes replaced by this call (rollback fallback). */
+    previousContents?: string;
+}
+/**
+ * T007 v1.0.14 — skills-only refresh for the upgrade continuation
+ * (strict, fail-closed, no plugin/depth/agent touch).
+ *
+ * Reads the canonical discovery target (single existing `opencode.json` or
+ * `opencode.jsonc` updated in place; both existing fails closed; missing
+ * file fails closed — setup owns creation, upgrade never creates), applies
+ * only `applyAriaSkillsToConfig` (single stale packaged
+ * `node_modules/aria/skills` → current in place; current idempotent;
+ * unrelated entries preserved in order), validates only
+ * `validateAriaSkillsConfig`, and splices only the owned entry into the
+ * original source bytes atomically with backup only when the skills value
+ * changed (T011: a single stale string is replaced in place, an append
+ * inserts after the last element — comments, whitespace, key order, and
+ * the trailing newline are preserved verbatim). No skills directory is
+ * deleted; no unrelated config is rewritten.
+ *
+ * Fails closed without touching the file when ownership is ambiguous:
+ * missing file, missing `skills` key, non-array `skills` (legacy objects
+ * stay with T008 migration), explicitly empty `[]`, multiple owned entries
+ * (two packaged paths, or packaged stale plus current), duplicate current,
+ * or non-string/empty-string entries. The throw happens before any backup
+ * or replacement, so the original bytes stay intact with no stray files.
+ */
+export declare function ensureAriaSkillsRefreshFile(options: {
+    configPath?: string;
+    skillsRoot?: string;
+}): Promise<SkillsRefreshFileResult>;
 /**
  * Roll back one `ensureAriaSetupConfigFile` result: restore the backup when
  * an existing file was replaced, remove only a file this call created, and
