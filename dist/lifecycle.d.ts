@@ -276,6 +276,16 @@ export type SetupIdentityGate = {
  */
 export declare function isRecognizedAriaGitSource(target: string): boolean;
 /**
+ * T003 same-release Git identity (setup only): an approved
+ * `github:mscipio/ARIA#vX.Y.Z` SOURCE whose exact tag version equals the
+ * running CLI's normalized bare version (e.g. `1.1.0` for `#v1.1.0`) is the
+ * same release as the running install, so setup continues idempotently
+ * instead of refusing. Any other Git SOURCE (different tag, inexact ref, or
+ * foreign prefix even with an equal tag) is not the same release and still
+ * refuses before mutation. Pure: no executor, no mutation.
+ */
+export declare function isSameReleaseGitTarget(target: string, runningVersion: string | null): boolean;
+/**
  * T012 shared ARIA registration rule (single source for lifecycle gating
  * and doctor reporting). A plugin-list row is positively ARIA-identifying
  * when its ID is `aria` (any SOURCE, including local paths and foreign

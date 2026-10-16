@@ -92,11 +92,19 @@ interface FakePluginWorld {
   duplicateAddSpec: string | null;
   spawnStdout: string | null;
   spawnError: string | null;
+  /** Fake globally installed bare CLI version (`aria --version`; moves on `npm install -g`). */
+  cliVersion: string;
 }
 
 function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePluginWorld {
   const world: FakePluginWorld = {
     executor: async (command, args, options) => {
+      // R006 convergence probe (read-only verification, never a mutation):
+      // served without recording so existing mutation-order assertions keep
+      // their meaning; the install below moves it to the exact target.
+      if (command === "aria" && args[0] === "--version") {
+        return { stdout: world.cliVersion, stderr: "" };
+      }
       world.calls.push({ command, args, options });
       const key = `${command} ${args.join(" ")}`;
       if (command === "opencode" && args[0] === "plugin" && args[1] === "list") {
@@ -128,6 +136,10 @@ function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePlug
       }
       if (command === "npm" && args[0] === "install") {
         // R003 bounded installed-CLI update (`npm install -g <exact-spec>`).
+        // The global install moves the bare CLI to the exact target release.
+        const spec = args[2] ?? "";
+        const match = spec.match(/#v(\d+\.\d+\.\d+)\s*$/);
+        if (match) world.cliVersion = match[1] as string;
         return { stdout: "installed", stderr: "" };
       }
       if (command === "npm" && args[0] === "exec") {
@@ -147,6 +159,7 @@ function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePlug
     duplicateAddSpec: null,
     spawnStdout: null,
     spawnError: null,
+    cliVersion: "1.0.6",
   };
   return world;
 }
@@ -472,7 +485,15 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
     const persistedSpecs: string[] = rows.map((row) => row[2]);
     const calls: string[] = [];
     const seen: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
+    // Fake globally installed bare CLI version (moves on `npm install -g`).
+    let cliVersion = "1.0.6";
     const executor: Executor = async (command, args, options) => {
+      // R006 convergence probe (read-only verification, never a mutation):
+      // served without recording so the old-code-stops assertion below keeps
+      // its meaning.
+      if (command === "aria" && args[0] === "--version") {
+        return { stdout: cliVersion, stderr: "" };
+      }
       calls.push(`${command} ${args.join(" ")}`);
       void options;
       if (command === "git" && args[0] === "ls-remote") return { stdout: LS_REMOTE_SAMPLE, stderr: "" };
@@ -491,7 +512,11 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
         return { stdout: "plugin installed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "mcp") return { stdout: HEALTHY_MCP_LIST, stderr: "" };
-      if (command === "npm" && args[0] === "install") return { stdout: "installed", stderr: "" };
+      if (command === "npm" && args[0] === "install") {
+        const match = (args[2] ?? "").match(/#v(\d+\.\d+\.\d+)\s*$/);
+        if (match) cliVersion = match[1] as string;
+        return { stdout: "installed", stderr: "" };
+      }
       throw new Error(`unexpected call: ${command} ${args.join(" ")}`);
     };
 

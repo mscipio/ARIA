@@ -334,6 +334,8 @@ describe("T004 dependency failure is isolated and never blocks ARIA self-upgrade
     const upgradeExecutor: Executor = async (command, args) => {
       upgradeCalls.push(`${command} ${args.join(" ")}`);
       const key = `${command} ${args.join(" ")}`;
+      // R001 bare-CLI convergence probe (read-only verification).
+      if (key === "aria --version") return { stdout: "1.0.15", stderr: "" };
       if (key === "opencode plugin list") return { stdout: "No plugins found", stderr: "" };
       if (key === "opencode mcp list") {
         return { stdout: ["engram connected", "context7 connected", "codegraph connected"].join("\n"), stderr: "" };

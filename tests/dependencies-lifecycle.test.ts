@@ -219,6 +219,8 @@ describe("T017 upgrade handoff ordering and already-current binding", () => {
         "engram version": { error: "engram not found" },
         "codegraph --version": { error: "codegraph not found" },
         "opencode --version": { stdout: "opencode 2.0.23" },
+        // R001 bare-CLI convergence probe (read-only verification).
+        "aria --version": { stdout: "1.0.7" },
       },
       calls,
     );

@@ -707,6 +707,29 @@ export async function defaultSelfUpgrade() {
     };
 }
 /**
+ * R001 bare-CLI convergence probe for the already-current gate (read-only).
+ *
+ * The running package version (`check.cliVersion`) alone never proves the
+ * globally installed bare `aria` is at the target. This probes the real
+ * bare `aria --version` through the same executor and returns the bare
+ * version (e.g. `1.1.0`) or null when it cannot be positively identified.
+ * Never installs: the single `npm install -g <target.spec>` updater stays
+ * inside the self-upgrade adapter (R003). Mirrors
+ * `readInstalledCliVersion` in `src/aria-upgrade.ts` without importing it
+ * (that module imports this one).
+ */
+async function readBareInstalledCliVersion(executor) {
+    try {
+        const result = await executor("aria", ["--version"]);
+        const raw = result.stdout.trim().split(/\s+/)[0] ?? "";
+        const version = raw.startsWith("v") ? raw.slice(1) : raw;
+        return /^\d+\.\d+\.\d+/.test(version) ? version : null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
  * T010 already-current CLI/plugin identity gate (pure, no mutation).
  *
  * The already-current dependency path mutates (shared lifecycle) directly
@@ -779,15 +802,17 @@ export async function runUpgrade(executor = defaultExecutor, options) {
             detail: "ARIA target or installed version is not positively identified; self-upgrade blocked with zero mutation.",
         };
     }
-    // Already current: ARIA is current only when BOTH the positively
-    // identified installed/OpenCode registration AND the running globally
-    // installed CLI are at the available target (R006). A stale CLI
-    // (registration at target with the CLI behind, e.g. plugin 1.1.0 plus CLI
+    // Already current: ARIA is current only when the positively identified
+    // installed/OpenCode registration, the running CLI, AND the positively
+    // verified globally installed bare CLI are all at the available target
+    // (R006 + R001). A stale bare CLI (registration and running package at
+    // target with bare `aria --version` behind, e.g. plugin 1.1.0 plus bare
     // 1.0.15 at target 1.1.0) is NOT already current: it falls through to the
     // existing bounded exact-target CLI-update path below (R003
     // `npm install -g <exact-target-spec>` inside the self-upgrade adapter,
     // then the one-shot handoff with no registration replacement), so a bare
-    // `aria --version` ends at the target release. No new mechanism.
+    // `aria --version` ends at the target release. No new mechanism, no
+    // second updater: this gate only probes read-only and fails closed.
     //
     // Without a dependencies seam, report with zero mutation (pre-T017
     // behavior preserved for existing callers/tests). With a seam (the `aria
@@ -800,8 +825,15 @@ export async function runUpgrade(executor = defaultExecutor, options) {
     // running CLI that is not positively the registered installation fails
     // closed with zero mutation). Only the approved exact-target handoff
     // below moves between releases.
+    //
+    // R001: the running package version alone never reports already-current.
+    // The bare CLI is probed read-only here; an unknown or stale bare CLI
+    // falls through (fail-closed, never false success).
     const cliAtTarget = check.cliVersion !== null && check.cliVersion === check.available.target.version;
-    if (check.currentVersion === check.available.target.version && cliAtTarget) {
+    const bareCliAtTarget = check.currentVersion === check.available.target.version && cliAtTarget
+        ? (await readBareInstalledCliVersion(executor)) === check.available.target.version
+        : false;
+    if (check.currentVersion === check.available.target.version && cliAtTarget && bareCliAtTarget) {
         if (!options.dependenciesFn) {
             return { stage: "already-current", ok: true, check, detail: `ARIA ${check.currentVersion} is already current; no changes made.` };
         }

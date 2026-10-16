@@ -80,6 +80,8 @@ interface StaleWorld {
   /** Add specs whose persisted write is silently skipped (models genuine persist failure with exit 0). */
   skipPersistOnAdd: Set<string>;
   listCalls: number;
+  /** Fake globally installed bare CLI version (`aria --version`; moves on `npm install -g`). */
+  cliVersion: string;
 }
 
 function makeStaleWorld(initial: Row[]): { world: StaleWorld; executor: Executor } {
@@ -92,8 +94,14 @@ function makeStaleWorld(initial: Row[]): { world: StaleWorld; executor: Executor
     handoffs: [],
     skipPersistOnAdd: new Set(),
     listCalls: 0,
+    cliVersion: "1.0.6",
   };
   const executor: Executor = async (command, args) => {
+    // R006 convergence probe (read-only verification, never a mutation):
+    // served without recording so call-order assertions keep their meaning.
+    if (command === "aria" && args[0] === "--version") {
+      return { stdout: world.cliVersion, stderr: "" };
+    }
     world.calls.push(`${command} ${args.join(" ")}`);
     if (command === "opencode" && args[0] === "plugin" && args[1] === "list") {
       world.listCalls += 1;
@@ -117,6 +125,9 @@ function makeStaleWorld(initial: Row[]): { world: StaleWorld; executor: Executor
     }
     if (command === "npm" && args[0] === "install") {
       // R003 bounded installed-CLI update (`npm install -g <exact-spec>`).
+      // The global install moves the bare CLI to the exact target release.
+      const match = (args[2] ?? "").match(/#v(\d+\.\d+\.\d+)\s*$/);
+      if (match) world.cliVersion = match[1] as string;
       return { stdout: "installed", stderr: "" };
     }
     throw new Error(`unexpected call: ${command} ${args.join(" ")}`);

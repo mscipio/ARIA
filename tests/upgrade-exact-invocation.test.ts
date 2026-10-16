@@ -160,7 +160,13 @@ describe("T003 resume guidance after replacement names the installed exact targe
     ];
     const persistedSpecs: string[] = rows.map((row) => row[2]);
     const calls: string[] = [];
+    // Fake globally installed bare CLI version (moves on `npm install -g`).
+    let cliVersion = "1.0.6";
     const executor: Executor = async (command, args) => {
+      // R006 convergence probe (read-only verification, never a mutation).
+      if (command === "aria" && args[0] === "--version") {
+        return { stdout: cliVersion, stderr: "" };
+      }
       calls.push(`${command} ${args.join(" ")}`);
       if (command === "opencode" && args[1] === "list") {
         return { stdout: pluginTable(rows), stderr: "" };
@@ -178,6 +184,8 @@ describe("T003 resume guidance after replacement names the installed exact targe
       }
       if (command === "npm" && args[0] === "install") {
         // R003 bounded installed-CLI update runs before replacement.
+        const match = (args[2] ?? "").match(/#v(\d+\.\d+\.\d+)\s*$/);
+        if (match) cliVersion = match[1] as string;
         return { stdout: "installed", stderr: "" };
       }
       if (command === "npm") {
@@ -216,7 +224,13 @@ describe("T003 approved --yes path still replaces via the guarded mechanism", ()
     ];
     const persistedSpecs: string[] = rows.map((row) => row[2]);
     const calls: string[] = [];
+    // Fake globally installed bare CLI version (moves on `npm install -g`).
+    let cliVersion = "1.0.6";
     const executor: Executor = async (command, args) => {
+      // R006 convergence probe (read-only verification, never a mutation).
+      if (command === "aria" && args[0] === "--version") {
+        return { stdout: cliVersion, stderr: "" };
+      }
       calls.push(`${command} ${args.join(" ")}`);
       if (command === "git") return { stdout: "aaa\trefs/tags/v1.0.6\nbbb\trefs/tags/v1.0.7\n", stderr: "" };
       if (command === "opencode" && args[1] === "list") return { stdout: pluginTable(rows), stderr: "" };
@@ -234,6 +248,8 @@ describe("T003 approved --yes path still replaces via the guarded mechanism", ()
       if (command === "opencode" && args[0] === "mcp") return { stdout: "MCP Servers", stderr: "" };
       if (command === "npm" && args[0] === "install") {
         // R003 bounded installed-CLI update runs before replacement.
+        const match = (args[2] ?? "").match(/#v(\d+\.\d+\.\d+)\s*$/);
+        if (match) cliVersion = match[1] as string;
         return { stdout: "installed", stderr: "" };
       }
       if (command === "engram") throw new Error("engram not found");
@@ -301,7 +317,13 @@ describe("T003 migrate-from (newer-CLI-owned immutable-sender escape)", () => {
 
   function makeMigrateWorld(initial: Array<[string, string, string]>): { world: MigrateWorld; executor: Executor } {
     const world: MigrateWorld = { rows: [...initial], persistedSpecs: initial.map((row) => row[2]), calls: [] };
+    // Fake globally installed bare CLI version (moves on `npm install -g`).
+    let cliVersion = "1.0.7";
     const executor: Executor = async (command, args) => {
+      // R006 convergence probe (read-only verification, never a mutation).
+      if (command === "aria" && args[0] === "--version") {
+        return { stdout: cliVersion, stderr: "" };
+      }
       world.calls.push(`${command} ${args.join(" ")}`);
       if (command === "git") return { stdout: LS_REMOTE_107_110, stderr: "" };
       if (command === "opencode" && args[0] === "plugin" && args[1] === "list") {
@@ -323,6 +345,8 @@ describe("T003 migrate-from (newer-CLI-owned immutable-sender escape)", () => {
       if (command === "opencode" && args[0] === "mcp") return { stdout: "MCP Servers", stderr: "" };
       if (command === "npm" && args[0] === "install") {
         // R003 bounded installed-CLI update runs before replacement.
+        const match = (args[2] ?? "").match(/#v(\d+\.\d+\.\d+)\s*$/);
+        if (match) cliVersion = match[1] as string;
         return { stdout: "installed", stderr: "" };
       }
       if (command === "engram") throw new Error("engram not found");

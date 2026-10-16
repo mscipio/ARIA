@@ -86,12 +86,18 @@ interface UpgradeProbeOutputs {
   mcpList?: string;
   engramVersion?: string;
   codegraphVersion?: string;
+  bareVersion?: string;
 }
 
 /** Fake executor serving ONLY read-only upgrade probes; anything else throws. */
 function probeExecutor(outputs: UpgradeProbeOutputs, calls: string[]): Executor {
   return async (command, args) => {
     calls.push(`${command} ${args.join(" ")}`);
+    // R001 bare-CLI convergence probe (read-only verification, never a mutation).
+    if (command === "aria" && args[0] === "--version") {
+      if (outputs.bareVersion === undefined) throw new Error("bare aria --version not positively identified");
+      return { stdout: outputs.bareVersion, stderr: "" };
+    }
     if (command === "git" && args[0] === "ls-remote") {
       if (outputs.lsRemote === undefined) throw new Error("git ls-remote failed: network unavailable");
       return { stdout: outputs.lsRemote, stderr: "" };
@@ -121,6 +127,7 @@ const READ_ONLY_CALLS = new Set([
   "opencode mcp list",
   "engram version",
   "codegraph --version",
+  "aria --version",
 ]);
 
 function expectReadOnly(calls: string[]): void {
@@ -245,7 +252,9 @@ describe("T010 approval gate and unknown-target block", () => {
   it("short-circuits already-current with zero mutation", async () => {
     const { configDir } = await makeIsolatedConfigDir();
     const calls: string[] = [];
-    const result = await runUpgrade(probeExecutor({ lsRemote: LS_REMOTE_SAMPLE, mcpList: HEALTHY_MCP_LIST }, calls), {
+    // R001: already-current requires registration + running CLI + positively
+    // verified bare CLI all at the target.
+    const result = await runUpgrade(probeExecutor({ lsRemote: LS_REMOTE_SAMPLE, mcpList: HEALTHY_MCP_LIST, bareVersion: "1.0.7" }, calls), {
       configDir,
       currentVersion: "1.0.7",
       // R006: already-current requires BOTH registration and CLI at target.

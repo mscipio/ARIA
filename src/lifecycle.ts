@@ -13,7 +13,7 @@ import {
   type ModelConfigureOptions,
   type ModelConfigureOutput,
 } from "./model-config.js";
-import { defaultAgentsDir, installAgentFiles, rollbackAgentInstall, type AgentInstallResult } from "./agents.js";
+import { defaultAgentsDir, installAgentFiles, readPackageVersion, rollbackAgentInstall, type AgentInstallResult } from "./agents.js";
 import { getPackageRoot } from "./defaults.js";
 import {
   assertSetupConfigNotAmbiguous,
@@ -455,6 +455,21 @@ export function isRecognizedAriaGitSource(target: string): boolean {
 }
 
 /**
+ * T003 same-release Git identity (setup only): an approved
+ * `github:mscipio/ARIA#vX.Y.Z` SOURCE whose exact tag version equals the
+ * running CLI's normalized bare version (e.g. `1.1.0` for `#v1.1.0`) is the
+ * same release as the running install, so setup continues idempotently
+ * instead of refusing. Any other Git SOURCE (different tag, inexact ref, or
+ * foreign prefix even with an equal tag) is not the same release and still
+ * refuses before mutation. Pure: no executor, no mutation.
+ */
+export function isSameReleaseGitTarget(target: string, runningVersion: string | null): boolean {
+  if (runningVersion === null) return false;
+  if (!isRecognizedAriaGitSource(target)) return false;
+  return pluginSpecTagVersion(target) === runningVersion;
+}
+
+/**
  * T012 shared ARIA registration rule (single source for lifecycle gating
  * and doctor reporting). A plugin-list row is positively ARIA-identifying
  * when its ID is `aria` (any SOURCE, including local paths and foreign
@@ -735,6 +750,17 @@ export async function setup(
   // (`resolveInstalledPackageRoot`), never by searching for the checkout.
   const invocationWorktree = options.worktree ?? process.cwd();
   const installedRoot = resolveInstalledPackageRoot();
+  // T003 same-release identity: the running CLI's normalized bare version
+  // (e.g. `1.1.0`). An approved `github:mscipio/ARIA#vX.Y.Z` SOURCE with an
+  // exact tag equal to this version is the same release as the running
+  // install, so setup continues idempotently. Unknown/unreadable versions
+  // never match (fail closed, T002 preserved).
+  let runningVersion: string | null = null;
+  try {
+    runningVersion = normalizeIdentityVersion(readPackageVersion());
+  } catch {
+    runningVersion = null;
+  }
 
   // T012: an explicit but empty `--plugin-spec` fails closed before any
   // introspection, registration, or file mutation (registering "nothing" must
@@ -755,9 +781,15 @@ export async function setup(
   // runtime installed so detection stays exactly-once). Without it, the
   // narrowest supported local argument is the absolute checkout directory
   // path (no `file://` scheme, no `--global`, no invented flags).
+  // T003: without `--plugin-spec`, an approved same-release Git SOURCE
+  // (exact tag equal to the running version above) is also the intended
+  // target — the config identity then preserves that observed Git spec
+  // (exactly-once) instead of appending a second local entry; every other
+  // Git/foreign source still refuses before mutation.
   const pluginSpec = options.pluginSpec;
   const packageArg = pluginSpec ?? checkout;
-  const configPluginIdentity = pluginSpec ?? pluginUri;
+  const baseConfigPluginIdentity = pluginSpec ?? pluginUri;
+  let effectiveConfigPluginIdentity = baseConfigPluginIdentity;
 
   // T001 hotfix preflight: read-only canonical-config discovery at the
   // effective config root BEFORE any `opencode plugin list/add` executor
@@ -821,11 +853,31 @@ export async function setup(
 
       const matchesCurrent = (target: string): boolean =>
         (pluginSpec !== undefined && target === pluginSpec) ||
-        matchesCurrentPluginTarget(target, checkout, pluginUri);
+        matchesCurrentPluginTarget(target, checkout, pluginUri) ||
+        // R002: same-release fallback applies only when --plugin-spec is
+        // omitted. An explicit conflicting spec must refuse before writes
+        // and never append a duplicate conflicting registration.
+        (pluginSpec === undefined && isSameReleaseGitTarget(target, runningVersion));
       const gate = classifySetupIdentity(entries, matchesCurrent);
       if (gate.kind === "matching") {
         registrationAction = "already registered";
         registrationDetail = gate.detail;
+        // T003 preserve exactly-once Git identity: when the unique match is
+        // a same-release Git SOURCE (not a local path), the config file
+        // must keep that Git spec instead of appending a second local entry.
+        // Local matches keep the canonical local URI (existing behavior).
+        if (pluginSpec === undefined) {
+          const registration = classifyAriaRegistration(entries, matchesCurrent);
+          if (registration.kind === "single") {
+            const soleTarget = registration.identifying[0]!.target;
+            if (
+              isSameReleaseGitTarget(soleTarget, runningVersion) &&
+              !matchesCurrentPluginTarget(soleTarget, checkout, pluginUri)
+            ) {
+              effectiveConfigPluginIdentity = soleTarget;
+            }
+          }
+        }
       } else if (gate.kind === "absent") {
         // Positively absent — deterministic first-time bootstrap only.
         const pluginResult = await run(executor, invocationWorktree, "opencode", "plugin", "add", packageArg);
@@ -903,7 +955,7 @@ export async function setup(
 
   let configState: SetupConfigFileResult;
   try {
-    configState = await ensureAriaSetupConfigFile({ configPath: globalConfigPath, pluginUri: configPluginIdentity, skillsRoot });
+    configState = await ensureAriaSetupConfigFile({ configPath: globalConfigPath, pluginUri: effectiveConfigPluginIdentity, skillsRoot });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {

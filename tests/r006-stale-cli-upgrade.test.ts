@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { selfUpgradeAria } from "../src/aria-upgrade.js";
+import { receiveUpgradeHandoff, selfUpgradeAria } from "../src/aria-upgrade.js";
 import type { Executor, ExecutorOptions } from "../src/deps.js";
 import { runUpgrade, type AriaAvailableTarget } from "../src/upgrade.js";
 
@@ -53,12 +53,21 @@ interface RecordedCall {
 }
 
 /** Fake world: real registration probe at the target, real CLI-update + handoff seams. */
-function makeWorld(options: { failNpmInstall?: boolean } = {}): {
+function makeWorld(options: { failNpmInstall?: boolean; staleInstall?: boolean; initialBareVersion?: string } = {}): {
   executor: Executor;
   calls: RecordedCall[];
 } {
   const calls: RecordedCall[] = [];
+  // Fake globally installed bare CLI version: starts stale by default (the
+  // reproduced plugin 1.1.0 + CLI 1.0.15 case) and moves on
+  // `npm install -g`. R001 true-current cases pin it at the target up front.
+  let cliVersion = options.initialBareVersion ?? STALE_CLI;
   const executor: Executor = async (command, args, channel) => {
+    // R006 convergence probe (read-only verification, never a mutation):
+    // served without recording so mutation-order assertions keep meaning.
+    if (command === "aria" && args[0] === "--version") {
+      return { stdout: cliVersion, stderr: "" };
+    }
     calls.push({ command, args, options: channel });
     const key = `${command} ${args.join(" ")}`;
     if (key === "opencode plugin list") {
@@ -71,6 +80,13 @@ function makeWorld(options: { failNpmInstall?: boolean } = {}): {
     if (key === "npm view @slkiser/opencode-quota version") throw new Error("network unavailable");
     if (command === "npm" && args[0] === "install") {
       if (options.failNpmInstall) throw new Error("npm install -g failed: network unavailable");
+      // A silent stale install (exit 0 with the bare CLI unchanged, e.g.
+      // wrong npm prefix or PATH shadowing) moves nothing: the convergence
+      // gate must fail closed instead of reporting success.
+      if (!options.staleInstall) {
+        const match = (args[2] ?? "").match(/#v(\d+\.\d+\.\d+)\s*$/);
+        if (match) cliVersion = match[1] as string;
+      }
       return { stdout: "installed", stderr: "" };
     }
     throw new Error(`Unexpected command: ${key}`);
@@ -164,7 +180,9 @@ describe("R006 stale installed CLI takes the bounded CLI-update path", () => {
 
   it("both current is a true no-op with zero mutation", async () => {
     const { configDir } = await makeIsolatedConfigDir();
-    const world = makeWorld();
+    // R001: true already-current requires the positively verified bare CLI
+    // at the target too — start the fake bare CLI at the target.
+    const world = makeWorld({ initialBareVersion: TARGET_110.version });
 
     const result = await runUpgrade(world.executor, {
       configDir,
@@ -185,6 +203,61 @@ describe("R006 stale installed CLI takes the bounded CLI-update path", () => {
       expect(call.startsWith("npm exec")).toBe(false);
       expect(call.startsWith("opencode plugin remove")).toBe(false);
       expect(call.startsWith("opencode plugin add")).toBe(false);
+    }
+    // Positive bare-CLI verification ran and observed the target.
+    const bare = await world.executor("aria", ["--version"]);
+    expect(bare.stdout.trim()).toBe(TARGET_110.version);
+  });
+
+  it("R001 running package at target with a stale bare CLI is NOT already-current (repairs via the single CLI-update path)", async () => {
+    const { configDir } = await makeIsolatedConfigDir();
+    // Registration observed at the target; the running package version is
+    // pinned at the target, but the globally installed bare CLI starts
+    // stale (default world). R001: running version alone must never report
+    // already-current while the bare CLI remains stale.
+    const world = makeWorld();
+    let handoffs = 0;
+
+    const result = await runUpgrade(world.executor, {
+      configDir,
+      cliVersion: TARGET_110.version,
+      availableOverride: TARGET_110,
+      approval: { yes: true },
+      // Real public orchestration path: the existing bounded R003 adapter
+      // (the single `npm install -g <exact-target-spec>` updater) plus the
+      // one-shot handoff with no registration replacement.
+      selfUpgradeFn: (target, handoff) =>
+        selfUpgradeAria(target, handoff, {
+          executor: world.executor,
+          readPersistedPlugins: persistedAtTarget,
+          delay: noDelay,
+          handoffSpawn: async () => {
+            handoffs++;
+            return {
+              ok: true,
+              detail: "stub handoff taken",
+              stdout: `ARIA upgrade report\nUpgrade to ${TARGET_110.spec} completed (${TARGET_110.tag})`,
+            };
+          },
+        }),
+    });
+
+    // Fail-closed: staleness is never reported as success.
+    expect(result.stage).toBe("handoff-taken");
+    expect(result.ok).toBe(true);
+    expect(result.stage).not.toBe("already-current");
+    expect(result.detail).not.toContain("no changes made");
+    // The single exact-target CLI update executed (no second updater) and
+    // the bare CLI converged to the target with no registration replacement.
+    expect(world.calls.map(callText)).toContain(`npm install -g ${TARGET_110.spec}`);
+    expect(world.calls.map(callText).filter((call) => call.startsWith("npm install")).length).toBe(1);
+    expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin remove"))).toBe(false);
+    expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin add"))).toBe(false);
+    expect(handoffs).toBe(1);
+    const bare = await world.executor("aria", ["--version"]);
+    expect(bare.stdout.trim()).toBe(TARGET_110.version);
+    for (const call of world.calls.map(callText)) {
+      expect(THIRD_PARTY_UPGRADES.some((mutation) => call.startsWith(mutation))).toBe(false);
     }
   });
 
@@ -220,5 +293,100 @@ describe("R006 stale installed CLI takes the bounded CLI-update path", () => {
     expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin remove"))).toBe(false);
     expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin add"))).toBe(false);
     expect(handoffs).toBe(0);
+  });
+
+  it("public upgrade→handoff chain converges the bare CLI with the registration (real receive)", async () => {
+    const { configDir } = await makeIsolatedConfigDir();
+    const world = makeWorld();
+    let received: { stage: string; ok: boolean } | null = null;
+
+    const result = await runUpgrade(world.executor, {
+      configDir,
+      cliVersion: STALE_CLI,
+      availableOverride: TARGET_110,
+      approval: { yes: true },
+      selfUpgradeFn: (target, handoff) =>
+        selfUpgradeAria(target, handoff, {
+          executor: world.executor,
+          readPersistedPlugins: persistedAtTarget,
+          delay: noDelay,
+          handoffSpawn: async (next, nextTarget) => {
+            // Real new-release receive half through the public handoff path
+            // (all post-handoff phases stubbed; the payload/identity binding
+            // is what this path proves).
+            const continuation = await receiveUpgradeHandoff(JSON.stringify(next), nextTarget.version, {
+              executor: world.executor,
+              components: {
+                engram: async () => ({ component: "engram", status: "skipped", detail: "stubbed", mutated: false }),
+                context7: async () => ({ component: "context7", status: "skipped", detail: "stubbed", mutated: false }),
+                codegraph: async () => ({ component: "codegraph", status: "skipped", detail: "stubbed", mutated: false }),
+                zotpilot: async () => ({ component: "zotpilot", status: "skipped", detail: "stubbed", mutated: false }),
+                quota: async () => ({ component: "quota", status: "skipped", detail: "stubbed", mutated: false }),
+              },
+              normalizeFn: async () => ({ ok: true, detail: "normalized", mutated: false }),
+              regenFn: async () => ({ ok: true, detail: "no regen required", mutated: false }),
+              depsSyncFn: async () => ({ ok: true, detail: "synced", mutated: false }),
+              doctorFn: async () => ({ ok: true, detail: "healthy", mutated: false }),
+            });
+            received = { stage: continuation.stage, ok: continuation.ok };
+            return {
+              ok: continuation.ok,
+              detail: continuation.detail,
+              stdout: continuation.ok ? `Upgrade to ${nextTarget.spec} completed (${nextTarget.tag})` : "",
+            };
+          },
+        }),
+    });
+
+    expect(result.stage).toBe("handoff-taken");
+    expect(result.ok).toBe(true);
+    expect(result.detail).not.toContain("no changes made");
+    // CLI and registration converge together: the single exact-target
+    // install moved the bare CLI while the registration stayed single at
+    // the target (no replacement, still one handoff).
+    expect(world.calls.map(callText)).toContain(`npm install -g ${TARGET_110.spec}`);
+    expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin remove"))).toBe(false);
+    expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin add"))).toBe(false);
+    const bare = await world.executor("aria", ["--version"]);
+    expect(bare.stdout.trim()).toBe(TARGET_110.version);
+    // The real handoff receive completed in the target release.
+    expect(received).toMatchObject({ stage: "complete", ok: true });
+  });
+
+  it("silent CLI staleness (install exit 0, bare CLI unchanged) fails closed with zero mutation", async () => {
+    const { configDir } = await makeIsolatedConfigDir();
+    const world = makeWorld({ staleInstall: true });
+    let handoffs = 0;
+
+    const result = await runUpgrade(world.executor, {
+      configDir,
+      cliVersion: STALE_CLI,
+      availableOverride: TARGET_110,
+      approval: { yes: true },
+      selfUpgradeFn: (target, handoff) =>
+        selfUpgradeAria(target, handoff, {
+          executor: world.executor,
+          readPersistedPlugins: persistedAtTarget,
+          delay: noDelay,
+          handoffSpawn: async () => {
+            handoffs++;
+            return { ok: true, detail: "must not hand off without CLI convergence", stdout: "" };
+          },
+        }),
+    });
+
+    expect(result.stage).toBe("self-upgrade-failed");
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain("did not converge");
+    expect(result.detail).not.toContain("already current");
+    // Fail-closed: the install was attempted, but the registration was
+    // never touched, no handoff ran, and the bare CLI is still stale —
+    // staleness can never be reported as success.
+    expect(world.calls.map(callText)).toContain(`npm install -g ${TARGET_110.spec}`);
+    expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin remove"))).toBe(false);
+    expect(world.calls.map(callText).some((call) => call.startsWith("opencode plugin add"))).toBe(false);
+    expect(handoffs).toBe(0);
+    const bare = await world.executor("aria", ["--version"]);
+    expect(bare.stdout.trim()).toBe(STALE_CLI);
   });
 });

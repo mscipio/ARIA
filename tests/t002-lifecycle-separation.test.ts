@@ -350,6 +350,8 @@ describe("T002 upgrade never upgrades third parties", () => {
     const executor: Executor = async (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
       const key = `${command} ${args.join(" ")}`;
+      // R001 bare-CLI convergence probe (read-only verification).
+      if (key === "aria --version") return { stdout: "1.0.7", stderr: "" };
       if (key === "opencode plugin list") return { stdout: "No plugins found", stderr: "" };
       if (key === "opencode mcp list") {
         return { stdout: ["engram connected", "context7 connected", "codegraph connected"].join("\n"), stderr: "" };

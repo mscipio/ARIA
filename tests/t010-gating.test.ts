@@ -118,6 +118,10 @@ describe("T010 already-current CLI/plugin identity gate", () => {
   function upgradeExecutor(pluginListStdout: string, calls: string[]): Executor {
     return async (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
+      // R001 bare-CLI convergence probe (read-only verification, never a mutation).
+      if (command === "aria" && args[0] === "--version") {
+        return { stdout: "1.0.7", stderr: "" };
+      }
       if (command === "git" && args[0] === "ls-remote") {
         return { stdout: "bbb222\trefs/tags/v1.0.7\n", stderr: "" };
       }
