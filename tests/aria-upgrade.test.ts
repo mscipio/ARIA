@@ -126,6 +126,10 @@ function makeFakePluginWorld(initial: Array<[string, string, string]>): FakePlug
         }
         return { stdout: "plugin installed", stderr: "" };
       }
+      if (command === "npm" && args[0] === "install") {
+        // R003 bounded installed-CLI update (`npm install -g <exact-spec>`).
+        return { stdout: "installed", stderr: "" };
+      }
       if (command === "npm" && args[0] === "exec") {
         if (world.spawnError !== null) {
           throw Object.assign(new Error(world.spawnError), { stdout: "", stderr: world.spawnError });
@@ -232,9 +236,11 @@ describe("T011 replace, validation, and preservation", () => {
 
     expect(outcome.ok).toBe(true);
     expect(outcome.handoffNote).toContain("performs no further work");
-    // Exact call order: detect → remove current → add target → verify → one-shot spawn. Never `plugin update`.
+    // Exact call order: detect → installed-CLI update → remove current → add
+    // target → verify → one-shot spawn. Never `plugin update`.
     expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual([
       "opencode plugin list",
+      `npm install -g ${TARGET_107.spec}`,
       `opencode plugin remove ${TARGET_106.spec}`,
       `opencode plugin add ${TARGET_107.spec}`,
       "opencode plugin list",
@@ -247,7 +253,9 @@ describe("T011 replace, validation, and preservation", () => {
     expect(world.rows.filter((row) => row[0] !== "aria")).toEqual(expect.arrayContaining(UNRELATED_ROWS));
     expect(world.rows.filter((row) => row[0] !== "aria")).toHaveLength(UNRELATED_ROWS.length);
     // Process-local git env on the mutating calls only; never in process.env.
-    expect(gitEnvCalls(world.calls).map((call) => call.args[1])).toEqual(["remove", "add"]);
+    expect(
+      gitEnvCalls(world.calls).map((call) => (call.command === "npm" ? `npm ${call.args[0]}` : `opencode ${call.args[1]}`)),
+    ).toEqual(["npm install", "opencode remove", "opencode add"]);
     expect("NPM_CONFIG_ALLOW_GIT" in process.env).toBe(hadGitKey);
   });
 
@@ -260,7 +268,12 @@ describe("T011 replace, validation, and preservation", () => {
     });
     expect(outcome.ok).toBe(true);
     expect(outcome.detail).toContain("no replacement performed");
-    expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual(["opencode plugin list"]);
+    // Already at target: detection plus the bounded installed-CLI update,
+    // then the one-shot handoff with no replacement.
+    expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual([
+      "opencode plugin list",
+      `npm install -g ${TARGET_107.spec}`,
+    ]);
     expect(captured).toHaveLength(1);
   });
 
@@ -269,7 +282,7 @@ describe("T011 replace, validation, and preservation", () => {
     world.spawnStdout = `ARIA upgrade report\nUpgrade to ${TARGET_107.spec} completed (${TARGET_107.tag})`;
     const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(true);
-    const spawn = world.calls.find((call) => call.command === "npm");
+    const spawn = world.calls.find((call) => call.command === "npm" && call.args[0] === "exec");
     expect(spawn?.args.slice(0, 7)).toEqual(["exec", "--yes", "--package", TARGET_107.spec, "--", "aria", "upgrade"]);
     expect(spawn === undefined ? "" : spawnPayload(spawn)).toContain("aria-upgrade-handoff");
     expect(spawn?.options?.env?.["NPM_CONFIG_ALLOW_GIT"]).toBe("all");
@@ -322,6 +335,7 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
     expect(captured).toHaveLength(0);
     expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual([
       "opencode plugin list",
+      `npm install -g ${TARGET_107.spec}`,
       `opencode plugin remove ${TARGET_106.spec}`,
       `opencode plugin add ${TARGET_107.spec}`,
       "opencode plugin list",
@@ -355,6 +369,7 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
     expect(world.calls.some((call) => call.args[1] === "add")).toBe(false);
     expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual([
       "opencode plugin list",
+      `npm install -g ${TARGET_107.spec}`,
       `opencode plugin remove ${TARGET_106.spec}`,
       "opencode plugin list",
     ]);
@@ -399,7 +414,7 @@ describe("T011 handoff target immutability and failure states", () => {
     const handoff = handoffFor(TARGET_107);
     const outcome = await selfUpgradeAria(TARGET_107, handoff, { executor: world.executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay });
     expect(outcome.ok).toBe(true);
-    const spawn = world.calls.find((call) => call.command === "npm");
+    const spawn = world.calls.find((call) => call.command === "npm" && call.args[0] === "exec");
     if (spawn === undefined) throw new Error("expected one npm-exec spawn");
     const sent = JSON.parse(spawnPayload(spawn)) as UpgradeHandoff;
     expect(sent.target).toEqual(TARGET_107);
@@ -419,6 +434,7 @@ describe("T011 handoff target immutability and failure states", () => {
     // No rollback of a good replacement: nothing runs after the spawn.
     expect(world.calls.map((call) => `${call.command} ${call.args[0]} ${call.args[1]}`)).toEqual([
       "opencode plugin list",
+      "npm install -g",
       "opencode plugin remove",
       "opencode plugin add",
       "opencode plugin list",
@@ -475,6 +491,7 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
         return { stdout: "plugin installed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "mcp") return { stdout: HEALTHY_MCP_LIST, stderr: "" };
+      if (command === "npm" && args[0] === "install") return { stdout: "installed", stderr: "" };
       throw new Error(`unexpected call: ${command} ${args.join(" ")}`);
     };
 
@@ -506,6 +523,7 @@ describe("T011 old-code-stops proof through the real T010 orchestration", () => 
     const allowed = new Set([
       "git ls-remote https://github.com/mscipio/ARIA.git",
       "opencode plugin list",
+      `npm install -g ${TARGET_107.spec}`,
       `opencode plugin remove ${TARGET_106.spec}`,
       `opencode plugin add ${TARGET_107.spec}`,
       "opencode mcp list",
@@ -584,5 +602,66 @@ describe("T003 migrate-from explicit gate (newer-CLI-owned)", () => {
     expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toEqual(["opencode plugin list"]);
     expect(world.rows.map((row) => row[2])).toEqual(before);
     expect(world.persistedSpecs).toEqual(before);
+  });
+});
+
+describe("R003 bounded installed-CLI update (bare-command version identity)", () => {
+  function cliUpgradingExecutor(
+    world: FakePluginWorld,
+    state: { cliVersion: string; failInstall: boolean },
+  ): Executor {
+    return async (command, args, options) => {
+      if (command === "aria" && args[0] === "--version") return { stdout: state.cliVersion, stderr: "" };
+      if (command === "npm" && args[0] === "install") {
+        world.calls.push({ command, args, options });
+        if (state.failInstall) throw new Error("npm install -g failed: network unavailable");
+        // The global install moves to the exact target release.
+        state.cliVersion = TARGET_107.version;
+        return { stdout: "installed", stderr: "" };
+      }
+      return world.executor(command, args, options);
+    };
+  }
+
+  it("moves the installed CLI to the exact target before handoff so bare aria reports the new release", async () => {
+    const world = makeFakePluginWorld(initial106());
+    const state = { cliVersion: "1.0.6", failInstall: false };
+    const executor = cliUpgradingExecutor(world, state);
+    const captured: Array<{ handoff: UpgradeHandoff; target: AriaAvailableTarget }> = [];
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
+      executor,
+      readPersistedPlugins: persistedReaderFor(world),
+      delay: noDelay,
+      handoffSpawn: capturingSpawn(captured),
+    });
+    expect(outcome.ok).toBe(true);
+    // Bounded update: exactly `npm install -g <exact-target-spec>` with
+    // per-call git env, ordered before any registration mutation.
+    expect(world.calls.map((call) => `${call.command} ${call.args.join(" ")}`)[1]).toBe(
+      `npm install -g ${TARGET_107.spec}`,
+    );
+    expect(world.calls[1]?.options?.env?.["NPM_CONFIG_ALLOW_GIT"]).toBe("all");
+    expect(world.calls[2]).toMatchObject({ command: "opencode", args: ["plugin", "remove", TARGET_106.spec] });
+    // Bare-command version identity follows the update through the same executor.
+    const bare = await executor("aria", ["--version"]);
+    expect(bare.stdout).toBe(TARGET_107.version);
+    expect(captured).toHaveLength(1);
+  });
+
+  it("fails closed with zero registration mutation when the installed-CLI update fails", async () => {
+    const world = makeFakePluginWorld(initial106());
+    const before = world.rows.map((row) => row[2]);
+    const state = { cliVersion: "1.0.6", failInstall: true };
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
+      executor: cliUpgradingExecutor(world, state),
+      readPersistedPlugins: persistedReaderFor(world),
+      delay: noDelay,
+      handoffSpawn: capturingSpawn([]),
+    });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("installed CLI update did not complete");
+    expect(outcome.detail).toContain("No changes were made");
+    expect(world.rows.map((row) => row[2])).toEqual(before);
+    expect(world.calls.some((call) => call.args[1] === "remove" || call.args[1] === "add")).toBe(false);
   });
 });

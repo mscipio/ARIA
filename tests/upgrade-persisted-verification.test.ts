@@ -115,6 +115,10 @@ function makeStaleWorld(initial: Row[]): { world: StaleWorld; executor: Executor
       if (!world.skipPersistOnAdd.has(spec)) world.persisted.push(spec);
       return { stdout: "plugin installed", stderr: "" };
     }
+    if (command === "npm" && args[0] === "install") {
+      // R003 bounded installed-CLI update (`npm install -g <exact-spec>`).
+      return { stdout: "installed", stderr: "" };
+    }
     throw new Error(`unexpected call: ${command} ${args.join(" ")}`);
   };
   return { world, executor };

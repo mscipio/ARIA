@@ -20,16 +20,20 @@ import {
 import { assertNotCallerGlobalPath } from "./test-isolation.js";
 
 // ---------------------------------------------------------------------------
-// v1.0.11 hotfix T003: formula-scoped Engram brew regressions.
+// v1.0.11 hotfix T003: formula-scoped Engram brew regressions. R002: the
+// preflight never gates the ARIA-only upgrade path (dependency failure
+// cannot block self-upgrade; the probe does not run there) — it remains a
+// fail-closed gate for the newer-CLI migrate path only.
 //
 // Uses only the existing executor/file-operation seams (no sleeps, no live
 // mutation). Proves: never bare `brew upgrade engram`; fully qualified
 // `--formula gentleman-programming/tap/engram` is used; no cask, whole-tap,
 // or trust command is ever invoked (argv scan across brew calls); the
-// preflight never runs during read-only inventory/`--check` or before
-// explicit approval; failure/indeterminate stops before ARIA mutation or
-// handoff with an actionable error; success proceeds; non-Homebrew/GitHub
-// paths are unchanged; unrelated config is preserved.
+// preflight never runs during read-only inventory/`--check`, before
+// explicit approval, or anywhere on the ARIA-only upgrade path;
+// migrate failure/indeterminate stops before transition/continuation with
+// an actionable error; migrate success proceeds; non-Homebrew/GitHub paths
+// are unchanged; unrelated config is preserved.
 // Real formula-only-trust sufficiency is T004's job and is NOT asserted here.
 // ---------------------------------------------------------------------------
 
@@ -415,8 +419,8 @@ describe("v1.0.11 preflight gating (inventory and approval)", () => {
   });
 });
 
-describe("v1.0.11 preflight fail-closed ordering (upgrade + migrate)", () => {
-  it("upgrade failure stops before mutation/handoff with an actionable error and preserves unrelated config", async () => {
+describe("R002 ARIA-only upgrade carries no dependency preflight (upgrade + migrate)", () => {
+  it("upgrade proceeds to the approved handoff despite dry-run failure with zero dependency mutation", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "rdc-preflight-fail-"));
     tempDirs.push(root);
     const configDir = resolve(root, "config", "opencode");
@@ -430,30 +434,28 @@ describe("v1.0.11 preflight fail-closed ordering (upgrade + migrate)", () => {
       configDir,
       currentVersion: "1.0.6",
       approval: { yes: true },
-      selfUpgradeFn: async () => {
+      selfUpgradeFn: async (target, handoff) => {
         selfUpgradeCalls += 1;
-        throw new Error("self-upgrade must not run after preflight failure");
+        expect(target.spec).toBe("github:mscipio/ARIA#v1.0.7");
+        expect(handoff.target.spec).toBe("github:mscipio/ARIA#v1.0.7");
+        return { ok: true, detail: "replaced", handoffNote: "new release owns the remainder" };
       },
     });
-    expect(result.stage).toBe("preflight-failed");
-    expect(result.ok).toBe(false);
-    expect(selfUpgradeCalls).toBe(0);
-    expect("handoff" in result && result.handoff).toBeFalsy();
-    expect(calls.map((call) => `${call.command} ${call.args.join(" ")}`)).toContain(EXACT_DRY_RUN);
+    // R002: a dependency probe failure never blocks ARIA self-upgrade — the
+    // dry-run probe does not even run on this path.
+    expect(result.stage).toBe("handoff-taken");
+    expect(result.ok).toBe(true);
+    expect(selfUpgradeCalls).toBe(1);
+    expect("handoff" in result && result.handoff).toBeTruthy();
+    expect(calls.map((call) => `${call.command} ${call.args.join(" ")}`)).not.toContain(EXACT_DRY_RUN);
     expectZeroAriaMutation(calls);
     expectNoProhibitedBrew(calls);
-    // Actionable: names the formula, the failed command, and the manual prerequisite.
-    expect(result.detail).toContain(FORMULA);
-    expect(result.detail).toContain(formatEngramPreflightCommand());
-    expect(result.detail.toLowerCase()).toContain("manually");
-    expect(result.detail).toContain("No changes were made");
-    expect(result.detail).toContain("No trust was granted automatically");
     const after = await snapshotTree(root);
     expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
     for (const [path, bytes] of before) expect(after.get(path)).toBe(bytes);
   });
 
-  it("upgrade indeterminate (non-Error throw) stops the same way with zero mutation", async () => {
+  it("upgrade indeterminate probe state proceeds the same way with zero dependency mutation", async () => {
     const { calls, executor } = upgradeWorld({ dryRun: "indeterminate", engram: "homebrew" });
     const { configDir } = await (async () => {
       const root = await mkdtemp(resolve(tmpdir(), "rdc-preflight-ind-"));
@@ -469,19 +471,18 @@ describe("v1.0.11 preflight fail-closed ordering (upgrade + migrate)", () => {
       approval: { yes: true },
       selfUpgradeFn: async () => {
         selfUpgradeCalls += 1;
-        return { ok: true, detail: "must not run" };
+        return { ok: true, detail: "replaced", handoffNote: "taken" };
       },
     });
-    expect(result.stage).toBe("preflight-failed");
-    expect(result.ok).toBe(false);
-    expect(selfUpgradeCalls).toBe(0);
-    expect(result.detail).toContain(FORMULA);
-    expect(result.detail).toContain(formatEngramPreflightCommand());
+    expect(result.stage).toBe("handoff-taken");
+    expect(result.ok).toBe(true);
+    expect(selfUpgradeCalls).toBe(1);
+    expect(calls.map((call) => `${call.command} ${call.args.join(" ")}`)).not.toContain(EXACT_DRY_RUN);
     expectZeroAriaMutation(calls);
     expectNoProhibitedBrew(calls);
   });
 
-  it("upgrade success proceeds to the approved handoff after the dry-run", async () => {
+  it("upgrade success proceeds to the approved handoff with no dry-run probe", async () => {
     const { calls, executor } = upgradeWorld({ dryRun: "ok", engram: "homebrew" });
     const { configDir } = await (async () => {
       const root = await mkdtemp(resolve(tmpdir(), "rdc-preflight-ok-"));
@@ -506,9 +507,8 @@ describe("v1.0.11 preflight fail-closed ordering (upgrade + migrate)", () => {
     expect(result.ok).toBe(true);
     expect(selfUpgradeCalls).toBe(1);
     const joined = calls.map((call) => `${call.command} ${call.args.join(" ")}`);
-    expect(joined).toContain(EXACT_DRY_RUN);
-    // Probe precedes the approved handoff work.
-    expect(joined.indexOf(EXACT_DRY_RUN)).toBeGreaterThanOrEqual(0);
+    // R002: the ARIA-only upgrade never runs the dependency dry-run probe.
+    expect(joined).not.toContain(EXACT_DRY_RUN);
     expectNoProhibitedBrew(calls);
   });
 

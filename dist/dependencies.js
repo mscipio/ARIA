@@ -6,10 +6,13 @@
 // detect → discover latest upstream → install if missing OR update if safely
 // owned/outdated → normalize/configure → validate.
 //
-// - `aria setup` invokes this lifecycle DIRECTLY on clean/existing OpenCode
-//   V2+ installs via `runSetupDependencies` (no ARIA self-upgrade handoff
-//   first; setup never performs self-replacement — that ordering belongs only
-//   to `aria upgrade` when ARIA itself is outdated).
+// - `aria setup` invokes the setup lifecycle DIRECTLY on clean/existing
+//   OpenCode V2+ installs via `runSetupDependencies` (no ARIA self-upgrade
+//   handoff first; setup never performs self-replacement — that ordering
+//   belongs only to `aria upgrade` when ARIA itself is outdated).
+//   T002: setup is install-if-missing ONLY — an already-installed dependency
+//   is left untouched even when a newer release exists (missing → setup;
+//   version upgrades belong exclusively to `aria deps --upgrade`, T004).
 // - `aria deps sync` remains non-version-chasing normalization/repair and is
 //   unchanged by this module (see `depsSync` in `./deps.js`; no behavior
 //   change beyond current).
@@ -44,11 +47,11 @@
 //   written; ambiguous ownership fails closed report-only with zero mutation.
 // ---------------------------------------------------------------------------
 import { installQuotaIfMissing } from "./bootstrap.js";
-import { ensureCodegraph } from "./codegraph.js";
-import { syncContext7 } from "./deps.js";
-import { ensureEngram } from "./engram.js";
+import { detectCodegraphState, ensureCodegraph } from "./codegraph.js";
+import { defaultExecutor, detectContext7, syncContext7 } from "./deps.js";
+import { detectEngramState, ensureEngram } from "./engram.js";
 import { checkQuotaUpgrade, upgradeQuota } from "./quota.js";
-import { ensureZotpilot } from "./zotpilot.js";
+import { detectZotpilotState, ensureZotpilot } from "./zotpilot.js";
 /** Bootstrap-stack component names (ARIA self-upgrade is separate, T011). */
 export const DEPENDENCY_COMPONENTS = ["engram", "codegraph", "zotpilot", "quota", "context7"];
 function completed(component, detail, mutated) {
@@ -207,14 +210,30 @@ export function formatDependenciesReport(outcomes) {
  * with no global transactionality — see `continueUpgradeInNewRelease`).
  *
  * - Setup calls this directly on clean/existing OC2+ installs.
+ *   T002 install-only rule: each adapter runs ONLY when its component is
+ *   positively identified as missing; an already-installed component
+ *   (any version, any registration) is reported skipped with zero mutation
+ *   — never upgraded, replaced, or re-normalized merely because a newer
+ *   release exists. Missing → setup; version upgrades belong exclusively
+ *   to `aria deps --upgrade` (T004). Reuses the existing adapters; no new
+ *   dependency abstraction is introduced.
  * - Post-handoff upgrade calls the SAME adapters in update/normalize mode
  *   through the component seams below (plus `runUpgradeDependencies`).
  */
 export async function runSetupDependencies(executor, options = {}) {
     const outcomes = [];
+    // T002 install-only: Engram runs ONLY when positively missing. A present
+    // binary (any version, any channel) is left untouched with zero mutation
+    // — never upgraded merely because a newer release exists.
     try {
-        const engram = await ensureEngram(executor, { configDir: options.configDir, fileOps: options.fileOps });
-        outcomes.push(mapEngram("engram", engram));
+        const initial = await detectEngramState(executor, options.fileOps);
+        if (initial.found) {
+            outcomes.push(skipped("engram", `Engram ${initial.version ?? "unknown"} already installed; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`));
+        }
+        else {
+            const engram = await ensureEngram(executor, { configDir: options.configDir, fileOps: options.fileOps });
+            outcomes.push(mapEngram("engram", engram));
+        }
     }
     catch (error) {
         outcomes.push({
@@ -236,9 +255,22 @@ export async function runSetupDependencies(executor, options = {}) {
             mutated: false,
         });
     }
+    // T002 install-only: ZotPilot runs ONLY on a clean system (no binary AND
+    // no registration). Any existing binary or registration (V2, legacy, or
+    // otherwise) is left untouched with zero mutation — never updated merely
+    // because a newer release exists.
     try {
-        const zotpilot = await ensureZotpilot(executor, { configDir: options.configDir, homeDir: options.homeDir });
-        outcomes.push(mapZotpilot("zotpilot", zotpilot));
+        const initial = await detectZotpilotState(executor, options.configDir);
+        if (initial.found || initial.registration !== "absent") {
+            const shape = initial.found
+                ? `ZotPilot ${initial.version ?? "unknown"} already installed`
+                : `existing ${initial.registration} zotpilot registration observed`;
+            outcomes.push(skipped("zotpilot", `${shape}; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`));
+        }
+        else {
+            const zotpilot = await ensureZotpilot(executor, { configDir: options.configDir, homeDir: options.homeDir });
+            outcomes.push(mapZotpilot("zotpilot", zotpilot));
+        }
     }
     catch (error) {
         outcomes.push({
@@ -248,8 +280,40 @@ export async function runSetupDependencies(executor, options = {}) {
             mutated: false,
         });
     }
+    // T002 install-only: Quota installs ONLY when positively absent
+    // (`checkQuotaUpgrade` skipped). Any observed, ambiguous, or unsupported
+    // target is left untouched with zero mutation — never upgraded here;
+    // version upgrades belong exclusively to `aria deps --upgrade` (T004).
     try {
-        outcomes.push(await ensureQuotaForLifecycle(executor, { configDir: options.configDir }));
+        const inventory = await checkQuotaUpgrade(executor, options.configDir);
+        if (inventory.status !== "skipped") {
+            outcomes.push(skipped("quota", `${inventory.detail}; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`));
+        }
+        else {
+            const installed = await installQuotaIfMissing(executor, { configDir: options.configDir });
+            switch (installed.status) {
+                case "installed":
+                    outcomes.push(completed("quota", installed.detail, true));
+                    break;
+                case "already-present":
+                    outcomes.push(skipped("quota", `${installed.detail} (observed during install; leaving untouched)`));
+                    break;
+                case "report-only":
+                    outcomes.push(skipped("quota", installed.detail));
+                    break;
+                case "install-failed":
+                    outcomes.push({
+                        component: "quota",
+                        status: "unresolved",
+                        detail: installed.detail,
+                        mutated: installed.mutated,
+                    });
+                    break;
+                case "validation-failed":
+                    outcomes.push(failed("quota", installed.detail, installed.rolledBack));
+                    break;
+            }
+        }
     }
     catch (error) {
         outcomes.push({
@@ -278,9 +342,120 @@ export async function runSetupDependencies(executor, options = {}) {
  * The adapters already branch on missing vs outdated internally, so the
  * update/normalize/validate mode IS the same shared lifecycle (no separate
  * version-chasing path, no database).
+ *
+ * T002 ownership note: production `aria upgrade` is ARIA-only and never
+ * calls this entry (bin/aria.mjs omits the seam); version upgrades belong
+ * exclusively to `aria deps --upgrade` (T004), which wires the managed
+ * adapters directly via `runDepsUpgrades` below. Retained as the shared install-only lifecycle for
+ * existing callers/tests.
  */
 export async function runUpgradeDependencies(executor, options = {}) {
     return runSetupDependencies(executor, options);
+}
+export async function runDepsUpgrades(executor = defaultExecutor, options = {}) {
+    const outcomes = [];
+    // R004: confirmed upgrades run ONLY on eligible existing managed targets.
+    // A missing component (clean system: no binary AND no registration, or the
+    // Quota-absent inventory) stays report-only even under `--upgrade --yes`:
+    // missing installs belong to `aria setup` (the proposal's no-action
+    // contract). Present-but-unmanaged states still delegate to the adapters,
+    // which fail closed to report-only with zero mutation on their own.
+    try {
+        const initial = await detectEngramState(executor, options.fileOps);
+        if (!initial.found) {
+            outcomes.push(skipped("engram", "Engram not installed; missing installs belong to `aria setup` (confirmed upgrades only move existing managed targets)"));
+        }
+        else {
+            outcomes.push(mapEngram("engram", await ensureEngram(executor, { configDir: options.configDir, fileOps: options.fileOps })));
+        }
+    }
+    catch (error) {
+        outcomes.push({
+            component: "engram",
+            status: "unresolved",
+            detail: `Engram upgrade threw (${error instanceof Error ? error.message : String(error)}); no state is positively confirmed`,
+            mutated: false,
+        });
+    }
+    try {
+        const initial = await detectCodegraphState(executor, options.configDir);
+        if (!initial.found && initial.registration === "absent") {
+            outcomes.push(skipped("codegraph", "CodeGraph not installed; missing installs belong to `aria setup` (confirmed upgrades only move existing managed targets)"));
+        }
+        else {
+            outcomes.push(mapCodegraph("codegraph", await ensureCodegraph(executor, { configDir: options.configDir })));
+        }
+    }
+    catch (error) {
+        outcomes.push({
+            component: "codegraph",
+            status: "unresolved",
+            detail: `CodeGraph upgrade threw (${error instanceof Error ? error.message : String(error)}); no state is positively confirmed`,
+            mutated: false,
+        });
+    }
+    try {
+        const initial = await detectZotpilotState(executor, options.configDir);
+        if (!initial.found && initial.registration === "absent") {
+            outcomes.push(skipped("zotpilot", "ZotPilot not installed; missing installs belong to `aria setup` (confirmed upgrades only move existing managed targets)"));
+        }
+        else {
+            outcomes.push(mapZotpilot("zotpilot", await ensureZotpilot(executor, { configDir: options.configDir, homeDir: options.homeDir })));
+        }
+    }
+    catch (error) {
+        outcomes.push({
+            component: "zotpilot",
+            status: "unresolved",
+            detail: `ZotPilot upgrade threw (${error instanceof Error ? error.message : String(error)}); no state is positively confirmed`,
+            mutated: false,
+        });
+    }
+    try {
+        // R004: the Quota-absent inventory (`skipped`: nothing observed) stays
+        // report-only — installation belongs to `aria setup`. Only a positively
+        // observed target delegates to the shared lifecycle (owned-outdated
+        // upgrades; ambiguous/unsupported stays report-only there).
+        const inventory = await checkQuotaUpgrade(executor, options.configDir);
+        if (inventory.status === "skipped") {
+            outcomes.push(skipped("quota", "no Quota installation observed; missing installs belong to `aria setup` (confirmed upgrades only move existing managed targets)"));
+        }
+        else {
+            outcomes.push(await ensureQuotaForLifecycle(executor, { configDir: options.configDir }));
+        }
+    }
+    catch (error) {
+        outcomes.push({
+            component: "quota",
+            status: "unresolved",
+            detail: `Quota upgrade threw (${error instanceof Error ? error.message : String(error)}); no state is positively confirmed`,
+            mutated: false,
+        });
+    }
+    try {
+        // R007: confirmed upgrades move ONLY existing managed targets. An
+        // absent/missing Context7 remote endpoint stays report-only even under
+        // `--upgrade --yes` — missing installs belong to `aria setup`, which
+        // keeps creating it through the same lifecycle. Reuses the existing
+        // detection; no new abstraction.
+        const initial = await detectContext7(executor, options.configDir);
+        if (!initial.configured) {
+            outcomes.push(skipped("context7", "Context7 remote endpoint not configured; missing installs belong to `aria setup` (confirmed upgrades only move existing managed targets)"));
+        }
+        else {
+            outcomes.push(await ensureContext7ForLifecycle(executor, { configDir: options.configDir }));
+        }
+    }
+    catch (error) {
+        outcomes.push({
+            component: "context7",
+            status: "unresolved",
+            detail: `Context7 upgrade threw (${error instanceof Error ? error.message : String(error)}); no state is positively confirmed`,
+            mutated: false,
+        });
+    }
+    const ok = outcomes.every((outcome) => outcome.status === "completed" || outcome.status === "skipped");
+    return { ok, outcomes, report: formatDependenciesReport(outcomes) };
 }
 // ---------------------------------------------------------------------------
 // Post-handoff component seams (T010 continuation defaults, T017 wiring)

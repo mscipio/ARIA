@@ -51,6 +51,11 @@ import { zotpilotUpgradeComponent } from "./zotpilot.js";
 // bootstrap and Context7 normalize run as REAL defaults post-handoff via the
 // shared dependency lifecycle (`src/dependencies.js`) — this module never
 // implements adapter internals, only wires them.
+//
+// T002 ownership: production `aria upgrade` (bin/aria.mjs) is ARIA-only and
+// passes ARIA-only continuation components with no third-party sync, so no
+// third-party upgrade/sync runs on the production upgrade path; version
+// upgrades belong exclusively to `aria deps --upgrade` (T004).
 // ---------------------------------------------------------------------------
 /** Git remote ARIA releases are discovered from (read-only `ls-remote`). */
 export const ARIA_GIT_REMOTE = "https://github.com/mscipio/ARIA.git";
@@ -547,7 +552,12 @@ export function formatUpgradeCheck(result) {
     if (result.selfUpgradeBlocked) {
         lines.push(`Self-upgrade: BLOCKED — ${result.blockReason ?? "target not positively identified"}`);
     }
-    else if (result.available.kind === "known" && result.currentVersion === result.available.target.version) {
+    else if (result.available.kind === "known" &&
+        result.currentVersion === result.available.target.version &&
+        result.cliVersion === result.available.target.version) {
+        // R006: already current only when BOTH the installed registration AND
+        // the running CLI are at the target. A stale CLI still needs the
+        // bounded exact-target CLI update, so it reports as available.
         lines.push("Self-upgrade: already current");
     }
     else if (result.available.kind === "known") {
@@ -567,6 +577,34 @@ export function formatUpgradeCheck(result) {
     lines.push("Details:");
     for (const row of result.components)
         lines.push(`  ${row.component}: ${row.detail}`);
+    return lines.join("\n");
+}
+// ---------------------------------------------------------------------------
+// T004 — `aria deps --upgrade` proposal reporting (pure, read-only).
+//
+// Renders the non-ARIA inventory rows as an upgrade proposal: rows whose
+// status shows adapter-owned currency (`unmanaged-observed`) are proposed
+// for re-evaluation by the owning adapter on explicit approval; every other
+// row states why it will see no action. The proposal promises nothing per
+// component — each managed adapter fails closed to report-only for
+// unknown/unmanaged targets when `runDepsUpgrades` runs. Never mutates.
+// ---------------------------------------------------------------------------
+export function formatDepsUpgradeProposal(check) {
+    const rows = check.components.filter((row) => row.component !== "aria");
+    const lines = ["ARIA dependency upgrade proposal (read-only; no changes were made)", ""];
+    for (const row of rows) {
+        lines.push(`  ${row.component}: installed=${row.installed ?? "-"} available=${row.available ?? "-"} status=${row.status} — ${row.detail}`);
+        const stance = row.status === "unmanaged-observed"
+            ? "proposed: re-evaluated by the owning adapter on approval (unknown/unmanaged stays report-only)"
+            : row.status === "remote-healthy" || row.status === "current"
+                ? "no action: already healthy/current"
+                : row.status === "skipped"
+                    ? "no action: nothing installed (missing installs belong to `aria setup`)"
+                    : "report-only: stays untouched even on approval (unknown/unmanaged)";
+        lines.push(`    ${stance}`);
+    }
+    lines.push("");
+    lines.push("Explicit approval is required before any mutation. Re-run as `aria deps --upgrade --yes` to apply managed upgrades; unknown/unmanaged targets stay report-only with zero mutation. No changes were made.");
     return lines.join("\n");
 }
 // ---------------------------------------------------------------------------
@@ -741,18 +779,29 @@ export async function runUpgrade(executor = defaultExecutor, options) {
             detail: "ARIA target or installed version is not positively identified; self-upgrade blocked with zero mutation.",
         };
     }
-    // Already current: without a dependencies seam, report with zero mutation
-    // (pre-T017 behavior preserved for existing callers/tests). With a seam
-    // (the `aria upgrade` CLI always provides the real shared lifecycle), run
-    // the approved dependency updates directly under the current release with
-    // NO self-replacement/handoff — the binding T017 case.
+    // Already current: ARIA is current only when BOTH the positively
+    // identified installed/OpenCode registration AND the running globally
+    // installed CLI are at the available target (R006). A stale CLI
+    // (registration at target with the CLI behind, e.g. plugin 1.1.0 plus CLI
+    // 1.0.15 at target 1.1.0) is NOT already current: it falls through to the
+    // existing bounded exact-target CLI-update path below (R003
+    // `npm install -g <exact-target-spec>` inside the self-upgrade adapter,
+    // then the one-shot handoff with no registration replacement), so a bare
+    // `aria --version` ends at the target release. No new mechanism.
     //
-    // T010: the seam path is gated on CLI/plugin identity before mutation. A
-    // running CLI that is not positively the registered installation (unknown
-    // or definite mismatch, e.g. dev CLI 1.0.8 vs registered v1.0.7) fails
-    // closed with zero mutation; only the approved exact-target handoff below
-    // moves between releases.
-    if (check.currentVersion === check.available.target.version) {
+    // Without a dependencies seam, report with zero mutation (pre-T017
+    // behavior preserved for existing callers/tests). With a seam (the `aria
+    // upgrade` CLI always provides the real shared lifecycle), run the
+    // approved dependency updates directly under the current release with NO
+    // self-replacement/handoff — the binding T017 case.
+    //
+    // T010: the seam path additionally requires CLI/plugin identity before
+    // mutation (defense-in-depth alongside the both-at-target entry above; a
+    // running CLI that is not positively the registered installation fails
+    // closed with zero mutation). Only the approved exact-target handoff
+    // below moves between releases.
+    const cliAtTarget = check.cliVersion !== null && check.cliVersion === check.available.target.version;
+    if (check.currentVersion === check.available.target.version && cliAtTarget) {
         if (!options.dependenciesFn) {
             return { stage: "already-current", ok: true, check, detail: `ARIA ${check.currentVersion} is already current; no changes made.` };
         }
@@ -765,12 +814,9 @@ export async function runUpgrade(executor = defaultExecutor, options) {
                 detail: `ARIA ${check.currentVersion} is already current; ${identity.reason}. No changes were made.`,
             };
         }
-        // v1.0.11 hotfix: approved already-current dependency mutation runs only
-        // after the formula-scoped Engram preflight permits it.
-        const alreadyCurrentPreflight = await checkEngramHomebrewPreflight(executor, check);
-        if (!alreadyCurrentPreflight.ok) {
-            return { stage: "preflight-failed", ok: false, check, detail: alreadyCurrentPreflight.reason };
-        }
+        // R002: no dependency preflight gates the already-current seam — a
+        // dependency failure surfaces through the seam's own per-component
+        // states, never as a preflight block.
         let dependencies;
         try {
             dependencies = await options.dependenciesFn(executor, options.configDir);
@@ -806,13 +852,11 @@ export async function runUpgrade(executor = defaultExecutor, options) {
     if (!validated.ok) {
         return { stage: "blocked-unknown-target", ok: false, check, detail: `${validated.reason}; no changes made.` };
     }
-    // v1.0.11 hotfix: formula-scoped Engram prerequisite preflight — after
-    // approval and target validation, before any ARIA registration mutation,
-    // handoff/spawn, or component mutation. Failure/indeterminate stops here.
-    const preflight = await checkEngramHomebrewPreflight(executor, check);
-    if (!preflight.ok) {
-        return { stage: "preflight-failed", ok: false, check, detail: preflight.reason };
-    }
+    // R002: ARIA-only upgrade carries no dependency-upgrade prerequisites —
+    // the approved self-upgrade runs even when a dependency probe would fail.
+    // Dependency version upgrades belong exclusively to
+    // `aria deps --upgrade` (T004). The formula-scoped Engram preflight stays
+    // available for the newer-CLI migrate path only.
     const handoff = buildUpgradeHandoff(check.available.target, check);
     const selfUpgradeFn = options.selfUpgradeFn ?? defaultSelfUpgrade;
     const selfUpgrade = await selfUpgradeFn(check.available.target, handoff);

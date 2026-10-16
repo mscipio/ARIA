@@ -14,6 +14,7 @@ import {
   type ModelConfigureOutput,
 } from "./model-config.js";
 import { defaultAgentsDir, installAgentFiles, rollbackAgentInstall, type AgentInstallResult } from "./agents.js";
+import { getPackageRoot } from "./defaults.js";
 import {
   assertSetupConfigNotAmbiguous,
   defaultGlobalConfigPath,
@@ -119,7 +120,8 @@ export interface SetupDependenciesPhase {
 
 /**
  * Options for `setup`. All fields are optional: omitting them preserves the
- * fully non-interactive `setup(binaryUrl, executor, depsSyncFn)` behavior.
+ * fully non-interactive `setup(binaryUrl, executor)` behavior (R001: no
+ * version-chasing sync unless a caller explicitly provides `depsSyncFn`).
  */
 export interface SetupOptions {
   /** Request the optional model-configuration phase after registration and sync. */
@@ -153,9 +155,15 @@ export interface SetupOptions {
   files?: SetupFilesOptions;
   /**
    * Shared dependency lifecycle seam (T017). When provided, `setup` invokes
-   * it directly after the agent-file phase and before `depsSync` (install
-   * if missing OR update if safely owned/outdated → normalize → validate,
-   * no ARIA self-upgrade handoff). When omitted the phase is skipped and
+   * it directly after the agent-file phase (install if missing with no ARIA
+   * self-upgrade handoff). R001: no version-chasing sync runs on the setup
+   * path — when omitted the sync phase is skipped and `setup.sync` reports
+   * install-only ownership (pre-T017 behavior preserved).
+   *
+   * T002 ownership: the production seam (`runSetupDependencies`) is
+   * install-if-missing ONLY — a present dependency is left untouched even
+   * when newer exists; version upgrades belong exclusively to
+   * `aria deps --upgrade` (T004). When omitted the phase is skipped and
    * `setup.dependencies` stays absent (pre-T017 behavior preserved).
    */
   dependenciesFn?: SetupDependenciesFn;
@@ -202,12 +210,33 @@ export interface UpdateResult {
 /**
  * Resolve the checkout directory from a binary URL.
  * The binary is assumed to be at `<checkout>/bin/<name>`.
+ *
+ * T005: for co-located `bin/` + `dist/` installs this is the installed
+ * package root — the globally installed package for a bare `aria`
+ * invocation, the dev checkout for `node ./bin/aria.mjs`. Production never
+ * searches for the dev checkout; `bin/aria.mjs` passes its own
+ * `import.meta.url`, so the derived directory is always the running
+ * install's own root. Package assets (defaults/skills/agents) resolve via
+ * {@link resolveInstalledPackageRoot} below (the loaded `dist/` location),
+ * never via this path.
  */
 function resolveCheckout(binaryUrl: string): Promise<string> {
   const binPath = fileURLToPath(binaryUrl);
   const binDir = dirname(binPath);
   const checkout = resolve(binDir, "..");
   return realpath(checkout);
+}
+
+/**
+ * T005 production package root: the loaded ARIA install's own root
+ * (`dist/` → parent), independent of any binary URL or dev checkout.
+ * A bare `aria` invocation resolves here (globally installed
+ * package/assets); development (`node ./bin/aria.mjs`) resolves to the
+ * checkout only because the loaded `dist/` lives there. Never infers,
+ * searches for, or requires the dev checkout.
+ */
+export function resolveInstalledPackageRoot(): string {
+  return getPackageRoot();
 }
 
 // ---------------------------------------------------------------------------
@@ -693,11 +722,19 @@ function terminalOutput(stream: Writable): ModelConfigureOutput {
 export async function setup(
   binaryUrl: string,
   executor: Executor = defaultExecutor,
-  depsSyncFn: typeof depsSync = depsSync,
+  depsSyncFn?: typeof depsSync,
   options: SetupOptions = {},
 ): Promise<LifecycleResult> {
   const checkout = await resolveCheckout(binaryUrl);
   const pluginUri = pathToFileURL(checkout).href;
+  // T005: `opencode` subprocesses run in the invocation worktree
+  // (`options.worktree ?? process.cwd()`), never in the package/checkout
+  // directory. Registration identity stays the running install's own root
+  // (bare `aria` → globally installed package; `node ./bin/aria.mjs` → dev
+  // checkout); package assets below resolve via the loaded install
+  // (`resolveInstalledPackageRoot`), never by searching for the checkout.
+  const invocationWorktree = options.worktree ?? process.cwd();
+  const installedRoot = resolveInstalledPackageRoot();
 
   // T012: an explicit but empty `--plugin-spec` fails closed before any
   // introspection, registration, or file mutation (registering "nothing" must
@@ -773,7 +810,7 @@ export async function setup(
   // blindly, and the conflicting-stale auto-add never re-registers over a
   // different source: the only designed transition is the explicit
   // exact-target `aria upgrade --yes` handoff.
-  const listResult = await run(executor, checkout, "opencode", "plugin", "list");
+  const listResult = await run(executor, invocationWorktree, "opencode", "plugin", "list");
   const introspectionOk = listResult.ok && listResult.stdout;
   let usedIntrospection = false;
 
@@ -791,7 +828,7 @@ export async function setup(
         registrationDetail = gate.detail;
       } else if (gate.kind === "absent") {
         // Positively absent — deterministic first-time bootstrap only.
-        const pluginResult = await run(executor, checkout, "opencode", "plugin", "add", packageArg);
+        const pluginResult = await run(executor, invocationWorktree, "opencode", "plugin", "add", packageArg);
         const interpreted = interpretPluginAddResult(pluginResult, packageArg);
         registrationAction = interpreted.action;
         registrationDetail = interpreted.detail;
@@ -859,7 +896,10 @@ export async function setup(
 
   // T001: filesOptions/globalConfigPath were resolved in the preflight
   // above (same effective root); only skillsRoot is still needed here.
-  const skillsRoot = filesOptions.skillsRoot ?? getPackageSkillsRoot();
+  // T005: the default is the loaded install's own `skills/` (globally
+  // installed package for bare `aria`, dev checkout for
+  // `node ./bin/aria.mjs`) — never a searched-for dev checkout.
+  const skillsRoot = filesOptions.skillsRoot ?? getPackageSkillsRoot(installedRoot);
 
   let configState: SetupConfigFileResult;
   try {
@@ -938,8 +978,9 @@ export async function setup(
   // Phase 1d — Shared dependency lifecycle (T017, optional seam). When a
   // `dependenciesFn` is provided (the `aria setup` CLI always provides the
   // real `runSetupDependencies`), invoke the shared adapters directly on the
-  // clean/existing OC2+ install: detect → discover latest → install if
-  // missing OR update if safely owned/outdated → normalize → validate. No
+  // clean/existing OC2+ install: detect → install if positively missing →
+  // normalize → validate (T002 install-only: present installs stay
+  // untouched; version upgrades belong to `aria deps --upgrade`). No
   // ARIA self-upgrade handoff runs here on any path. Failure skips sync
   // (fail closed); omission skips the phase with pre-T017 behavior.
   // -----------------------------------------------------------------------
@@ -984,28 +1025,38 @@ export async function setup(
   }
 
   // -----------------------------------------------------------------------
-  // Phase 2 — Sync dependencies (always invoked exactly once after the
-  // registration and file phases above)
+  // Phase 2 — Sync dependencies (R001: NO version-chasing sync on the setup
+  // path). The install-only shared lifecycle above (Phase 1d) owns setup
+  // dependency state: a present install stays untouched, a missing one is
+  // installed, and version upgrades belong exclusively to
+  // `aria deps --upgrade`. The `depsSyncFn` seam runs ONLY when a caller
+  // explicitly provides it (existing tests); production (`bin/aria.mjs`
+  // passes nothing) skips it, so `brew update/upgrade`, GitHub
+  // latest-release syncs, and every other version-chasing path never run
+  // here. Skipped sync reports ok with install-only ownership noted.
   // -----------------------------------------------------------------------
-  let syncResult: Awaited<ReturnType<typeof depsSync>>;
-  try {
-    syncResult = await depsSyncFn(executor, effectiveConfigDir);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      ok: false,
-      stage: "sync",
-      setup: {
-        registration: { ...registration },
-        sync: { ok: false, error: `depsSync threw: ${message}` },
-        config: configPhase,
-        agents: agentsPhase,
-        dependencies: dependenciesPhase,
-      },
-    };
+  let syncResult: Awaited<ReturnType<typeof depsSync>> | undefined;
+  if (depsSyncFn !== undefined) {
+    try {
+      syncResult = await depsSyncFn(executor, effectiveConfigDir);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        stage: "sync",
+        setup: {
+          registration: { ...registration },
+          sync: { ok: false, error: `depsSync threw: ${message}` },
+          config: configPhase,
+          agents: agentsPhase,
+          dependencies: dependenciesPhase,
+        },
+      };
+    }
   }
 
-  const syncOk = syncResult.ok;
+  const syncOk = syncResult?.ok ?? true;
+  const syncSkipped = syncResult === undefined;
 
   // -----------------------------------------------------------------------
   // Phase 3 — optional interactive model configuration. Runs only when
@@ -1131,7 +1182,11 @@ export async function setup(
       registration: { ...registration },
       sync: {
         ok: syncOk,
-        output: syncOk ? "all dependencies synchronized" : undefined,
+        output: syncOk
+          ? syncSkipped
+            ? "dependency sync skipped: the install-if-missing lifecycle owns setup (version upgrades belong to `aria deps --upgrade`)"
+            : "all dependencies synchronized"
+          : undefined,
         error: syncOk ? undefined : "one or more dependencies failed to synchronize",
       },
       config: configPhase,

@@ -248,6 +248,8 @@ describe("T010 approval gate and unknown-target block", () => {
     const result = await runUpgrade(probeExecutor({ lsRemote: LS_REMOTE_SAMPLE, mcpList: HEALTHY_MCP_LIST }, calls), {
       configDir,
       currentVersion: "1.0.7",
+      // R006: already-current requires BOTH registration and CLI at target.
+      cliVersion: "1.0.7",
       approval: { yes: true },
     });
     expect(result.stage).toBe("already-current");

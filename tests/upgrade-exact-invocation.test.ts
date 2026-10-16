@@ -176,6 +176,10 @@ describe("T003 resume guidance after replacement names the installed exact targe
         persistedSpecs.push(args[2] ?? "");
         return { stdout: "plugin installed", stderr: "" };
       }
+      if (command === "npm" && args[0] === "install") {
+        // R003 bounded installed-CLI update runs before replacement.
+        return { stdout: "installed", stderr: "" };
+      }
       if (command === "npm") {
         throw Object.assign(new Error("npm exec failed: network unavailable"), { stdout: "", stderr: "npm exec failed" });
       }
@@ -228,6 +232,10 @@ describe("T003 approved --yes path still replaces via the guarded mechanism", ()
         return { stdout: "plugin installed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "mcp") return { stdout: "MCP Servers", stderr: "" };
+      if (command === "npm" && args[0] === "install") {
+        // R003 bounded installed-CLI update runs before replacement.
+        return { stdout: "installed", stderr: "" };
+      }
       if (command === "engram") throw new Error("engram not found");
       if (command === "codegraph") throw new Error("codegraph not found");
       throw new Error(`unexpected call: ${command} ${args.join(" ")}`);
@@ -313,6 +321,10 @@ describe("T003 migrate-from (newer-CLI-owned immutable-sender escape)", () => {
         return { stdout: "plugin installed", stderr: "" };
       }
       if (command === "opencode" && args[0] === "mcp") return { stdout: "MCP Servers", stderr: "" };
+      if (command === "npm" && args[0] === "install") {
+        // R003 bounded installed-CLI update runs before replacement.
+        return { stdout: "installed", stderr: "" };
+      }
       if (command === "engram") throw new Error("engram not found");
       if (command === "codegraph") throw new Error("codegraph not found");
       throw new Error(`unexpected call: ${command} ${args.join(" ")}`);

@@ -691,12 +691,12 @@ interface FinalizeParameters {
  */
 function roleMaskWarning(role: RoleName, mask: ProjectMask): string {
   if (mask.model && mask.variant) {
-    return `WARNING: Project-local aria.json overrides ${role}, so this global change does not affect its currently resolved route. Run \`aria routes\` for the authoritative result.`;
+    return `WARNING: Project-local aria.json overrides ${role}, so this global change does not affect its currently resolved route. Run \`aria models\` for the authoritative result.`;
   }
   if (mask.model) {
-    return `WARNING: Project-local aria.json pins the model field for ${role}, so this global change cannot alter its resolved model. Run \`aria routes\` for the authoritative result.`;
+    return `WARNING: Project-local aria.json pins the model field for ${role}, so this global change cannot alter its resolved model. Run \`aria models\` for the authoritative result.`;
   }
-  return `WARNING: Project-local aria.json pins the variant field for ${role}, so this global change cannot alter its resolved variant. Run \`aria routes\` for the authoritative result.`;
+  return `WARNING: Project-local aria.json pins the variant field for ${role}, so this global change cannot alter its resolved variant. Run \`aria models\` for the authoritative result.`;
 }
 
 /**
@@ -725,7 +725,7 @@ function maskingWarning(masks: RoleMask[]): string {
       `pins the variant field for ${rolesOf(variantOnly)}; global configuration cannot change those roles' variant`,
     );
   }
-  return `WARNING: Project-local aria.json ${clauses.join("; ")}. Run \`aria routes\` for the authoritative result.`;
+  return `WARNING: Project-local aria.json ${clauses.join("; ")}. Run \`aria models\` for the authoritative result.`;
 }
 
 /**

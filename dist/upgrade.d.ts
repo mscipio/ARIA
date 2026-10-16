@@ -197,6 +197,7 @@ export declare function validateAriaTargetForRemoval(target: AriaAvailableTarget
  */
 export declare function checkUpgradeInventory(executor?: Executor, options?: UpgradeCheckOptions): Promise<UpgradeCheckResult>;
 export declare function formatUpgradeCheck(result: UpgradeCheckResult): string;
+export declare function formatDepsUpgradeProposal(check: UpgradeCheckResult): string;
 /** Fully qualified Engram Homebrew formula the preflight and upgrade use. */
 export declare const ENGRAM_HOMEBREW_FORMULA = "gentleman-programming/tap/engram";
 /** Exact argv for the read-only preflight probe (never mutates). */
@@ -253,9 +254,12 @@ export interface UpgradeRunOptions extends UpgradeCheckOptions {
      * Shared dependency lifecycle for the already-current path (T017). When
      * ARIA is already current and approval is present, the approved dependency
      * updates run directly under the current release with NO
-     * self-replacement/handoff. The `aria upgrade` CLI always provides the
-     * real `runUpgradeDependencies`; omitted preserves the pre-T017
-     * zero-mutation already-current report for existing callers/tests.
+     * self-replacement/handoff.
+     *
+     * T002 ownership: production `aria upgrade` is ARIA-only and never
+     * provides this seam (bin/aria.mjs omits it, so already-current reports
+     * with zero mutation); version upgrades belong exclusively to
+     * `aria deps --upgrade` (T004). Retained for existing callers/tests.
      */
     dependenciesFn?: UpgradeAlreadyCurrentDependenciesFn;
 }

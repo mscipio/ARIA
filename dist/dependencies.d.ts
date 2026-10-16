@@ -69,6 +69,13 @@ export declare function formatDependenciesReport(outcomes: DependencyOutcome[]):
  * with no global transactionality — see `continueUpgradeInNewRelease`).
  *
  * - Setup calls this directly on clean/existing OC2+ installs.
+ *   T002 install-only rule: each adapter runs ONLY when its component is
+ *   positively identified as missing; an already-installed component
+ *   (any version, any registration) is reported skipped with zero mutation
+ *   — never upgraded, replaced, or re-normalized merely because a newer
+ *   release exists. Missing → setup; version upgrades belong exclusively
+ *   to `aria deps --upgrade` (T004). Reuses the existing adapters; no new
+ *   dependency abstraction is introduced.
  * - Post-handoff upgrade calls the SAME adapters in update/normalize mode
  *   through the component seams below (plus `runUpgradeDependencies`).
  */
@@ -78,8 +85,28 @@ export declare function runSetupDependencies(executor: Executor, options?: Depen
  * The adapters already branch on missing vs outdated internally, so the
  * update/normalize/validate mode IS the same shared lifecycle (no separate
  * version-chasing path, no database).
+ *
+ * T002 ownership note: production `aria upgrade` is ARIA-only and never
+ * calls this entry (bin/aria.mjs omits the seam); version upgrades belong
+ * exclusively to `aria deps --upgrade` (T004), which wires the managed
+ * adapters directly via `runDepsUpgrades` below. Retained as the shared install-only lifecycle for
+ * existing callers/tests.
  */
 export declare function runUpgradeDependencies(executor: Executor, options?: DependencyLifecycleOptions): Promise<DependencyLifecycleResult>;
+export interface DepsUpgradeOptions {
+    /** Explicit global config dir (XDG-contained; omits to the effective root). */
+    configDir?: string;
+    /** Explicit home dir for the ZotPilot user-scoped ownership check. */
+    homeDir?: string;
+    /** Filesystem seam for Engram channel detection + asset verification. */
+    fileOps?: DependencyFileOps;
+}
+export interface DepsUpgradeResult {
+    ok: boolean;
+    outcomes: DependencyOutcome[];
+    report: string;
+}
+export declare function runDepsUpgrades(executor?: Executor, options?: DepsUpgradeOptions): Promise<DepsUpgradeResult>;
 /**
  * Quota post-handoff seam: missing → install, owned-outdated → update,
  * current → completed, ambiguous → skipped. Maps lifecycle outcomes to

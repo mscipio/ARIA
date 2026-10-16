@@ -137,7 +137,7 @@ describe("T010 already-current CLI/plugin identity gate", () => {
     return ["ID  VERSION  SOURCE", ...rows.map(([id, version, source]) => `${id}  ${version}  ${source}`)].join("\n");
   }
 
-  it("blocks the dependency seam on CLI 1.0.8 vs registered v1.0.7 with zero mutation", async () => {
+  it("routes a stale CLI past already-current to the exact-target handoff path with zero mutation (seam never runs)", async () => {
     const calls: string[] = [];
     const executor = upgradeExecutor(pluginTable([["aria", "842e4ec", TARGET_107.spec]]), calls);
     let seamCalled = 0;
@@ -151,12 +151,16 @@ describe("T010 already-current CLI/plugin identity gate", () => {
       },
     });
 
-    expect(result.stage).toBe("already-current");
+    // R006: registration at target with a mismatched CLI is NOT already
+    // current — the approved exact-target handoff path runs instead of the
+    // dependency seam (the default seam fails closed here with zero
+    // mutation).
+    expect(result.stage).toBe("self-upgrade-failed");
     expect(result.ok).toBe(false);
     expect(seamCalled).toBe(0);
     expect(result.dependencies).toBeUndefined();
-    expect(result.detail).toContain("definite mismatch");
-    expect(result.detail).toContain("No changes were made");
+    expect(result.detail).toContain("self-upgrade failed");
+    expect(result.detail).toContain("no changes made");
     // Pure helper agrees: CLI 1.0.8 vs installed 1.0.7 fails closed.
     expect(checkAlreadyCurrentCliIdentity(result.check).ok).toBe(false);
   });

@@ -80,6 +80,7 @@ const configureFixtureRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(configureFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(depsFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 interface ConfigureFixture {
@@ -171,18 +172,108 @@ function readConfigureCall(recordPath: string): { worktree: string; argCount: nu
   return JSON.parse(readFileSync(recordPath, "utf8")) as { worktree: string; argCount: number; hasOptions: boolean };
 }
 
+const depsFixtureRoots: string[] = [];
+
+const DEPS_STUB_SOURCE = `import { writeFileSync } from "node:fs";
+export async function checkUpgradeInventory(executor, options) {
+  const recordPath = process.env.DEPS_FIXTURE_RECORD;
+  if (recordPath) {
+    writeFileSync(
+      recordPath,
+      JSON.stringify({ hasExecutor: executor !== undefined, options }),
+      "utf8",
+    );
+  }
+  return {
+    currentVersion: null,
+    cliVersion: null,
+    installedSpec: null,
+    available: { kind: "unknown", reason: "fixture: pinned unknown" },
+    selfUpgradeBlocked: true,
+    blockReason: "fixture",
+    components: [
+      { component: "engram", installed: "1.20.0", available: null, status: "unmanaged-observed", detail: "fixture engram observed" },
+      { component: "quota", installed: null, available: null, status: "skipped", detail: "fixture nothing to upgrade" },
+    ],
+  };
+}
+export function formatDepsUpgradeProposal(check) {
+  return ["STUB-PROPOSAL", ...check.components.map((row) => row.component)].join("\\n");
+}
+`;
+
+interface DepsFixture {
+  root: string;
+  binCopy: string;
+  workdir: string;
+  recordPath: string;
+}
+
+/**
+ * Isolated checkout for deterministic deps-dispatch coverage: an exact copy
+ * of the real bin/aria.mjs paired with a stubbed dist/upgrade.js. The stub
+ * records its inventory invocation and returns canned non-ARIA rows without
+ * contacting any tool or network. dist/dependencies.js is deliberately
+ * ABSENT, so any dispatch path that regressed into adapter-apply work would
+ * fail its dynamic import.
+ */
+async function makeDepsFixture(): Promise<DepsFixture> {
+  const root = await mkdtemp(resolve(tmpdir(), "aria-deps-"));
+  depsFixtureRoots.push(root);
+  const binDir = resolve(root, "bin");
+  const distDir = resolve(root, "dist");
+  const workdir = resolve(root, "worktree");
+  await mkdir(binDir, { recursive: true });
+  await mkdir(distDir, { recursive: true });
+  await mkdir(workdir, { recursive: true });
+
+  const binCopy = resolve(binDir, "aria.mjs");
+  await writeFile(binCopy, readFileSync(binPath, "utf8"), "utf8");
+  await chmod(binCopy, 0o755);
+  await writeFile(resolve(distDir, "upgrade.js"), DEPS_STUB_SOURCE, "utf8");
+
+  return { root, binCopy, workdir, recordPath: resolve(root, "deps-call.json") };
+}
+
+async function runDepsFixtureBin(
+  fixture: DepsFixture,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    const result = await execFileAsync(process.execPath, [fixture.binCopy, ...args], {
+      cwd: fixture.workdir,
+      env: isolatedChildEnv(env),
+      timeout: CLI_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+  }
+}
+
 describe("bin/aria.mjs doctor dispatch", () => {
-  it("help documents the read-only doctor contract while setup/update/deps-sync lines stay unchanged", async () => {
+  it("help documents the seven public forms with legacy update/configure/routes/deps-sync retired", async () => {
     const result = await runCli(["--help"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("aria doctor                Read-only health check of ARIA");
-    expect(result.stdout).toContain("aria setup                 Register ARIA with OpenCode and synchronize dependencies");
-    expect(result.stdout).toContain("aria setup --configure     Then interactively configure ARIA role models");
-    expect(result.stdout).toContain("aria configure             Interactively configure ARIA role models only (no registration or sync)");
-    expect(result.stdout).toContain("aria update                Pull latest changes, reinstall, and re-sync dependencies");
-    expect(result.stdout).toContain("aria deps sync             Synchronize required dependencies (Engram, Context7, CodeGraph)");
-    expect(result.stdout).toContain("aria routes                Print resolved model routes for each ARIA role");
+    expect(result.stdout).toContain("aria setup                 Register ARIA with OpenCode and install missing dependencies");
+    expect(result.stdout).toContain("aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)");
+    expect(result.stdout).toContain("aria models                Print resolved model routes for each ARIA role");
+    expect(result.stdout).toContain("aria models --config       Interactively configure ARIA role models");
+    expect(result.stdout).toContain("aria deps                  Read-only dependency inventory");
+    expect(result.stdout).toContain("aria deps --upgrade        Check managed dependencies");
+    // Legacy public commands are retired (not advertised).
+    expect(result.stdout).not.toContain("aria update ");
+    expect(result.stdout).not.toContain("aria configure ");
+    expect(result.stdout).not.toContain("aria routes ");
+    expect(result.stdout).not.toContain("aria deps sync");
+    // Internal handoff switches stay unadvertised.
+    expect(result.stdout).not.toContain("--handoff-json");
+    expect(result.stdout).not.toContain("--migrate-from");
   });
 
   it("renders plain human output with literal severity labels and separate ZotPilot CLI/MCP findings, with the exit code exactly matching the FAIL contract", async () => {
@@ -230,12 +321,74 @@ describe("bin/aria.mjs doctor dispatch", () => {
     expect(result.stderr).toBe("");
   }, 60000);
 
-  it("keeps the deps dispatch unchanged", async () => {
-    const result = await runCli(["deps"]);
+  it("retires legacy deps sync with guidance to the seven forms", async () => {
+    const result = await runCli(["deps", "sync"]);
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Unknown deps subcommand");
-    expect(result.stderr).toContain("Usage: aria deps sync");
+    expect(result.stderr).toContain("retired");
+    expect(result.stderr).toContain("Usage: aria deps [--upgrade [--yes]]");
+  });
+
+  it("rejects an unknown deps option before inventory work", async () => {
+    const result = await runCli(["deps", "--bogus"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Unknown deps option");
+    expect(result.stderr).toContain("Usage: aria deps [--upgrade [--yes]]");
+  });
+
+  it("requires --upgrade for --yes before inventory work", async () => {
+    const result = await runCli(["deps", "--yes"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Option --yes requires --upgrade");
+    expect(result.stderr).toContain("Usage: aria deps [--upgrade [--yes]]");
+    expect(result.stdout).not.toContain("ARIA dependency inventory");
+  });
+
+  it("advertises the confirmation-gated upgrade form in help", async () => {
+    const result = await runCli(["--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("aria deps --upgrade --yes");
+  });
+
+  it("proposes without mutating: deps --upgrade without --yes exits nonzero with a read-only proposal", async () => {
+    const fixture = await makeDepsFixture();
+
+    // Unconfirmed: inventory runs, the proposal renders, and the missing
+    // dist/dependencies.js proves the adapter-apply path is never imported.
+    await rm(fixture.recordPath, { force: true });
+    const proposed = await runDepsFixtureBin(fixture, ["deps", "--upgrade"], {
+      DEPS_FIXTURE_RECORD: fixture.recordPath,
+    });
+    expect(proposed.code).toBe(1);
+    expect(proposed.stdout).toContain("STUB-PROPOSAL");
+    expect(proposed.stdout).toContain("engram");
+    expect(proposed.stdout).not.toContain("[FAIL]");
+    expect(proposed.stderr).toBe("");
+    expect(existsSync(fixture.recordPath)).toBe(true);
+
+    // Bare inventory: same stubbed rows, exit 0, no approval language.
+    await rm(fixture.recordPath, { force: true });
+    const inventoried = await runDepsFixtureBin(fixture, ["deps"], {
+      DEPS_FIXTURE_RECORD: fixture.recordPath,
+    });
+    expect(inventoried.code).toBe(0);
+    expect(inventoried.stdout).toContain("ARIA dependency inventory (read-only; no changes were made)");
+    expect(inventoried.stdout).toContain("installed=1.20.0");
+    expect(inventoried.stdout).not.toContain("STUB-PROPOSAL");
+    expect(inventoried.stderr).toBe("");
+    expect(existsSync(fixture.recordPath)).toBe(true);
+
+    // Confirmed: --yes routes to the apply import, which is absent in the
+    // fixture, so it fails closed before any adapter work.
+    const approved = await runDepsFixtureBin(fixture, ["deps", "--upgrade", "--yes"], {
+      DEPS_FIXTURE_RECORD: fixture.recordPath,
+    });
+    expect(approved.code).toBe(1);
+    expect(approved.stderr).toContain("Dependencies: [FAIL]");
+    expect(approved.stdout).not.toContain("STUB-PROPOSAL");
   });
 });
 
@@ -260,23 +413,15 @@ describe("bin/aria.mjs setup dispatch", () => {
 });
 
 describe("bin/aria.mjs upgrade dispatch", () => {
-  it("help documents upgrade --check/--yes and offers no --aria-only/--deps-only", async () => {
+  it("help documents upgrade --check/--yes as ARIA-only and offers no --aria-only/--deps-only", async () => {
     const result = await runCli(["--help"]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("aria upgrade               Show upgrade inventory (requires --yes to approve any mutation)");
+    expect(result.stdout).toContain("aria upgrade               Show upgrade inventory (requires --yes to approve any mutation; ARIA-only)");
     expect(result.stdout).toContain("aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)");
-    expect(result.stdout).toContain("aria upgrade --yes          Approve and run the upgrade pipeline over the whole inventoried scope");
+    expect(result.stdout).toContain("aria upgrade --yes          Approve and run the ARIA-only upgrade pipeline");
     expect(result.stdout).not.toContain("--aria-only");
     expect(result.stdout).not.toContain("--deps-only");
-    // `aria upgrade --yes` and `aria deps sync` are distinct help lines.
-    const helpLines = result.stdout.split("\n");
-    const yesLines = helpLines.filter((line) => line.includes("aria upgrade --yes"));
-    const syncLines = helpLines.filter((line) => line.includes("aria deps sync"));
-    expect(yesLines).toHaveLength(1);
-    expect(syncLines).toHaveLength(1);
-    expect(yesLines[0]).not.toContain("aria deps sync");
-    expect(syncLines[0]).not.toContain("aria upgrade --yes");
   });
 
   it("rejects an unknown upgrade option before inventory work", async () => {
@@ -374,13 +519,38 @@ describe("bin/aria.mjs upgrade dispatch", () => {
   }, 60000);
 });
 
-describe("bin/aria.mjs configure dispatch", () => {
-  it("rejects an unsupported trailing flag before doing configuration work", async () => {
-    const result = await runCli(["configure", "--bogus"]);
+describe("bin/aria.mjs models dispatch (T002 surface gating for T003)", () => {
+  it("retires bare configure/routes/update with guidance to the seven forms", async () => {
+    for (const [args, fragment] of [
+      [["configure"], "aria models --config"],
+      [["routes"], "aria models"],
+      [["update"], "aria upgrade"],
+    ] as const) {
+      const result = await runCli([...args]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("retired");
+      expect(result.stderr).toContain(fragment);
+    }
+  });
+
+  it("prints the compact role/model/effort table from resolved routes", async () => {
+    // Sandboxed HOME plus no repo-root project overrides: the packaged
+    // defaults render, so one representative row proves the table reflects
+    // the resolved configuration through the public `models` form.
+    const result = await runCli(["models"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("role  model  effort");
+    expect(result.stdout).toContain("coder  opencode-go/muse-spark-1.3-contributor  xhigh");
+    expect(result.stdout).toContain("reviewer  openai/gpt-6.1-sol  medium");
+  });
+
+  it("rejects an unsupported models flag before doing configuration work", async () => {
+    const result = await runCli(["models", "--bogus"]);
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Unknown configure option");
-    expect(result.stderr).toContain("Usage: aria configure");
+    expect(result.stderr).toContain("Unknown models option");
+    expect(result.stderr).toContain("Usage: aria models [--config]");
     // Rejected before configuration work: no model-configuration report.
     expect(result.stdout).not.toContain("Model configuration:");
   });
@@ -388,18 +558,18 @@ describe("bin/aria.mjs configure dispatch", () => {
   it("maps non-TTY skipped configuration to exit 0 without registration or sync", async () => {
     // execFile provides no TTY, so configureModels takes its deterministic
     // non-TTY skipped path before model discovery (no providers needed).
-    const result = await runCli(["configure"]);
+    const result = await runCli(["models", "--config"]);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("Model configuration: skipped.");
-    // Configure-only never runs the setup phases.
+    // Models --config never runs the setup phases.
     expect(result.stdout).not.toContain("Registration:");
     expect(result.stdout).not.toContain("Sync:");
   });
 
   it("executes configured/unchanged/skipped outcomes to exit 0 with cwd routing and no registration or sync", async () => {
     const fixture = await makeConfigureFixture();
-    // The fixture isolates configure-only to its model-config stub: no
+    // The fixture isolates models --config to its model-config stub: no
     // lifecycle/deps/doctor modules exist for the copied CLI to regress into.
     expect(existsSync(resolve(fixture.root, "dist", "lifecycle.js"))).toBe(false);
 
@@ -411,7 +581,7 @@ describe("bin/aria.mjs configure dispatch", () => {
     for (const { status, fragment } of cases) {
       await rm(fixture.recordPath, { force: true });
       await rm(fixture.opencodeMarker, { force: true });
-      const result = await runFixtureBin(fixture, ["configure"], {
+      const result = await runFixtureBin(fixture, ["models", "--config"], {
         CONFIGURE_FIXTURE_STATUS: status,
         CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
       });
@@ -436,7 +606,7 @@ describe("bin/aria.mjs configure dispatch", () => {
   it("executes failed/thrown outcomes to nonzero with a [FAIL] report", async () => {
     const fixture = await makeConfigureFixture();
 
-    const failed = await runFixtureBin(fixture, ["configure"], {
+    const failed = await runFixtureBin(fixture, ["models", "--config"], {
       CONFIGURE_FIXTURE_STATUS: "failed",
       CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
     });
@@ -452,7 +622,7 @@ describe("bin/aria.mjs configure dispatch", () => {
 
     await rm(fixture.recordPath, { force: true });
     await rm(fixture.opencodeMarker, { force: true });
-    const thrown = await runFixtureBin(fixture, ["configure"], {
+    const thrown = await runFixtureBin(fixture, ["models", "--config"], {
       CONFIGURE_FIXTURE_STATUS: "throw",
       CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
     });
@@ -467,14 +637,14 @@ describe("bin/aria.mjs configure dispatch", () => {
   it("rejects a trailing flag in the fixture before invoking configuration work", async () => {
     const fixture = await makeConfigureFixture();
 
-    const result = await runFixtureBin(fixture, ["configure", "--bogus"], {
+    const result = await runFixtureBin(fixture, ["models", "--bogus"], {
       CONFIGURE_FIXTURE_STATUS: "configured",
       CONFIGURE_FIXTURE_RECORD: fixture.recordPath,
     });
 
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("Unknown configure option");
-    expect(result.stderr).toContain("Usage: aria configure");
+    expect(result.stderr).toContain("Unknown models option");
+    expect(result.stderr).toContain("Usage: aria models [--config]");
     expect(result.stdout).not.toContain("Model configuration:");
     // Rejected before the dynamic import/call: the stub never ran.
     expect(existsSync(fixture.recordPath)).toBe(false);

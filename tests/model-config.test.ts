@@ -856,7 +856,7 @@ describe("configureModels", () => {
     expect(lines.join("\n")).toContain(
       "WARNING: Project-local aria.json pins the model field for planner",
     );
-    expect(lines.join("\n")).toContain("aria routes");
+    expect(lines.join("\n")).toContain("aria models");
     expect(await readFile(projectPath, "utf8")).toBe(projectBefore);
   });
 
@@ -918,7 +918,7 @@ describe("configureModels", () => {
     expect(lines.join("\n")).toContain(
       "WARNING: Project-local aria.json pins the model field for planner",
     );
-    expect(lines.join("\n")).toContain("aria routes");
+    expect(lines.join("\n")).toContain("aria models");
     expect(lines.join("\n")).toContain(
       "  planner\n"
       + "    default:   openai/gpt-6-luna (xhigh)\n"
@@ -1135,7 +1135,7 @@ describe("configureModels", () => {
     expect(result.status).toBe("configured");
     expect(lines.join("\n")).toContain(
       "WARNING: Project-local aria.json overrides planner, so this global change does not "
-      + "affect its currently resolved route. Run `aria routes` for the authoritative result.",
+      + "affect its currently resolved route. Run `aria models` for the authoritative result.",
     );
   });
 

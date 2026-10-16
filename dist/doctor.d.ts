@@ -6,6 +6,10 @@ import { type ModelDiscoverFn } from "./model-config.js";
  * PASS/WARN/FAIL/SKIP findings. Probe and config errors are aggregated into
  * findings rather than thrown, and nothing is written, installed, or
  * repaired.
+ *
+ * T002 ownership: doctor stays strictly read-only (CLI/version/source,
+ * plugin identity/version, agent health, skills/config health, dependency
+ * status, mismatches) — it never installs, upgrades, or syncs.
  */
 export type DoctorFindingSeverity = "PASS" | "WARN" | "FAIL" | "SKIP";
 /**

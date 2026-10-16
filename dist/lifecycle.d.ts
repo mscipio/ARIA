@@ -86,7 +86,8 @@ export interface SetupDependenciesPhase {
 }
 /**
  * Options for `setup`. All fields are optional: omitting them preserves the
- * fully non-interactive `setup(binaryUrl, executor, depsSyncFn)` behavior.
+ * fully non-interactive `setup(binaryUrl, executor)` behavior (R001: no
+ * version-chasing sync unless a caller explicitly provides `depsSyncFn`).
  */
 export interface SetupOptions {
     /** Request the optional model-configuration phase after registration and sync. */
@@ -120,9 +121,15 @@ export interface SetupOptions {
     files?: SetupFilesOptions;
     /**
      * Shared dependency lifecycle seam (T017). When provided, `setup` invokes
-     * it directly after the agent-file phase and before `depsSync` (install
-     * if missing OR update if safely owned/outdated → normalize → validate,
-     * no ARIA self-upgrade handoff). When omitted the phase is skipped and
+     * it directly after the agent-file phase (install if missing with no ARIA
+     * self-upgrade handoff). R001: no version-chasing sync runs on the setup
+     * path — when omitted the sync phase is skipped and `setup.sync` reports
+     * install-only ownership (pre-T017 behavior preserved).
+     *
+     * T002 ownership: the production seam (`runSetupDependencies`) is
+     * install-if-missing ONLY — a present dependency is left untouched even
+     * when newer exists; version upgrades belong exclusively to
+     * `aria deps --upgrade` (T004). When omitted the phase is skipped and
      * `setup.dependencies` stays absent (pre-T017 behavior preserved).
      */
     dependenciesFn?: SetupDependenciesFn;
@@ -172,8 +179,26 @@ export interface UpdateResult {
 /**
  * Resolve the checkout directory from a binary URL.
  * The binary is assumed to be at `<checkout>/bin/<name>`.
+ *
+ * T005: for co-located `bin/` + `dist/` installs this is the installed
+ * package root — the globally installed package for a bare `aria`
+ * invocation, the dev checkout for `node ./bin/aria.mjs`. Production never
+ * searches for the dev checkout; `bin/aria.mjs` passes its own
+ * `import.meta.url`, so the derived directory is always the running
+ * install's own root. Package assets (defaults/skills/agents) resolve via
+ * {@link resolveInstalledPackageRoot} below (the loaded `dist/` location),
+ * never via this path.
  */
 declare function resolveCheckout(binaryUrl: string): Promise<string>;
+/**
+ * T005 production package root: the loaded ARIA install's own root
+ * (`dist/` → parent), independent of any binary URL or dev checkout.
+ * A bare `aria` invocation resolves here (globally installed
+ * package/assets); development (`node ./bin/aria.mjs`) resolves to the
+ * checkout only because the loaded `dist/` lives there. Never infers,
+ * searches for, or requires the dev checkout.
+ */
+export declare function resolveInstalledPackageRoot(): string;
 declare function run(executor: Executor, cwd: string, command: string, ...args: string[]): Promise<CommandResult>;
 /**
  * V2 `opencode plugin list` table entry (ID/VERSION/SOURCE columns).
