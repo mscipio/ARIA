@@ -1112,8 +1112,9 @@ export async function setup(
 
   // -----------------------------------------------------------------------
   // Phase 3 — optional interactive model configuration. Runs only when
-  // `--configure` was requested and both registration and sync succeeded;
-  // registration/sync failure short-circuiting and ordering are unchanged.
+  // the `configure` option is set (CLI entry point: `aria models --config`)
+  // and both registration and sync succeeded; registration/sync failure
+  // short-circuiting and ordering are unchanged.
   // -----------------------------------------------------------------------
 
   if (syncOk && options.configure) {

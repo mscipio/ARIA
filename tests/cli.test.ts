@@ -81,6 +81,7 @@ const configureFixtureRoots: string[] = [];
 afterEach(async () => {
   await Promise.all(configureFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   await Promise.all(depsFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(setupFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
 interface ConfigureFixture {
@@ -254,6 +255,96 @@ async function runDepsFixtureBin(
   }
 }
 
+const setupFixtureRoots: string[] = [];
+
+const SETUP_STUB_SOURCE = `import { writeFileSync } from "node:fs";
+export async function setup(...args) {
+  const recordPath = process.env.SETUP_FIXTURE_RECORD;
+  const options = args[3] ?? {};
+  if (recordPath) {
+    writeFileSync(
+      recordPath,
+      JSON.stringify({ argCount: args.length, configure: options.configure ?? null, hasPluginSpec: options.pluginSpec !== undefined }),
+      "utf8",
+    );
+  }
+  return {
+    ok: true,
+    stage: "setup",
+    setup: {
+      registration: { action: "already registered", detail: "fixture already registered" },
+      sync: { ok: true, output: "fixture sync ok" },
+      config: { changed: false, path: "fixture-config-path" },
+      agents: { written: 0, unchanged: 11, dir: "fixture-agents-dir" },
+      dependencies: { ok: true, outcomes: [] },
+    },
+  };
+}
+`;
+
+const SETUP_DEPS_STUB_SOURCE = `export async function runSetupDependencies() {
+  return { ok: true, outcomes: [] };
+}
+`;
+
+interface SetupFixture {
+  root: string;
+  binCopy: string;
+  workdir: string;
+  recordPath: string;
+}
+
+/**
+ * Isolated checkout for deterministic setup-dispatch coverage: an exact copy
+ * of the real bin/aria.mjs paired with a stubbed dist/lifecycle.js (which
+ * records the setup options it received and reports an already-registered
+ * success) and a stubbed dist/dependencies.js. No doctor/routes/model-config
+ * modules exist, so a setup path that regressed into those would fail its
+ * dynamic import; a retired flag that regressed into setup work would invoke
+ * the stub and leave a record behind.
+ */
+async function makeSetupFixture(): Promise<SetupFixture> {
+  const root = await mkdtemp(resolve(tmpdir(), "aria-setup-"));
+  setupFixtureRoots.push(root);
+  const binDir = resolve(root, "bin");
+  const distDir = resolve(root, "dist");
+  const workdir = resolve(root, "worktree");
+  await mkdir(binDir, { recursive: true });
+  await mkdir(distDir, { recursive: true });
+  await mkdir(workdir, { recursive: true });
+
+  const binCopy = resolve(binDir, "aria.mjs");
+  await writeFile(binCopy, readFileSync(binPath, "utf8"), "utf8");
+  await chmod(binCopy, 0o755);
+  await writeFile(resolve(distDir, "lifecycle.js"), SETUP_STUB_SOURCE, "utf8");
+  await writeFile(resolve(distDir, "dependencies.js"), SETUP_DEPS_STUB_SOURCE, "utf8");
+
+  return { root, binCopy, workdir, recordPath: resolve(root, "setup-call.json") };
+}
+
+async function runSetupFixtureBin(
+  fixture: SetupFixture,
+  args: string[],
+  env: NodeJS.ProcessEnv = {},
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  try {
+    const result = await execFileAsync(process.execPath, [fixture.binCopy, ...args], {
+      cwd: fixture.workdir,
+      env: isolatedChildEnv(env),
+      timeout: CLI_TIMEOUT_MS,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return { code: 0, stdout: result.stdout, stderr: result.stderr };
+  } catch (error) {
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: typeof failure.code === "number" ? failure.code : 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+  }
+}
+
+function readSetupCall(recordPath: string): { argCount: number; configure: boolean | null; hasPluginSpec: boolean } {
+  return JSON.parse(readFileSync(recordPath, "utf8")) as { argCount: number; configure: boolean | null; hasPluginSpec: boolean };
+}
+
 describe("bin/aria.mjs doctor dispatch", () => {
   it("help documents the seven public forms with legacy update/configure/routes/deps-sync retired", async () => {
     const result = await runCli(["--help"]);
@@ -398,7 +489,7 @@ describe("bin/aria.mjs setup dispatch", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Unknown setup option");
-    expect(result.stderr).toContain("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+    expect(result.stderr).toContain("Usage: aria setup");
     // Rejected before the dynamic import/call: no setup phases ran.
     expect(result.stdout).not.toContain("Registration:");
   });
@@ -408,7 +499,64 @@ describe("bin/aria.mjs setup dispatch", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Missing value for --plugin-spec");
+    expect(result.stderr).toContain("Usage: aria setup");
     expect(result.stdout).not.toContain("Registration:");
+  });
+
+  it("retires setup --configure with guidance to models --config before registration work", async () => {
+    const result = await runCli(["setup", "--configure"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("aria setup --configure has been retired. Use `aria models --config`.");
+    expect(result.stderr).toContain("Usage: aria setup");
+    // Rejected before the dynamic import/call: no setup phases ran.
+    expect(result.stdout).not.toContain("Registration:");
+    expect(result.stdout).not.toContain("Model configuration:");
+  });
+
+  it("advertises only the supported v1.1.x setup surface in help", async () => {
+    const result = await runCli(["--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("aria setup                 Register ARIA with OpenCode and install missing dependencies");
+    expect(result.stdout).toContain("aria models --config       Interactively configure ARIA role models");
+    expect(result.stdout).not.toContain("setup --configure");
+    expect(result.stdout).not.toContain("--plugin-spec");
+  });
+
+  it("routes bare setup to the lifecycle without the retired configure flag", async () => {
+    const fixture = await makeSetupFixture();
+    // The fixture isolates bare setup to its lifecycle stub: no doctor,
+    // routes, or model-config modules exist for the copied CLI to regress
+    // into, and --configure must reject before the stub is ever imported.
+    expect(existsSync(resolve(fixture.root, "dist", "doctor.js"))).toBe(false);
+
+    await rm(fixture.recordPath, { force: true });
+    const result = await runSetupFixtureBin(fixture, ["setup"], {
+      SETUP_FIXTURE_RECORD: fixture.recordPath,
+    });
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Registration: plugin already registered");
+    expect(result.stderr).toBe("");
+
+    // The normal setup path still reaches the lifecycle with the retired
+    // flag off and no compatibility spec.
+    const call = readSetupCall(fixture.recordPath);
+    expect(call.configure).toBe(false);
+    expect(call.hasPluginSpec).toBe(false);
+
+    // The retired flag rejects before the lifecycle import: the stub never ran.
+    await rm(fixture.recordPath, { force: true });
+    const retired = await runSetupFixtureBin(fixture, ["setup", "--configure"], {
+      SETUP_FIXTURE_RECORD: fixture.recordPath,
+    });
+
+    expect(retired.code).toBe(1);
+    expect(retired.stderr).toContain("aria setup --configure has been retired. Use `aria models --config`.");
+    expect(retired.stderr).toContain("Usage: aria setup");
+    expect(retired.stdout).not.toContain("Registration:");
+    expect(existsSync(fixture.recordPath)).toBe(false);
   });
 });
 

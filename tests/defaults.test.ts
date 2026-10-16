@@ -105,7 +105,9 @@ describe("ARIA defaults", () => {
   it("ships defaults and package-owned skills", () => {
     const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), "package.json"), "utf8"));
     expect(packageJson.name).toBe("aria");
-    expect(packageJson.version).toBe("1.0.15");
+    // The release version is never pinned here (T002): it moves every
+    // release, and only the version-agnostic package layout is asserted.
+    expect(typeof packageJson.version).toBe("string");
     expect(packageJson.files).toContain("defaults");
     expect(packageJson.files).toContain("skills");
   });

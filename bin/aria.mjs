@@ -36,8 +36,6 @@ function usage() {
 
 Usage:
   aria setup                 Register ARIA with OpenCode and install missing dependencies (idempotent; never upgrades present deps)
-  aria setup --configure     Then interactively configure ARIA role models
-  aria setup --plugin-spec <spec>  Register a Git package specifier (e.g. github:mscipio/ARIA#<SHA>) instead of the local checkout
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria upgrade               Show upgrade inventory (requires --yes to approve any mutation; ARIA-only)
   aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)
@@ -197,24 +195,27 @@ async function main() {
   }
 
   if (command === "setup") {
-    // Accepted setup options: --configure and --plugin-spec <spec> (T012
-    // Git-package source: passed verbatim to `opencode plugin add`, never
+    // `aria setup --configure` is retired: use `aria models --config`
+    // (interactively configure ARIA role models). The retirement rejects
+    // here before any setup import or mutation, mirroring the other retired
+    // forms. `--plugin-spec <spec>` stays accepted as an unadvertised
+    // compatibility escape (passed verbatim to `opencode plugin add`, never
     // rewritten to a file:// URI, never given --global). Anything else is
     // rejected before any registration, file write, or sync.
     const rest = args.slice(1);
-    let configureRequested = false;
+    if (rest.includes("--configure")) {
+      console.error("aria setup --configure has been retired. Use `aria models --config`.");
+      console.error("Usage: aria setup");
+      return 1;
+    }
     let pluginSpec;
     for (let index = 0; index < rest.length; index++) {
       const arg = rest[index];
-      if (arg === "--configure") {
-        configureRequested = true;
-        continue;
-      }
       if (arg === "--plugin-spec") {
         const value = rest[index + 1];
         if (value === undefined || value.startsWith("--")) {
           console.error("Missing value for --plugin-spec (expected a Git package specifier such as github:mscipio/ARIA#<EXACT_SHA>)");
-          console.error("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+          console.error("Usage: aria setup");
           return 1;
         }
         pluginSpec = value;
@@ -225,21 +226,24 @@ async function main() {
         const value = arg.slice("--plugin-spec=".length);
         if (value.length === 0) {
           console.error("Missing value for --plugin-spec (expected a Git package specifier such as github:mscipio/ARIA#<EXACT_SHA>)");
-          console.error("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+          console.error("Usage: aria setup");
           return 1;
         }
         pluginSpec = value;
         continue;
       }
       console.error(`Unknown setup option: ${arg}`);
-      console.error("Usage: aria setup [--configure] [--plugin-spec <spec>]");
+      console.error("Usage: aria setup");
       return 1;
     }
 
     const { setup } = await import("../dist/lifecycle.js");
     const { runSetupDependencies } = await import("../dist/dependencies.js");
     const result = await setup(import.meta.url, undefined, undefined, {
-      configure: configureRequested,
+      // The CLI no longer offers --configure (retired above in favor of
+      // `aria models --config`); the lifecycle `configure` seam stays for
+      // programmatic use.
+      configure: false,
       pluginSpec,
       worktree: process.cwd(),
       input: process.stdin,

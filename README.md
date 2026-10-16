@@ -1,4 +1,4 @@
-# ARIA v1.0.12 — Native OpenCode 2
+# ARIA v1.1.2 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -154,39 +154,32 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Install
 
-Canonical distribution is the Git package `github:mscipio/ARIA#v1.0.12`:
+Canonical install is the released global package `github:mscipio/ARIA#v1.1.2`:
 
 ```sh
-SPEC='github:mscipio/ARIA#v1.0.12'
-npx --yes --allow-git=all --package="$SPEC" aria setup --plugin-spec "$SPEC"
-npx --yes --allow-git=all --package="$SPEC" aria doctor
+NPM_CONFIG_ALLOW_GIT=all npm install -g 'github:mscipio/ARIA#v1.1.2'
+aria setup
+aria doctor
 ```
 
-`aria setup --plugin-spec` registers the plugin and must run from the executable packaged CLI via `npx` as above; a bare `opencode plugin add` alone does not substitute for setup.
+Bare `aria` is the globally installed released package: it runs that install's own assets and never infers or requires a development checkout. From a development checkout, run the local CLI explicitly (`node ./bin/aria.mjs ...`); `npm link` is not a supported workflow.
 
-`SPEC` is the exact Git package spec (`github:mscipio/ARIA#vX.Y.Z`); `--package "$SPEC"` pins the executable to that release and the trailing `aria ...` argv runs its binary. Git-dependency allowance is process-local only: `--allow-git=all` on the `npx` invocation (equivalently, a per-invocation `NPM_CONFIG_ALLOW_GIT=all` prefix) with no global `npm config` change, no environment export, and no `.npmrc` edit. A bare `npm exec`/`npx` without it fails with `EALLOWGIT` on Git specs.
-
-From a cloned checkout:
-
-```sh
-node ./bin/aria.mjs setup
-node ./bin/aria.mjs doctor
-```
+`NPM_CONFIG_ALLOW_GIT=all` is process-local to that install invocation only — no global `npm config` change, no environment export, and no `.npmrc` edit. A bare install without it fails with `EALLOWGIT` on Git specs.
 
 Restart OpenCode after setup to load the registered plugin.
 
-Tags v1.0.0–v1.0.11 predate the current 1.x line and are retained unchanged.
+Tags before v1.1.0 predate the current v1.1.x line and are retained unchanged.
 
 ## Configuration
 
-ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. Project `aria.json` is read-only; the global file may be created manually or written interactively by `aria setup --configure` or `aria configure` (see below).
+ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. Project `aria.json` is read-only; the global file may be created manually or written interactively by `aria models --config` (see below).
 
 | File | Path | Scope |
 |------|------|-------|
 | Global | `~/.config/opencode/aria.json` | Per-user, applies to every project |
 | Project | `aria.json` in the worktree root (or an explicit path via the plugin `configPath` option) | Per-project |
 
-For transition compatibility, ARIA still reads the legacy `~/.config/opencode/review-driven-code.json` and project `review-driven-code.json` filenames when the corresponding `aria.json` file is absent. Legacy filenames are read-only fallbacks and are never written or migrated. `aria.json` is canonical and wins when both names exist; `aria setup --configure` writes only the canonical global `~/.config/opencode/aria.json`.
+For transition compatibility, ARIA still reads the legacy `~/.config/opencode/review-driven-code.json` and project `review-driven-code.json` filenames when the corresponding `aria.json` file is absent. Legacy filenames are read-only fallbacks and are never written or migrated. `aria.json` is canonical and wins when both names exist; `aria models --config` writes only the canonical global `~/.config/opencode/aria.json`.
 
 ```json
 {
@@ -222,100 +215,75 @@ ARIA currently requires three external integrations. ARIA does not fork, vendor,
 
 ### Quota 5 (optional, safety-gated)
 
-OpenCode Quota 5 is optional: the setup bootstrap lifecycle may install it when absent or upgrade an already-installed Quota 5, only under safety/ownership gates (absent-only native install with validation and rollback where feasible; upgrade only for a positively identified exact-semver Quota 5 target on OpenCode 2 with a clean native update preview, validation, and rollback where feasible). Ambiguous or unsupported targets stay observed-but-unmanaged with zero mutation. `aria deps sync` remains non-version-chasing normalization and does not independently chase or install Quota through the legacy sync path (`SyncResult` carries no quota field). Quota is therefore absent from the required-dependency plan above. `aria upgrade` may upgrade an already-installed Quota 5 only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
+OpenCode Quota 5 is optional: the setup bootstrap lifecycle installs it only when positively absent (install-missing-only with validation and rollback where feasible; setup never upgrades present installs). Ambiguous, observed, or unsupported targets stay observed-but-unmanaged with zero mutation — setup leaves present installs untouched. `aria deps` remains a read-only inventory and does not independently chase or install Quota (`SyncResult` carries no quota field). Quota is therefore absent from the required-dependency plan above. A Quota 5 version upgrade belongs exclusively to `aria deps --upgrade` and proceeds only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
 
 ### Commands
 
+Public CLI surface (see `aria --help`):
+
 ```bash
-aria setup             # Register ARIA plugin with OpenCode and synchronize dependencies
-aria setup --configure # Register ARIA, sync dependencies, then interactively configure role models
-aria configure         # Interactively configure role models only (no registration or sync)
-aria update            # Pull latest changes, reinstall, and re-sync dependencies
-aria upgrade           # Show upgrade inventory (requires --yes to approve any mutation)
-aria upgrade --check   # Read-only upgrade inventory (current + available releases, component table)
-aria upgrade --yes     # Approve and run the upgrade pipeline over the whole inventoried scope
-aria deps sync         # Synchronize required integrations (Engram, Context7, CodeGraph)
-aria doctor            # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
-aria routes            # Print resolved model routes for each ARIA role
+aria setup                # Register ARIA with OpenCode; install missing dependencies (idempotent; never upgrades present deps)
+aria doctor               # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
+aria upgrade              # Show upgrade inventory without mutation (requires --yes to apply; ARIA-only)
+aria upgrade --check      # Read-only upgrade inventory (current + available releases, component table)
+aria upgrade --yes        # Approve and run the ARIA-only upgrade pipeline
+aria models               # Print resolved model routes for each ARIA role (compact role/model/effort table)
+aria models --config      # Interactively configure ARIA role models (the v1.1.x configuration surface)
+aria deps                 # Read-only dependency inventory (plugins/MCPs with observed versions)
+aria deps --upgrade       # Check and propose managed dependency upgrades (zero mutation; re-run with --yes to apply)
+aria deps --upgrade --yes # Apply managed upgrades (unknown/unmanaged stay report-only)
+aria --help               # Show help
+aria --version            # Show version
 ```
+
+Retired commands are rejected with guidance and are not supported: `aria configure` → `aria models --config`; `aria routes` → `aria models`; `aria update` → `aria upgrade` (ARIA release moves) or `aria setup` (install missing dependencies); `aria deps sync` → `aria deps` (read-only inventory), `aria deps --upgrade` (managed upgrades), or `aria setup` (install missing). The v1.1.x public configuration surface is `aria models` / `aria models --config`.
 
 ### `aria setup`
 
-Registers the ARIA plugin globally with OpenCode and runs the idempotent dependency sync. Package-owned skills are discovered directly from the loaded package through `skills.paths`. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
+First install and bootstrap: registers the ARIA plugin globally with OpenCode, then idempotently reconciles registration, global configuration, managed agent files, and packaged skills. It installs required managed dependencies only when missing and never version-chases present ones — upgrades belong to `aria deps --upgrade`. Package-owned skills are discovered directly from the loaded package through `skills.paths`. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
 
-- **First run**: registers the plugin, then synchronizes all dependencies.
-- **Repeated runs**: reports `already registered`, skips duplicate global registration, and still runs the dependency sync (which is itself idempotent).
-- **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks dependency sync.
+- **First run**: registers the plugin, then installs missing dependencies.
+- **Repeated runs**: reports `already registered`, skips duplicate global registration, and still reconciles configuration/agents/skills and installs anything missing (itself idempotent) — without upgrading anything already present.
+- **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks the dependency install.
 
-Setup fails non-zero at the labeled stage (registration or dependency sync). OpenCode must be restarted after setup to load the registered plugin.
+Setup fails non-zero at the labeled stage (registration or dependency install). OpenCode must be restarted after setup to load the registered plugin.
 
-Setup never creates or overwrites project `aria.json`, commits, pushes, or introduces postinstall, daemon, or background behavior.
+Setup never creates or overwrites project `aria.json`, commits, pushes, or introduces postinstall, daemon, or background behavior. `aria setup` also accepts `--plugin-spec <spec>` (see `aria --help`) to register a Git package specifier instead of the local checkout; it is not part of the normal install flow.
 
-### `aria setup --configure`
+### `aria models --config`
 
-`aria setup --configure` adds an optional interactive third phase that runs only after registration and dependency sync both succeed. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the eleven configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`, `scientist`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
+`aria models --config` is the v1.1.x public configuration surface: an interactive role-model configuration pass with no plugin registration and no dependency install. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the eleven configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`, `scientist`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
 
 From the top-level menu you may:
 
 - **Keep current configuration** — writes nothing; existing overrides are preserved exactly.
 - **Configure roles** — pick roles from a comma-separated list, then for each role keep the current assignment (Enter), reset to the ARIA default (`0`), type an exact model identifier, or search discovered models by case-insensitive substring. A search listing at most ten models offers numbered selection; larger result sets ask you to refine the search.
 
-Choosing a model replaces the role's global `model` field, then a compact variant prompt offers the model's reported variants (`Enter` for no variant, a number to select one), so a stale variant cannot survive a model change. Resetting a role to the ARIA default removes that role's global `model` and `variant` fields rather than writing sentinel or copied values. Only the canonical global `~/.config/opencode/aria.json` is written, atomically, after creating its parent directory. When the canonical file is absent, existing legacy-global choices seed the result only if you make an explicit edit, and no canonical file is created for an unchanged or default-only result when none existed. Project-local `aria.json` files are never written; when a project override masks a global edit, the result reports it and points to `aria routes` as the authoritative resolved-routing view. When stdin is not a terminal, the phase is skipped without failing setup.
+Choosing a model replaces the role's global `model` field, then a compact variant prompt offers the model's reported variants (`Enter` for no variant, a number to select one), so a stale variant cannot survive a model change. Resetting a role to the ARIA default removes that role's global `model` and `variant` fields rather than writing sentinel or copied values. Only the canonical global `~/.config/opencode/aria.json` is written, atomically, after creating its parent directory. When the canonical file is absent, existing legacy-global choices seed the result only if you make an explicit edit, and no canonical file is created for an unchanged or default-only result when none existed. Project-local `aria.json` files are never written; when a project override masks a global edit, the result reports it and points to `aria models` as the authoritative resolved-routing view. When stdin is not a terminal, the configuration pass is skipped without failure.
 
-### `aria configure`
+`configured`, `unchanged`, and non-TTY `skipped` outcomes exit `0`; discovery/write failures and thrown errors report `Model configuration: [FAIL]` and exit nonzero. Like `setup`, it never writes project-local `aria.json`.
 
-`aria configure` runs the same interactive role-model configuration as `aria setup --configure`, but standalone: it performs no plugin registration and no dependency sync. It calls the existing model-configuration implementation directly with the current working directory and the normal terminal/discovery defaults, so precedence, masking, atomic canonical-global writes, and project-file immutability are identical to `setup --configure`. `configured`, `unchanged`, and non-TTY `skipped` outcomes exit `0`; discovery/write failures and thrown errors report `Model configuration: [FAIL]` and exit nonzero. Like `setup --configure`, it never writes project-local `aria.json`.
+### Retired: `aria update`
 
-### `aria update`
+`aria update` (checkout pull, reinstall, and re-sync) is retired. To move ARIA itself to a new release use `aria upgrade --yes`; to install missing dependencies use `aria setup`. There is no checkout-based update workflow.
 
-Pulls the latest changes from the upstream Git repository, reinstalls production dependencies, and hands off dependency synchronization to the updated checkout in a fresh process.
-
-```bash
-# From the cloned checkout:
-node ./bin/aria.mjs update
-node ./bin/aria.mjs doctor
-```
-
-The update workflow requires:
-
-- A clean Git working tree (no uncommitted changes or untracked files)
-- A configured upstream remote
-- Fast-forward-only merge (`git pull --ff-only`)
-
-After `git pull --ff-only` and `npm ci --omit=dev` succeed, update spawns `node <checkout>/bin/aria.mjs deps sync` in a new process using the updated checkout's code. The subprocess exit status and captured diagnostic output are reported. If any stage fails, update returns non-zero at the labeled stage and skips downstream stages.
-
-OpenCode must be restarted after update to load the changed code.
-
-Neither `aria setup` nor `aria update` runs as a postinstall script, daemon, background task, or automatic update. Both are manual commands. Neither creates or overwrites project `aria.json`, creates commits, or pushes.
+Neither `aria setup` nor any retired command runs as a postinstall script, daemon, background task, or automatic update. Setup is manual. Setup never creates or overwrites project `aria.json`, creates commits, or pushes.
 
 ### `aria upgrade`
 
-`aria upgrade` moves to a new ARIA release through inventory, explicit approval, pre-removal validation, self-upgrade plus a bounded handoff, and new-release-only completion with a before/after report. It never splits scope: there is no `--aria-only` or `--deps-only` in v1.0.12 — approval covers the whole inventoried component scope and the handoff binds it.
+`aria upgrade` moves ARIA itself to a new release: the global CLI, registration, managed agents, and ARIA-owned config/skills. It does not upgrade third-party dependencies — version upgrades belong exclusively to `aria deps --upgrade`.
 
-`deps sync` versus `upgrade`: sync normalizes the *current* installs (idempotent, unapproved; the legacy sync path performs no Quota chase or install); upgrade moves to a *new* release. The pipeline order is inventory → explicit approval → validate the ARIA target before removal → self-upgrade plus bounded handoff → only in the new release: component upgrades → target-version normalization/registration → agent regen if required → deps sync → doctor → before/after report.
+- `aria upgrade --check` — strictly read-only: current and available ARIA releases plus a Component|Installed|Available|Status table. Never installs, writes, or repairs.
+- `aria upgrade` (bare) — shows the same inventory without mutation, then stops: explicit `--yes` approval is required before any change is applied.
+- `aria upgrade --yes` — approves the inventoried ARIA-only target and runs the upgrade pipeline. After approval the exact target is validated before the current registration is touched; unrelated entries are preserved; everything stays XDG-contained with no `.npmrc` side effects, and any git allowlist (`NPM_CONFIG_ALLOW_GIT=all`) is process-local only.
 
-```bash
-SPEC='github:mscipio/ARIA#v1.0.7'
-NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package="$SPEC" -- aria upgrade --check # Strictly read-only: current AND available ARIA releases plus a Component|Installed|Available|Status table
-NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package="$SPEC" -- aria upgrade         # Same inventory, then stops: explicit approval is required before any mutation
-NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package="$SPEC" -- aria upgrade --yes   # Approve the inventoried target and component scope and run the pipeline
-# npx equivalents (same three forms):
-NPM_CONFIG_ALLOW_GIT=all npx --yes --package="$SPEC" -- aria upgrade --check
-NPM_CONFIG_ALLOW_GIT=all npx --yes --package="$SPEC" -- aria upgrade
-NPM_CONFIG_ALLOW_GIT=all npx --yes --package="$SPEC" -- aria upgrade --yes
-```
+### `aria deps`
 
-Run upgrade only through the exact-package invocation above, never a bare `aria upgrade ...`: `bin/aria.mjs` dispatches relative to its own location, so a bare `aria` runs whatever resolves on `PATH` (for example a development checkout) instead of the positively identified installed registration. `<spec>` denotes the positively identified installed spec (for example `github:mscipio/ARIA#v1.0.7`); an unknown, ambiguous, or foreign registration fails closed with no invocation offered. No launcher is needed: npm resolves the `aria` binary from the named package, and the dispatched release is that package's own code. The `NPM_CONFIG_ALLOW_GIT=all` prefix is process-local only, with no global `npm config` change, environment export, or `.npmrc` edit.
+Read-only inventory first, explicitly approved upgrades second — a two-step with no interactive prompt:
 
-Immutable-sender escape: when the installed registration is exactly `github:mscipio/ARIA#v1.0.7`, its own upgrade code cannot be trusted to move itself.
-Migrate with the newer release instead of a normal upgrade: `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package "github:mscipio/ARIA#v1.0.12" -- aria upgrade --migrate-from "github:mscipio/ARIA#v1.0.7" --yes`.
-Normal `aria upgrade --yes` (via the installed spec) stays the path for every other release; migrate-from requires `--yes` plus an exact from/to match and fails closed on mismatch, ambiguity, or unknown/foreign state.
-
-`--check` reports `current`, `upgrade-available`, `remote-healthy`, `unmanaged-observed`, `unsupported-ownership`, `skipped`, and `unknown-target` rows and never installs, writes, or repairs. An unknown available target blocks self-upgrade with zero mutation. After approval the exact target is validated before the current registration is touched; pre-handoff failure leaves/restores the old registration where feasible or reports the exact unresolved state. Handoff success binds the exact validated target plus the approved inventory: the new release continues without re-asking only on an exact match, and any target/scope drift stops for fresh approval. Post-handoff component failure stops with per-component completed/rolled-back/unresolved states and no global transactionality. Approval precedes all mutations; unknown ownership/version means no install; unrelated entries are preserved; everything stays XDG-contained with no prod V1, session migration, V1/0.6 removal, or `.npmrc` side effects, and any git allowlist (`NPM_CONFIG_ALLOW_GIT=all`) is process-local only.
-
-### `aria deps sync`
-
-Synchronizes each integration using its upstream-supported mechanism, then reconciles OpenCode MCP configuration. This is the same dependency sync invoked by `aria setup` and the post-update handoff. Quota 5 is excluded from this legacy sync path: sync performs no Quota installation or config mutation (the setup bootstrap lifecycle manages Quota separately under safety/ownership gates; see above).
+- `aria deps` — read-only inventory/status of managed plugins/MCPs (installed and available versions with per-component status). No changes are made.
+- `aria deps --upgrade` — checks eligible updates and prints a proposal with zero mutation (exits nonzero to signal nothing was applied). Re-run as `aria deps --upgrade --yes` to apply managed upgrades; unknown/unmanaged targets stay report-only either way.
+- Missing dependencies remain `aria setup`'s responsibility, not an upgrade step.
 
 ### `aria doctor`
 
@@ -341,23 +309,23 @@ A dedicated SKIP finding states the standalone limitation: `aria doctor` cannot 
 
 `aria doctor` emits plain text only: no ANSI escapes (regardless of `NO_COLOR`), no JSON mode or payload, no prompts, and no repair/install hints. It runs no mutations and touches neither Zotero nor configuration.
 
-### `aria routes`
+### `aria models`
 
-Prints the resolved model (and optional variant) for every ARIA role, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. If any configuration file is invalid the command fails with a non-zero exit code.
+Prints the resolved model (and effort) for every ARIA role as a compact role/model/effort table, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. The effort column is the resolved variant (`-` when the route carries none). If any configuration file is invalid the command fails with a non-zero exit code.
 
 ```
-Resolved ARIA role routes:
-coder  opencode-go/muse-spark-1.3-contributor (xhigh)
-explorer  opencode-go/muse-spark-1.3-contributor (high)
-visualizer  opencode-go/muse-spark-1.3-contributor (xhigh)
-planner  openai/gpt-6-luna (xhigh)
-architect  openai/gpt-6.1-sol (high)
-implementer  opencode-go/muse-spark-1.3-contributor (xhigh)
-reviewer  openai/gpt-6.1-sol (medium)
-researcher  openai/gpt-6.1-sol (medium)
-archivist  opencode-go/muse-spark-1.3-contributor (high)
-writer  openai/gpt-6-luna (xhigh)
-scientist  openai/gpt-6.1-sol (medium)
+role  model  effort
+coder  opencode-go/muse-spark-1.3-contributor  xhigh
+explorer  opencode-go/muse-spark-1.3-contributor  high
+visualizer  opencode-go/muse-spark-1.3-contributor  xhigh
+planner  openai/gpt-6-luna  xhigh
+architect  openai/gpt-6.1-sol  high
+implementer  opencode-go/muse-spark-1.3-contributor  xhigh
+reviewer  openai/gpt-6.1-sol  medium
+researcher  openai/gpt-6.1-sol  medium
+archivist  opencode-go/muse-spark-1.3-contributor  high
+writer  openai/gpt-6-luna  xhigh
+scientist  openai/gpt-6.1-sol  medium
 ```
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
@@ -474,6 +442,17 @@ npm run lint
 npm run compile
 npm run smoke:package
 ```
+
+### Release
+
+- `npm run release:check` — seven-stage pre-tag gate (version/package sanity → compile + dist sync → typecheck → targeted ESLint → `git diff --check` → focused lifecycle/hotfix Vitest subset → `npm pack` + isolated install + bare `aria` smoke). Must pass on the commit you intend to tag.
+- `git commit` — land any remaining reviewed preparation work.
+- `git tag -a vX.Y.Z -m "ARIA vX.Y.Z"` — create an annotated tag on the final reviewed HEAD (semver, e.g. `v1.1.2`).
+- `git push` — push the commits, then the tag (`git push origin vX.Y.Z`).
+- `npm run verify:release-tag -- vX.Y.Z` — six-stage post-tag check (tag→commit identity → remote tag identity → isolated install of the exact tag spec → bare version + non-checkout package path → hermetic doctor smoke → `upgrade --check` + `models` dispatch). Short smokes only; it does not rerun behavioral qualification or the full suite.
+- GitHub Release — publish the release notes for the tag.
+
+The tag is the immutable boundary: never move, delete, or re-point a pushed tag to "fix" a release — cut a new version instead. Multiple release-preparation commits are allowed before tagging; only the tag itself is immutable.
 
 ## Acknowledgement
 

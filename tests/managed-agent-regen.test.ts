@@ -2,14 +2,13 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AgentReconciliationError,
   agentFileName,
   generateAgentFiles,
   parseManagedHeader,
-  readPackageVersion,
   reconcileManagedAgents,
   ROLES,
 } from "../src/agents.js";
@@ -40,6 +39,35 @@ import type { RoleName } from "../src/types.js";
 // preservation, (e) fail-closed conflicts, (f) post-handoff ordering and
 // regen-failure gating, (g) doctor managed-agent gate.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// T002 deterministic version fixture: behavioral regen results must not
+// branch on the checkout's release version. Every simulated current/target
+// version below is explicit; the package-version read is pinned to the same
+// fixture so doctor's internal managed-agent gate agrees with the seeded
+// bytes (cross-module importers observe the mock; same-module bodies use
+// FIXTURE_VERSION directly).
+// ---------------------------------------------------------------------------
+
+const { FIXTURE_VERSION } = vi.hoisted(() => ({ FIXTURE_VERSION: "9.9.9" }));
+
+vi.mock("../src/agents.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/agents.js")>();
+  return {
+    ...actual,
+    readPackageVersion: () => FIXTURE_VERSION,
+    // The post-handoff regen phase reaches reconciliation through the
+    // model-config wrapper without an explicit version (production resolves
+    // the new release's own version there); default it to the fixture so the
+    // phase converges to the same explicit bytes the test seeds and expects.
+    reconcileManagedAgents: (
+      ...args: Parameters<typeof actual.reconcileManagedAgents>
+    ): ReturnType<typeof actual.reconcileManagedAgents> => {
+      const [resolved, options] = args;
+      return actual.reconcileManagedAgents(resolved, { version: FIXTURE_VERSION, ...options });
+    },
+  };
+});
 
 const tempDirs: string[] = [];
 let originalWikiDir: string | undefined;
@@ -87,7 +115,7 @@ describe("T003 managed-agent regeneration", () => {
     const worktree = join(root, "worktree");
     const dir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
-    const current = readPackageVersion();
+    const current = FIXTURE_VERSION;
     const stale = await seedVersionedAgents(dir, worktree, STALE_VERSION);
     expect(Object.keys(stale)).toHaveLength(11);
 
@@ -110,7 +138,7 @@ describe("T003 managed-agent regeneration", () => {
     const worktree = join(root, "worktree");
     const dir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
-    const current = readPackageVersion();
+    const current = FIXTURE_VERSION;
     await seedVersionedAgents(dir, worktree, current);
 
     const beforeBytes = await Promise.all(ROLES.map((role) => readBytes(dir, agentFileName(role))));
@@ -135,7 +163,7 @@ describe("T003 managed-agent regeneration", () => {
     const worktree = join(root, "worktree");
     const dir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
-    const current = readPackageVersion();
+    const current = FIXTURE_VERSION;
     // Seed all but two roles; the absent role paths must be created.
     const present = ROLES.filter((role) => role !== "explorer" && role !== "scientist");
     const files = generateAgentFiles(resolved, current);
@@ -159,7 +187,7 @@ describe("T003 managed-agent regeneration", () => {
     const worktree = join(root, "worktree");
     const dir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
-    const current = readPackageVersion();
+    const current = FIXTURE_VERSION;
     await seedVersionedAgents(dir, worktree, current);
     const extras: Record<string, string> = {
       "my-helper.md": "user content\n",
@@ -184,7 +212,7 @@ describe("T003 managed-agent regeneration", () => {
     const worktree = join(root, "worktree");
     const dir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
-    const current = readPackageVersion();
+    const current = FIXTURE_VERSION;
     await seedVersionedAgents(dir, worktree, current);
     // Unowned incumbent (no ARIA marker) plus an ambiguous role path.
     await writeFile(join(dir, agentFileName("coder")), "user-owned coder agent\n");
@@ -277,7 +305,7 @@ describe("T003 managed-agent regeneration", () => {
     expect(result.ok).toBe(true);
     expect(order).toEqual(["normalize", "regen", "deps-sync", "doctor"]);
     // The real phase converged the seeded stale files to the current bytes.
-    const current = readPackageVersion();
+    const current = FIXTURE_VERSION;
     const expected = generateAgentFiles(resolveSetupAriaConfig(process.cwd()), current);
     for (const role of ROLES) {
       expect(await readBytes(agentsDir, agentFileName(role)), `${role} regenerated`).toBe(expected[role]);
@@ -289,7 +317,7 @@ describe("T003 managed-agent regeneration", () => {
     const configDir = join(root, "config", "opencode");
     await mkdir(configDir, { recursive: true });
     const agentsDir = join(configDir, "agents");
-    await seedVersionedAgents(agentsDir, process.cwd(), readPackageVersion());
+    await seedVersionedAgents(agentsDir, process.cwd(), FIXTURE_VERSION);
     await writeFile(join(agentsDir, agentFileName("coder")), "user-owned coder agent\n");
     const beforeCoder = await readBytes(agentsDir, agentFileName("coder"));
 
@@ -350,7 +378,7 @@ describe("T003 managed-agent regeneration", () => {
     const agentsDir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
     await seedVersionedAgents(agentsDir, worktree, STALE_VERSION);
-    const reconciled = await reconcileManagedAgents(resolved, { dir: agentsDir });
+    const reconciled = await reconcileManagedAgents(resolved, { dir: agentsDir, version: FIXTURE_VERSION });
     expect(reconciled.written).toHaveLength(11);
     // Healthy doctor fixtures: global OpenCode config carries the Context7
     // remote MCP, and every packaged default route model is discoverable.

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { generateAgentFiles, readPackageVersion } from "../src/agents";
+import { generateAgentFiles } from "../src/agents";
 import aria from "../src/index";
 import { resolveAriaConfig, ROLES } from "../src/overrides";
 import {
@@ -18,6 +18,11 @@ import {
 } from "../src/project-overrides";
 
 const tempDirs: string[] = [];
+
+// T002 deterministic version fixture: behavioral results must not branch on
+// the checkout's release version. Only t005-package-paths and equivalent
+// package-metadata tests may read package.json version.
+const FIXTURE_VERSION = "9.9.9";
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -182,7 +187,7 @@ describe("T005 project overrides", () => {
         }),
       );
       const canonical = resolveAriaConfig(root);
-      const version = readPackageVersion();
+      const version = FIXTURE_VERSION;
       const globalDefs = generateAgentFiles(canonical, version);
 
       // Seed the effective V2 agent surface from canonical defaults.
@@ -253,7 +258,7 @@ describe("T005 project overrides", () => {
       const withWiki = resolveAriaConfig(root);
       delete process.env.WIKI_DIR;
       const withoutWiki = resolveAriaConfig(root);
-      const version = readPackageVersion();
+      const version = FIXTURE_VERSION;
       expect(generateAgentFiles(withWiki, version).archivist).toBe(
         generateAgentFiles(withoutWiki, version).archivist,
       );

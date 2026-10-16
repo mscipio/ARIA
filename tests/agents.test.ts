@@ -13,7 +13,6 @@ import {
   installAgentFiles,
   isAriaManaged,
   parseManagedHeader,
-  readPackageVersion,
   rollbackAgentInstall,
 } from "../src/agents";
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions";
@@ -65,6 +64,12 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const tempDirs: string[] = [];
 
+// T002 deterministic version fixture: behavioral generation results must not
+// branch on the checkout's release version. Every simulated version below
+// is explicit (9.9.9); only t005-package-paths and equivalent
+// package-metadata tests may read package.json version.
+const FIXTURE_VERSION = "9.9.9";
+
 afterEach(async () => {
   fsFault.writeFileFailWhen = null;
   fsFault.renameFailWhen = null;
@@ -80,7 +85,7 @@ async function worktree(): Promise<string> {
 describe("T003 agent installation", () => {
   it("generates exactly the eleven canonical agents with preserved modes/models/variants", async () => {
     const resolved = resolveAriaConfig(await worktree());
-    const files = generateAgentFiles(resolved, readPackageVersion());
+    const files = generateAgentFiles(resolved, FIXTURE_VERSION);
 
     expect(Object.keys(files)).toEqual([
       "coder",
@@ -121,7 +126,7 @@ describe("T003 agent installation", () => {
 
   it("is deterministic and carries verifiable ownership markers", async () => {
     const resolved = resolveAriaConfig(await worktree());
-    const version = readPackageVersion();
+    const version = FIXTURE_VERSION;
     const first = generateAgentFiles(resolved, version);
     const second = generateAgentFiles(resolved, version);
     expect(second).toEqual(first);
@@ -137,7 +142,7 @@ describe("T003 agent installation", () => {
 
   it("emits real parity Rule[] with no legacy V1 actions (T004 replaces deny-all placeholder)", async () => {
     const resolved = resolveAriaConfig(await worktree());
-    const files = generateAgentFiles(resolved, readPackageVersion());
+    const files = generateAgentFiles(resolved, FIXTURE_VERSION);
     // Canonical source is per-role: coder differs from explorer (skill
     // allow+deny vs deny+allow) and researcher differs from scientist.
     expect(getPermissionsForRole("coder")).not.toEqual(getPermissionsForRole("explorer"));
@@ -179,7 +184,7 @@ describe("T003 agent installation", () => {
 
   it("passes the resolved system prompt through as the Markdown body", async () => {
     const resolved = resolveAriaConfig(await worktree());
-    const files = generateAgentFiles(resolved, readPackageVersion());
+    const files = generateAgentFiles(resolved, FIXTURE_VERSION);
     for (const role of Object.keys(files) as RoleName[]) {
       const lines = files[role].split("\n");
       const closing = lines.indexOf("---", 1);
@@ -337,7 +342,7 @@ describe("T003 agent installation", () => {
 
   it("loads explicit security fields through pinned 2.0.23 Agent.Info without builtin inheritance", async () => {
     const resolved = resolveAriaConfig(await worktree());
-    const content = generateAgentFile("explorer", resolved.roles.explorer, readPackageVersion());
+    const content = generateAgentFile("explorer", resolved.roles.explorer, FIXTURE_VERSION);
 
     // Parse the actual file bytes (not constants) the way a loader would.
     const lines = content.split("\n");
@@ -421,7 +426,7 @@ describe("T003 agent installation", () => {
     expect(evaluatePermission(merged, "edit", "src/app.ts")).toBe("deny");
     // Scientist boundary from file bytes: no MCP authority, so merged
     // ZotPilot/Engram access stays ask, never allow.
-    const scientistContent = generateAgentFile("scientist", resolved.roles.scientist, readPackageVersion());
+    const scientistContent = generateAgentFile("scientist", resolved.roles.scientist, FIXTURE_VERSION);
     expect(scientistContent).toContain('- action: "*"');
     const scientistRules = getPermissionsForRole("scientist");
     const scientistMerged = [

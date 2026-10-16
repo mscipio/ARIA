@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { generateAgentFiles, readPackageVersion } from "../src/agents.js";
+import { generateAgentFiles } from "../src/agents.js";
 import type { Executor } from "../src/deps.js";
 import { resolveCheckout, setup } from "../src/lifecycle.js";
 import {
@@ -39,6 +39,29 @@ async function tempDir(): Promise<string> {
 
 const PLUGIN_URI = "file:///opt/aria-checkout";
 const SKILLS_ROOT = "/opt/aria-checkout/skills";
+
+// T002 deterministic version fixture: behavioral results must not branch on
+// the checkout's release version. Only t005-package-paths and equivalent
+// package-metadata tests may read package.json version. The lifecycle
+// setup() path resolves its agent version via installAgentFiles internally
+// (same-module readPackageVersion, invisible to a plain export mock), so the
+// mock defaults that entry point to the same explicit fixture the
+// expectations use (explicit per-test versions still win via spread).
+const { FIXTURE_VERSION } = vi.hoisted(() => ({ FIXTURE_VERSION: "9.9.9" }));
+
+vi.mock("../src/agents.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/agents.js")>();
+  return {
+    ...actual,
+    readPackageVersion: () => FIXTURE_VERSION,
+    installAgentFiles: (
+      ...args: Parameters<typeof actual.installAgentFiles>
+    ): ReturnType<typeof actual.installAgentFiles> => {
+      const [resolved, options] = args;
+      return actual.installAgentFiles(resolved, { version: FIXTURE_VERSION, ...options });
+    },
+  };
+});
 
 function mockExecutor(responses: Record<string, { stdout?: string; stderr?: string; error?: string }>): Executor {
   return async (command: string, args: string[]) => {
@@ -677,7 +700,7 @@ describe("T008 setup lifecycle file phases", () => {
     // Canonical generation path stays intact (installAgentFiles owns bytes).
     const resolved = resolveSetupAriaConfig(worktree);
     expect(await readFile(join(agentsDir, "coder.md"), "utf8")).toBe(
-      generateAgentFiles(resolved, readPackageVersion()).coder,
+      generateAgentFiles(resolved, FIXTURE_VERSION).coder,
     );
   });
 

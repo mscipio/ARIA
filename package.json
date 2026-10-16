@@ -1,6 +1,6 @@
 {
   "name": "aria",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": false,
   "description": "ARIA (Archival, Research, Implementation, and Authoring): a multi-role OpenCode workstation with Review-Driven Coding, scientific/professional writing, curated knowledge archival, and ZotPilot-backed evidence research.",
   "license": "MIT",
@@ -53,7 +53,9 @@
     "typecheck": "tsc --noEmit --project tsconfig.json",
     "test": "vitest run --config vitest.config.ts",
     "lint": "eslint .",
-    "smoke:package": "npm run compile && node scripts/smoke-package.mjs"
+    "smoke:package": "npm run compile && node scripts/smoke-package.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "verify:release-tag": "node scripts/verify-release-tag.mjs"
   },
   "dependencies": {
     "@opencode-ai/plugin": "1.18.1",

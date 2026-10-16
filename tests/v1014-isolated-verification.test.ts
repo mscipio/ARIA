@@ -2,14 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   agentFileName,
   AgentReconciliationError,
   generateAgentFiles,
   parseManagedHeader,
-  readPackageVersion,
   reconcileManagedAgents,
   ROLES,
 } from "../src/agents.js";
@@ -51,9 +50,17 @@ import { runAriaSkillsRefreshPhase } from "../src/upgrade.js";
  *
  * Packed-candidate provenance (final local E2E uses the locally packed
  * tarball, not checkout dist) is verified outside this suite without a
- * version bump or commit; T010 owns the formal bump/stage/gate. Version
- * stays 1.0.14 in the tree here.
+ * version bump or commit; T010 owns the formal bump/stage/gate. Versions
+ * below are explicit fixtures and never read from the checkout's
+ * package.json, so results do not branch on the checkout release.
  */
+
+const { FIXTURE_VERSION } = vi.hoisted(() => ({ FIXTURE_VERSION: "9.9.9" }));
+
+vi.mock("../src/agents.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/agents.js")>();
+  return { ...actual, readPackageVersion: () => FIXTURE_VERSION };
+});
 
 const tempDirs: string[] = [];
 let savedWikiDir: string | undefined;
@@ -139,8 +146,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
   it("two roots render identical canonical bytes+checksum; npx/checkout/extracted path-stable, no ephemeral root persisted", async () => {
     const root = await tempRoot("aria-t009-tworoot-");
     const worktree = join(root, "worktree");
-    const version = readPackageVersion();
-    expect(version).toBe("1.0.15");
+    const version = FIXTURE_VERSION;
 
     // Three representative install roots whose ephemeral prefixes must never
     // persist in canonical bytes (npx cache, checkout, extracted package).
@@ -248,7 +254,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
     const agentsDir = join(root, "agents");
     await mkdir(agentsDir, { recursive: true });
     const resolved = resolveSetupAriaConfig(worktree);
-    const version = readPackageVersion();
+    const version = FIXTURE_VERSION;
     const canonical = generateAgentFiles(resolved, version);
     for (const role of ROLES) {
       await writeFile(join(agentsDir, agentFileName(role)), canonical[role]);
@@ -305,7 +311,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
     // at generation time, exactly what T005 diagnosed); stale v1.0.7 npx
     // skills alongside an unrelated user path; sentinel keys; Engram/Quota
     // prose preserved in config; unrelated agent files.
-    const version = readPackageVersion();
+    const version = FIXTURE_VERSION;
     const resolved = resolveSetupAriaConfig(worktree);
     const canonical = generateAgentFiles(resolved, version);
     const staleBakedArchivist = canonical.archivist
@@ -465,7 +471,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
     await mkdir(agentsDir, { recursive: true });
     const worktree = join(root, "worktree");
     const resolved = resolveSetupAriaConfig(worktree);
-    const version = readPackageVersion();
+    const version = FIXTURE_VERSION;
     const canonical = generateAgentFiles(resolved, version);
     for (const role of ROLES) {
       await writeFile(join(agentsDir, agentFileName(role)), canonical[role]);
@@ -497,12 +503,11 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
     expect(getPackageSkillsRoot()).toBe(join(getPackageRoot(), "skills"));
 
     // The packed tarball ships the same canonical inputs (skills tree,
-    // defaults, dist entry points); placeholders keep byte-stability.
+    // defaults, dist entry points); placeholders keep byte-stability. The
+    // checkout release version is never pinned here (T002).
     const pkg = JSON.parse(await readFile(resolve(getPackageRoot(), "package.json"), "utf8")) as {
-      version?: unknown;
       files?: unknown;
     };
-    expect(pkg.version).toBe("1.0.15");
     expect(pkg.files).toContain("skills");
     expect(pkg.files).toContain("defaults");
   });

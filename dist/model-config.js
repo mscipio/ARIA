@@ -609,7 +609,7 @@ export async function reconcileManagedAgents(worktree, options = {}) {
     return reconcileAgentFiles(fresh, { dir });
 }
 /**
- * Lightweight interactive model configuration for `aria setup --configure`.
+ * Lightweight interactive model configuration for `aria models --config`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
  * shows the eleven configurable roles with their four-layer precedence
@@ -633,7 +633,7 @@ export async function configureModels(worktree, options = {}) {
     if (!tty) {
         return {
             status: "skipped",
-            message: "Interactive model configuration skipped: stdin is not a terminal. Run `aria setup --configure` from a terminal to configure models.",
+            message: "Interactive model configuration skipped: stdin is not a terminal. Run `aria models --config` from a terminal to configure models.",
         };
     }
     let discovered;

@@ -238,17 +238,20 @@ console.log("smoke-package: ok", {
   if (!helpOutput.includes("update")) {
     fail("aria --help does not mention update");
   }
-  if (!helpOutput.includes("--configure")) {
-    fail("aria --help does not advertise setup --configure");
+  if (helpOutput.includes("--configure")) {
+    fail("aria --help still advertises retired setup --configure");
   }
-  if (!helpOutput.includes("--plugin-spec")) {
-    fail("aria --help does not advertise setup --plugin-spec");
+  if (helpOutput.includes("--plugin-spec")) {
+    fail("aria --help advertises internal setup --plugin-spec");
   }
-  if (!helpOutput.includes("Register ARIA with OpenCode and synchronize dependencies")) {
-    fail("aria --help does not describe setup as register plus sync");
+  if (!helpOutput.includes("Register ARIA with OpenCode and install missing dependencies")) {
+    fail("aria --help does not describe setup as register plus install-missing");
   }
-  if (!helpOutput.includes("Then interactively configure ARIA role models")) {
-    fail("aria --help does not describe setup --configure as full setup then configure");
+  if (!helpOutput.includes("aria models --config")) {
+    fail("aria --help does not advertise models --config");
+  }
+  if (!helpOutput.includes("Interactively configure ARIA role models")) {
+    fail("aria --help does not describe models --config as interactive role-model configuration");
   }
   if (!helpOutput.includes("aria configure")) {
     fail("aria --help does not mention configure");

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { getPackageRoot } from "../src/defaults.js";
 import type { Executor } from "../src/deps.js";
-import { runDoctor } from "../src/doctor.js";
+import { runDoctor, type DoctorFileOps } from "../src/doctor.js";
 import type { ModelDiscovery } from "../src/model-config.js";
 import { ROLES } from "../src/routes.js";
 import {
@@ -170,6 +170,18 @@ const PROBE_MODELS: ModelDiscovery = {
   }],
 };
 
+/** Read-only fileOps seam pinning the CLI version to an explicit fixture. */
+function pinnedCliFileOps(cliVersion: string): DoctorFileOps {
+  const packageRoot = getPackageRoot();
+  const packageJsonPath = resolve(packageRoot, "package.json");
+  return {
+    readText: async (path: string) => {
+      if (path === packageJsonPath) return JSON.stringify({ version: cliVersion });
+      return readFile(path, "utf8");
+    },
+  };
+}
+
 describe("T009 doctor requires approved-source evidence before comparing versions", () => {
   it("reports WARN unknown (never PASS) for a foreign-source tag matching the CLI version", async () => {
     originalHome = process.env.HOME;
@@ -179,8 +191,9 @@ describe("T009 doctor requires approved-source evidence before comparing version
     process.env.HOME = sandbox;
     process.env.XDG_CONFIG_HOME = resolve(sandbox, "config");
 
-    const raw = await readFile(resolve(getPackageRoot(), "package.json"), "utf8");
-    const cliVersion = (JSON.parse(raw) as { version: string }).version;
+    // T002 deterministic CLI fixture: pinned through the read-only fileOps
+    // seam, never read from the checkout's package.json.
+    const cliVersion = "9.9.9";
     const foreign = `github:other/ARIA#v${cliVersion}`;
     const pluginList = pluginTable([["aria", "842e4ec", foreign]]);
 
@@ -215,6 +228,7 @@ describe("T009 doctor requires approved-source evidence before comparing version
       agentsDir,
       executor,
       discovery: async () => PROBE_MODELS,
+      fileOps: pinnedCliFileOps(cliVersion),
     });
 
     // The registration itself is still reported as observed …

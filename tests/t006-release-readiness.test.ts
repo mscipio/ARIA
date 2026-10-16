@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, chmod, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { assertNotCallerGlobalPath } from "./test-isolation.js";
 // T006 v1.1.0 release-readiness gate: isolated global-package installation.
 //
 // The candidate is packed (`npm pack`) and installed to an isolated
-// `--prefix` (no `npm link`, never the live v1.0.15 global). Every CLI
+// `--prefix` (no `npm link`, never the live global). Every CLI
 // invocation below runs the BARE installed `aria` (the prefix's
 // `bin/aria`), never `node ./bin/aria.mjs`. Development remains
 // `node ./bin/aria.mjs`; this suite never mutates the live installation.
@@ -49,6 +49,7 @@ let installPrefix = "";
 let bareBin = "";
 let sandboxHome = "";
 let sandboxWorktree = "";
+let hermeticBin = "";
 
 const cliSandboxEnv: NodeJS.ProcessEnv = {};
 
@@ -89,9 +90,19 @@ async function runBare(
   // R005: resolve the bare `aria` command through PATH with the isolated
   // prefix bin first — never the dev checkout. This proves the installed
   // command identity end users invoke, not a direct node-bin path bypass.
+  // R003: hermetic fixture shims (fake opencode/engram/codegraph/zotpilot/
+  // brew/git) sit second, so read-only probes never touch ambient tools or
+  // the network while the prefix bin identity stays first.
   const prefixBin = join(installPrefix, "bin");
   const basePath = options.env?.["PATH"] ?? process.env["PATH"] ?? "";
-  const barePath = basePath.length > 0 ? `${prefixBin}${delimiter}${basePath}` : prefixBin;
+  const barePath =
+    hermeticBin.length > 0
+      ? basePath.length > 0
+        ? `${prefixBin}${delimiter}${hermeticBin}${delimiter}${basePath}`
+        : `${prefixBin}${delimiter}${hermeticBin}`
+      : basePath.length > 0
+        ? `${prefixBin}${delimiter}${basePath}`
+        : prefixBin;
   try {
     const result = await execFileAsync("aria", args, {
       cwd: options.cwd ?? sandboxWorktree,
@@ -110,22 +121,19 @@ async function runBare(
   }
 }
 
-async function runLiveAria(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+async function resolveLiveAriaBin(): Promise<string | null> {
+  // Resolve the ambient `aria` WITHOUT the candidate prefix or hermetic
+  // fakes on PATH (read-only PATH lookup; never executes the live binary).
   try {
-    const result = await execFileAsync("aria", args, {
+    const result = await execFileAsync("sh", ["-c", "command -v aria"], {
       cwd: sandboxWorktree,
       env: isolatedChildEnv(),
       timeout: CLI_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
     });
-    return { code: 0, stdout: result.stdout, stderr: result.stderr };
-  } catch (error) {
-    const failure = error as { code?: number; stdout?: string; stderr?: string };
-    return {
-      code: typeof failure.code === "number" ? failure.code : 1,
-      stdout: failure.stdout ?? "",
-      stderr: failure.stderr ?? "",
-    };
+    const found = result.stdout.trim().split("\n").pop()?.trim() ?? "";
+    return found.length > 0 ? found : null;
+  } catch {
+    return null;
   }
 }
 
@@ -209,13 +217,118 @@ beforeAll(async () => {
   const bareText = await readFile(bareBin, "utf8").catch(() => "");
   if (!bareText.includes("aria")) throw new Error(`T006: isolated bin missing at ${bareBin}`);
   assertNotCallerGlobalPath(bareBin, "T006 bare bin");
+
+  // R003 hermetic probes: mask ambient doctor/upgrade/deps probes (brew,
+  // opencode, network ls-remote, workstation tools) with deterministic
+  // fixture shims. The tarball pack/install above stays the real packaging
+  // check; only the read-only probe argv below is hermetic. Every bare-aria
+  // child inherits this PATH (prefix bin first, then hermetic fakes, then
+  // ambient PATH), so no live-state dependence or latency remains.
+  hermeticBin = join(root, "fake-bin");
+  await mkdir(hermeticBin, { recursive: true });
+  assertNotCallerGlobalPath(hermeticBin, "T006 hermetic bin");
+  // Packaged defaults fixture: the tarball packs the repo defaults verbatim,
+  // so the repo tree is the deterministic source (the --prefix install layout
+  // differs from a plain node_modules install; the real packaging check stays
+  // the npm pack + isolated --prefix install above).
+  const installedDefaults = JSON.parse(
+    await readFile(join(repoRoot, "defaults", "aria.defaults.json"), "utf8"),
+  ) as { roles?: Record<string, { model: string; variant?: string }> };
+  const modelIds: string[] = [];
+  const variantsByModel = new Map<string, string[]>();
+  for (const role of Object.values(installedDefaults.roles ?? {})) {
+    if (!modelIds.includes(role.model)) modelIds.push(role.model);
+    if (role.variant) {
+      const seen = variantsByModel.get(role.model) ?? [];
+      if (!seen.includes(role.variant)) variantsByModel.set(role.model, [...seen, role.variant]);
+    }
+  }
+  await writeFile(join(hermeticBin, "models.txt"), `${modelIds.join("\n")}\n`);
+  const verboseLines: string[] = [];
+  for (const id of modelIds) {
+    verboseLines.push(
+      id,
+      JSON.stringify({
+        name: id.slice(id.indexOf("/") + 1),
+        variants: Object.fromEntries((variantsByModel.get(id) ?? []).map((variant) => [variant, {}])),
+      }),
+    );
+  }
+  await writeFile(join(hermeticBin, "models-verbose.txt"), `${verboseLines.join("\n")}\n`);
+  await writeFile(
+    join(hermeticBin, "mcp-list.txt"),
+    ["engram connected", "context7 connected", "codegraph connected", "zotpilot disconnected", ""].join("\n"),
+  );
+  await writeFile(join(hermeticBin, "debug-config.txt"), '{"subagent_depth": 4}\n');
+  await writeFile(
+    join(hermeticBin, "plugin-list.txt"),
+    ["ID  VERSION  SOURCE", `aria  abc1234  github:mscipio/ARIA#v${candidateVersion}`, ""].join("\n"),
+  );
+  const fakeScript = (
+    name: string,
+    approved: Array<{ match: string; out?: string; file?: string }>,
+  ): string => {
+    const body = approved
+      .map(({ match, out, file }) => {
+        const emit = file ? `/bin/cat "${join(hermeticBin, file)}"` : `echo "${out ?? ""}"`;
+        return `if ${match}; then\n  ${emit}\n  exit 0\nfi`;
+      })
+      .join("\n");
+    return `#!/bin/sh\necho "${name} $*" >> "${join(hermeticBin, "invocations.log")}"\n${body}\necho "refused: ${name} $*" >&2\nexit 2\n`;
+  };
+  await writeFile(
+    join(hermeticBin, "opencode"),
+    fakeScript("opencode", [
+      { match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "opencode 2.0.23" },
+      { match: '[ "$#" -eq 1 ] && [ "$1" = "models" ]', file: "models.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "models" ] && [ "$2" = "--verbose" ]', file: "models-verbose.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "mcp" ] && [ "$2" = "list" ]', file: "mcp-list.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "debug" ] && [ "$2" = "config" ]', file: "debug-config.txt" },
+      { match: '[ "$#" -eq 2 ] && [ "$1" = "plugin" ] && [ "$2" = "list" ]', file: "plugin-list.txt" },
+    ]),
+  );
+  await writeFile(
+    join(hermeticBin, "engram"),
+    fakeScript("engram", [{ match: '[ "$#" -eq 1 ] && [ "$1" = "version" ]', out: "engram 1.0.0" }]),
+  );
+  await writeFile(
+    join(hermeticBin, "codegraph"),
+    fakeScript("codegraph", [{ match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "codegraph 1.0.0" }]),
+  );
+  await writeFile(
+    join(hermeticBin, "zotpilot"),
+    fakeScript("zotpilot", [{ match: '[ "$#" -eq 1 ] && [ "$1" = "--version" ]', out: "zotpilot 0.5.3" }]),
+  );
+  await writeFile(join(hermeticBin, "brew"), '#!/bin/sh\necho "masked: brew $*" >&2\nexit 1\n');
+  // Deterministic git ls-remote for the ARIA remote only (upgrade --check
+  // discovery); every other git argv delegates to the real binary so local
+  // tag/commit probes stay faithful and only the exact-tag install uses the
+  // network (that install runs via real npm, never this shim).
+  await writeFile(
+    join(hermeticBin, "git"),
+    `#!/bin/sh\nif [ "$1" = "ls-remote" ] && [ "$2" = "https://github.com/mscipio/ARIA.git" ]; then\n  printf "abc1234000000000000000000000000000000000\\trefs/tags/v${candidateVersion}\\n"\n  printf "abc1234000000000000000000000000000000000\\trefs/tags/v${candidateVersion}^{}\\n"\n  exit 0\nfi\nexec /usr/bin/git "$@"\n`,
+  );
+  for (const name of ["opencode", "engram", "codegraph", "zotpilot", "brew", "git"]) {
+    await chmod(join(hermeticBin, name), 0o755);
+  }
+  // Isolated Context7 remote config so doctor observes the packaged default
+  // shape without ambient HOME dependence.
+  await mkdir(join(sandboxHome, "config", "opencode"), { recursive: true });
+  await writeFile(
+    join(sandboxHome, "config", "opencode", "opencode.json"),
+    `${JSON.stringify({ mcp: { servers: { context7: { type: "remote", url: "https://mcp.context7.com/mcp" } } } }, null, 2)}\n`,
+  );
+  // Plain output without ambient color; PATH shims stay in runBare only so
+  // the ambient `aria` lookup below never observes the candidate prefix or
+  // the hermetic fakes.
+  Object.assign(cliSandboxEnv, { NO_COLOR: "1" });
 }, INSTALL_TIMEOUT_MS);
 
 afterAll(async () => {
   await Promise.all(t006Roots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-describe("T006 isolated install provenance (candidate, never live v1.0.15)", () => {
+describe("T006 isolated install provenance (candidate prefix, never the live global)", () => {
   it("bare aria reports the candidate version from the isolated prefix", async () => {
     expect(bareBin.startsWith(resolve(tmpdir()) + "/")).toBe(true);
     const result = await runBare(["--version"]);
@@ -241,15 +354,18 @@ describe("T006 isolated install provenance (candidate, never live v1.0.15)", () 
     expect(result.stdout).not.toContain("--migrate-from");
   });
 
-  it("live v1.0.15 installation is untouched (still the old surface)", async () => {
-    // Read-only probes only: version + help never mutate.
-    const version = await runLiveAria(["--version"]);
-    expect(version.code).toBe(0);
-    expect(version.stdout.trim()).toBe("1.0.15");
-    const help = await runLiveAria(["--help"]);
-    expect(help.code).toBe(0);
-    // Live still advertises the retired v1.0.15 surface the candidate folds.
-    expect(help.stdout).toContain("aria configure");
+  it("candidate prefix stays isolated from any live installation (never the live global)", async () => {
+    // T003: no workstation/global-state dependence and no live mutation.
+    // The candidate bin lives under the temp prefix; the ambient `aria`
+    // resolves without the prefix on PATH. A missing live install is
+    // vacuously isolated; a present one must resolve outside the prefix,
+    // proving the `--prefix` install neither shadowed nor replaced it. No
+    // live version or help surface is pinned: the live release may move at
+    // any time, and executing it is never required.
+    const liveBin = await resolveLiveAriaBin();
+    if (liveBin === null) return;
+    expect(resolve(liveBin)).not.toBe(bareBin);
+    expect(resolve(liveBin).startsWith(`${installPrefix}/`)).toBe(false);
   });
 });
 
@@ -305,14 +421,15 @@ describe("T006 seven fast forms via bare aria (no live mutation)", () => {
   });
 });
 
-describe("T006 read-only inventory via bare aria (packaged E2E, environmental latency tolerated)", () => {
+describe("T006 read-only inventory via bare aria (packaged E2E, hermetic probes)", () => {
   it("doctor keeps the read-only exit-code contract with plain output", async () => {
     const result = await runBare(["doctor"]);
-    expect([0, 1]).toContain(result.code);
-    // Exit code is 0 iff no finding is FAIL (probe results are
-    // environment-dependent: broken sandbox opencode service, missing
-    // tools — assert the contract relation, never a fixed code).
-    expect(result.code).toBe(result.stdout.includes("[FAIL]") ? 1 : 0);
+    // Hermetic: fixture probes (fake opencode/engram/codegraph/zotpilot/brew
+    // plus isolated Context7 config) make the report deterministic — exit 0,
+    // no FAIL, no ambient or network dependence.
+    expect(result.code).toBe(0);
+    expect(result.stdout).not.toContain("[FAIL]");
+    expect(result.stdout).toContain("[PASS]");
     expect(result.stdout.startsWith("ARIA doctor\n")).toBe(true);
     for (const area of ["package:", "config:", "routes/models:", "dependencies:", "zotpilot:", "skills:", "wiki:"]) {
       expect(result.stdout).toContain(area);
@@ -329,6 +446,10 @@ describe("T006 read-only inventory via bare aria (packaged E2E, environmental la
     expect(check.stdout).toContain("ARIA upgrade check");
     expect(check.stdout).toContain("Current release:");
     expect(check.stdout).toContain("Available release:");
+    // Hermetic discovery: fixture plugin list + fixture ls-remote agree on
+    // the candidate release, so no network or ambient probe is consulted.
+    expect(check.stdout).toContain(candidateVersion);
+    expect(check.stdout).toContain(`v${candidateVersion}`);
     for (const token of ["Component", "Installed", "Available", "Status"]) {
       expect(check.stdout).toContain(token);
     }
@@ -364,11 +485,10 @@ describe("T006 packaged mutation boundaries (zero filesystem mutation on read-on
     // Fast read-only only (no tool probes, no network): each rejects or
     // reports before any registration, file write, or sync. Slow-form
     // read-only (doctor / upgrade --check / blocked upgrade / deps /
-    // deps --upgrade proposal) is proven by the read-only contract above
-    // ("no changes were made", blocked/proposal language, exit codes) plus
-    // the t002/t004 fixture snapshots; repeating all five slow probes here
-    // would exceed harness latency budgets (broken sandbox opencode service
-    // ~20s per probe) without adding a new behavior class.
+    // deps --upgrade proposal) is proven hermetically above ("no changes
+    // were made", blocked/proposal language, exit codes) plus the t002/t004
+    // fixture snapshots; repeating all five hermetic probes here adds no new
+    // behavior class.
     await runBare(["--help"]);
     await runBare(["--version"]);
     await runBare(["models"]);

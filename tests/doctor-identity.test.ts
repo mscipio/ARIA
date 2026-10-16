@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getPackageRoot } from "../src/defaults.js";
-import { doctorExitCode, runDoctor } from "../src/doctor.js";
+import { doctorExitCode, runDoctor, type DoctorFileOps } from "../src/doctor.js";
 import type { Executor } from "../src/deps.js";
 import type { ModelDiscovery } from "../src/model-config.js";
 import { ROLES } from "../src/routes.js";
@@ -69,9 +69,26 @@ async function writeContext7Config(home: string): Promise<void> {
   }));
 }
 
+// T002 deterministic CLI fixture: the running CLI version is pinned through
+// the read-only fileOps seam, so identity results never branch on the
+// checkout's release version. The managed-agent gate is unaffected (empty
+// fixture agents dirs report SKIP regardless of version).
+const FIXTURE_CLI_VERSION = "9.9.9";
+const MISMATCH_TAG = "v9.9.8";
+
 async function readCliVersion(): Promise<string> {
-  const raw = await readFile(resolve(getPackageRoot(), "package.json"), "utf8");
-  return (JSON.parse(raw) as { version: string }).version;
+  return FIXTURE_CLI_VERSION;
+}
+
+function pinnedCliFileOps(): DoctorFileOps {
+  const packageRoot = getPackageRoot();
+  const packageJsonPath = resolve(packageRoot, "package.json");
+  return {
+    readText: async (path: string) => {
+      if (path === packageJsonPath) return JSON.stringify({ version: FIXTURE_CLI_VERSION });
+      return readFile(path, "utf8");
+    },
+  };
 }
 
 /** Every route resolves to one discovered probe model (no route FAILs). */
@@ -131,6 +148,7 @@ async function harness(pluginList: string | Error, opencodeVersion = "opencode 2
     agentsDir,
     executor: harnessExecutor(pluginList, calls, opencodeVersion),
     discovery: async () => PROBE_MODELS,
+    fileOps: pinnedCliFileOps(),
   };
   return { worktree, agentsDir, calls, options };
 }
@@ -164,7 +182,7 @@ async function snapshotDir(root: string): Promise<Record<string, string>> {
 describe("T001 doctor ARIA identity", () => {
   it("surfaces a definite CLI/plugin mismatch without mutating config", async () => {
     const cliVersion = await readCliVersion();
-    const registeredTag = cliVersion === "1.0.7" ? "v1.0.6" : "v1.0.7";
+    const registeredTag = MISMATCH_TAG;
     const pluginList = ["ID  VERSION  SOURCE", `aria  842e4ec  github:mscipio/ARIA#${registeredTag}`].join("\n");
     const { worktree, options, calls } = await harness(pluginList);
 
@@ -325,6 +343,7 @@ describe("T001 doctor ARIA identity", () => {
       agentsDir,
       executor,
       discovery: async () => PROBE_MODELS,
+      fileOps: pinnedCliFileOps(),
     });
 
     const runtime = identityFinding(report, "OpenCode runtime");

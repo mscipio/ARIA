@@ -2,9 +2,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { readPackageVersion } from "../src/agents.js";
 import type { Executor } from "../src/deps.js";
 import { setup } from "../src/lifecycle.js";
 import { assertNotCallerGlobalPath } from "./test-isolation.js";
@@ -26,6 +25,23 @@ import { assertNotCallerGlobalPath } from "./test-isolation.js";
  */
 
 const tempDirs: string[] = [];
+
+// T002 deterministic version fixture: the same-release identity path reads
+// the running CLI version internally, so the package-version read is pinned
+// to an explicit simulated release (cross-module importers observe the
+// mock). No behavioral result branches on the checkout's release version:
+// the running/same specs are fixed fixtures and every conflicting spec is a
+// fixed different release.
+const { RUNNING_VERSION, SAME_SPEC, CONFLICTING_RELEASE_SPEC } = vi.hoisted(() => ({
+  RUNNING_VERSION: "9.9.9",
+  SAME_SPEC: "github:mscipio/ARIA#v9.9.9",
+  CONFLICTING_RELEASE_SPEC: "github:mscipio/ARIA#v1.0.7",
+}));
+
+vi.mock("../src/agents.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/agents.js")>();
+  return { ...actual, readPackageVersion: () => RUNNING_VERSION };
+});
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -78,15 +94,12 @@ async function setupFiles(skillsRoot?: string) {
 }
 
 function runningSpec(): { version: string; spec: string } {
-  const version = readPackageVersion();
-  return { version, spec: `github:mscipio/ARIA#v${version}` };
+  return { version: RUNNING_VERSION, spec: SAME_SPEC };
 }
 
-function conflictingSpec(runningVersion: string): string {
-  // A genuinely different release from the running CLI (T002 used v1.0.7
-  // against a newer running release; fall back when running is v1.0.7).
-  const tag = runningVersion === "1.0.7" ? "v9.9.9" : "v1.0.7";
-  return `github:mscipio/ARIA#${tag}`;
+function conflictingSpec(): string {
+  // A genuinely different release from the simulated running CLI.
+  return CONFLICTING_RELEASE_SPEC;
 }
 
 /** Install-only mock: present installs stay untouched, never upgraded. */
@@ -157,10 +170,10 @@ describe("T003 setup same-release identity", () => {
     // Two conflicting shapes: a different approved release tag, and the same
     // tag from a foreign (unapproved) source. Both must refuse.
     const cases = [
-      ["different release", ["ID  VERSION  SOURCE", `aria  842e4ec  ${conflictingSpec(runningVersion)}`].join("\n")],
+      ["different release", ["ID  VERSION  SOURCE", `aria  842e4ec  ${conflictingSpec()}`].join("\n")],
       ["foreign source", ["ID  VERSION  SOURCE", `aria  842e4ec  github:other/ARIA#v${runningVersion}`].join("\n")],
     ] as const;
-    expect(sameSpec).not.toBe(conflictingSpec(runningVersion));
+    expect(sameSpec).not.toBe(conflictingSpec());
     for (const [label, listed] of cases) {
       const files = await setupFiles();
       const { executor, calls } = collectingExecutor({ "opencode plugin list": { stdout: listed } });
@@ -276,15 +289,14 @@ describe("T003 setup same-release identity", () => {
   });
 
   it("R002 explicit conflicting --plugin-spec with a same-release registration refuses before any mutation (no duplicate)", async () => {
-    const { version: runningVersion, spec: sameSpec } = runningSpec();
+    const { spec: sameSpec } = runningSpec();
     const checkout = await makeFixtureCheckout();
     const files = await setupFiles();
     const worktree = await tempDir("aria-t003-work-");
-    // Running/registered same release (e.g. 1.1.0) with an explicit
-    // conflicting spec (e.g. #v1.0.15): the same-release fallback must not
+    // Running/registered simulated same release (v9.9.9) with an explicit
+    // conflicting spec (v1.0.7): the same-release fallback must not
     // mask the explicit conflict.
-    const explicitSpec =
-      runningVersion === "1.0.15" ? "github:mscipio/ARIA#v1.0.7" : "github:mscipio/ARIA#v1.0.15";
+    const explicitSpec = CONFLICTING_RELEASE_SPEC;
     expect(explicitSpec).not.toBe(sameSpec);
     const listed = ["ID  VERSION  SOURCE", `aria  842e4ec  ${sameSpec}`].join("\n");
     const { executor, calls } = collectingExecutor({ "opencode plugin list": { stdout: listed } });

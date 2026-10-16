@@ -139,7 +139,7 @@ export declare function reconcileManagedAgents(worktree: string, options?: {
     dir?: string;
 }): ReturnType<typeof reconcileAgentFiles>;
 /**
- * Lightweight interactive model configuration for `aria setup --configure`.
+ * Lightweight interactive model configuration for `aria models --config`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
  * shows the eleven configurable roles with their four-layer precedence

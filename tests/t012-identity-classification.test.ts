@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { getPackageRoot } from "../src/defaults.js";
-import { doctorExitCode, runDoctor } from "../src/doctor.js";
+import { doctorExitCode, runDoctor, type DoctorFileOps } from "../src/doctor.js";
 import type { Executor } from "../src/deps.js";
 import { classifyAriaRegistration, classifySetupIdentity, type PluginListEntry } from "../src/lifecycle.js";
 import type { ModelDiscovery } from "../src/model-config.js";
@@ -180,6 +180,22 @@ async function doctorHarness(pluginList: string | Error) {
       agentsDir,
       executor: harnessExecutor(pluginList, calls),
       discovery: async () => PROBE_MODELS,
+      // T002 deterministic CLI fixture: the registered v1.0.7 row is
+      // compared against an explicit simulated CLI (v9.9.8), never the
+      // checkout's package.json version.
+      fileOps: pinnedCliFileOps("9.9.8"),
+    },
+  };
+}
+
+/** Read-only fileOps seam pinning the CLI version to an explicit fixture. */
+function pinnedCliFileOps(cliVersion: string): DoctorFileOps {
+  const packageRoot = getPackageRoot();
+  const packageJsonPath = resolve(packageRoot, "package.json");
+  return {
+    readText: async (path: string) => {
+      if (path === packageJsonPath) return JSON.stringify({ version: cliVersion });
+      return readFile(path, "utf8");
     },
   };
 }
@@ -200,17 +216,11 @@ describe("T012 doctor recognizes dash-row Git registration", () => {
     expect(registration?.detail).not.toContain("definitely absent");
 
     const comparison = identityFinding(report, "CLI/plugin identity");
-    // CLI is 1.0.8 vs registered v1.0.7: a definite mismatch, never SKIP.
-    const cliRaw = await readFile(resolve(getPackageRoot(), "package.json"), "utf8");
-    const cliVersion = (JSON.parse(cliRaw) as { version: string }).version;
-    if (cliVersion === "1.0.7") {
-      expect(comparison?.severity).toBe("PASS");
-    } else {
-      expect(comparison?.severity).toBe("FAIL");
-      expect(comparison?.detail).toContain("definite mismatch");
-    }
+    // Simulated CLI 9.9.8 vs registered v1.0.7: a definite mismatch, never SKIP.
+    expect(comparison?.severity).toBe("FAIL");
+    expect(comparison?.detail).toContain("definite mismatch");
     expect(comparison?.severity).not.toBe("SKIP");
-    expect(doctorExitCode(report.findings)).toBe(comparison?.severity === "FAIL" ? 1 : 0);
+    expect(doctorExitCode(report.findings)).toBe(1);
   });
 
   it("reports duplicate/conflicting rows as duplicated without guessing", async () => {
