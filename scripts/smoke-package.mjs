@@ -64,6 +64,7 @@ const requiredPaths = [
   "skills/aria-writing-anti-ai/SKILL.md",
   "skills/aria-review-response/SKILL.md",
   "skills/aria-paper-self-review/SKILL.md",
+  "skills/aria-qt-ui/SKILL.md",
   "skills/aria-document-design/SKILL.md",
   "skills/aria-research-evidence/SKILL.md",
   "skills/aria-zotero-tutor/SKILL.md",
@@ -155,16 +156,16 @@ const skillNames = readdirSync(skillsDir, { withFileTypes: true })
   .filter((entry) => entry.isDirectory())
   .map((entry) => entry.name)
   .sort();
-if (skillNames.length !== 21) {
-  console.error("smoke-package: expected 21 packaged skills, got", skillNames.length);
+if (skillNames.length !== 22) {
+  console.error("smoke-package: expected 22 packaged skills, got", skillNames.length);
   process.exit(1);
 }
 if (skillNames.filter((name) => name.startsWith("rdc-")).length !== 9) {
   console.error("smoke-package: expected 9 rdc-* skills");
   process.exit(1);
 }
-if (skillNames.filter((name) => name.startsWith("aria-")).length !== 12) {
-  console.error("smoke-package: expected 12 aria-* skills");
+if (skillNames.filter((name) => name.startsWith("aria-")).length !== 13) {
+  console.error("smoke-package: expected 13 aria-* skills");
   process.exit(1);
 }
 for (const name of ["aria-research-planning", "aria-results-analysis", "aria-zotero-tutor", "rdc-adversarial-review"]) {

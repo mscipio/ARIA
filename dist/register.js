@@ -192,7 +192,7 @@ const ROLE_PERMISSIONS = {
         ...BASE_PERMISSION,
         ...REQUIRED_MCP_PERMISSION,
         read: PROTECTED_READ,
-        skill: skillAccess("rdc-visual-analysis"),
+        skill: skillAccess("aria-qt-ui"),
     },
     planner: {
         ...CODE_READ,

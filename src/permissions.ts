@@ -194,6 +194,80 @@ function implementerShellRules(): AgentRule[] {
 }
 
 /**
+ * T004 visualizer shell: broad `ask` first, then the implementer deny-list
+ * plus visualizer-only denies after so denies prevail (last-match-wins).
+ * Qt launch/test/screenshot commands therefore prompt via OpenCode
+ * permission prompts instead of running silently.
+ *
+ * No `allow` and no python/test-runner `allow` allowlist: an allowlist of
+ * python invocations is NOT a strong security boundary because `python`
+ * (including `python -c`, test runners, and Qt launch helpers) can execute
+ * arbitrary code. An `allow` on such commands would grant arbitrary
+ * execution without a prompt. `ask` keeps the user in the loop; the
+ * deny-lists keep destructive/publish/network/package-manager/git-mutating
+ * operations unapprovable.
+ *
+ * The implementer list is reused verbatim (`npm publish*` and friends stay
+ * covered there, not duplicated here). `VISUALIZER_SHELL_DENIES` below is
+ * visualizer-only so the implementer's approved posture is untouched.
+ */
+function visualizerShellRules(): AgentRule[] {
+  return [
+    { action: "shell", resource: "*", effect: "ask" },
+    ...IMPLEMENTER_SHELL_DENIES.map((resource) => ({
+      action: "shell",
+      resource,
+      effect: "deny" as const,
+    })),
+    ...VISUALIZER_SHELL_DENIES.map((resource) => ({
+      action: "shell",
+      resource,
+      effect: "deny" as const,
+    })),
+  ];
+}
+
+/**
+ * T004 visualizer-only shell denies: network egress, package-manager
+ * install/add, and git publish/mutating. Exact + ` *` pairs mirror the
+ * `IMPLEMENTER_SHELL_DENIES` style (whole-value `*`/`?` wildcards).
+ */
+const VISUALIZER_SHELL_DENIES: readonly string[] = [
+  // Network egress.
+  "curl",
+  "curl *",
+  "wget",
+  "wget *",
+  // Package-manager install/add (`npm publish*` and friends stay covered
+  // by the reused implementer list, not duplicated here).
+  "npm install",
+  "npm install *",
+  "npm add",
+  "npm add *",
+  "pnpm install",
+  "pnpm install *",
+  "pnpm add",
+  "pnpm add *",
+  "yarn install",
+  "yarn install *",
+  "yarn add",
+  "yarn add *",
+  "bun install",
+  "bun install *",
+  "bun add",
+  "bun add *",
+  "pip install",
+  "pip install *",
+  "pip3 install",
+  "pip3 install *",
+  // Git publish/mutating.
+  "git push",
+  "git push *",
+  "git reset --hard",
+  "git reset --hard *",
+];
+
+/**
  * Unscoped (deny-by-default) archivist Rule[] for managed files.
  *
  * Global agent files cannot embed worktree-relative read/edit scopes (the
@@ -345,20 +419,49 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...skillRules("rdc-code-exploration"),
       ];
     case "visualizer":
+      // T004 minimum defensible edit-capable-but-RDC-gated posture.
+      // Edit + glob/grep allow scoped implementation (same `.env` ask
+      // gates and `*` resource syntax as the implementer; no new resource
+      // syntax invented). Shell stays prompt-gated (`ask`, never `allow`;
+      // see `visualizerShellRules` for the arbitrary-code rationale) with
+      // the implementer deny-list plus visualizer-only network/
+      // package-manager/git-mutating denies after so destructive/publish/
+      // egress stays denied. Unrelated research MCP tools stay denied via
+      // the explicit `zotpilot_*` deny after the fallback (last-match-wins
+      // grants below never match it). Skill is grant-only `aria-qt-ui` per
+      // T003 (replaces `rdc-visual-analysis`). MCP stays the coding triple;
+      // everything else (webfetch/websearch/question/external/subagent)
+      // stays denied.
+      //
+      // Plan-tool access is denied at execution by `authorizePlan`
+      // (`PLAN_ACTIONS_BY_ROLE` in `src/plan-tool.ts` excludes visualizer),
+      // not by a Rule[]: `plan` stays a legacy-banned V2 action (header
+      // convention, `LEGACY_ACTIONS`, doctor `LEGACY_AGENT_ACTIONS`) and
+      // `mcp_plan` matches no registered tool (`PLAN_TOOL_NAME` is "plan";
+      // verified zero references), so no Rule[] is emitted for either (no
+      // action keys outside the supported set). Unmatched `plan` therefore
+      // falls back to `ask`, with `authorizePlan` as the denial backstop.
+      //
+      // Coder-mediated approval is a prompt-level RDC workflow convention,
+      // NOT host-enforced plan-state containment: a directly invoked
+      // edit-capable visualizer subagent may not be plan-state constrained.
+      // These Rule[] do not imply stronger enforcement than OpenCode
+      // provides.
       return [
         fallbackAskRule(),
+        denyRule("zotpilot_*"),
         ...protectedReadRules(),
-        denyRule("edit"),
-        denyRule("glob"),
-        denyRule("grep"),
+        ...protectedEditRules(),
+        allowRule("glob"),
+        allowRule("grep"),
         denyRule("webfetch"),
         denyRule("websearch"),
         denyRule("question"),
         denyRule("external_directory"),
         ...CODING_MCP,
-        denyRule("shell"),
+        ...visualizerShellRules(),
         ...subagentRules(),
-        ...skillRules("rdc-visual-analysis"),
+        ...skillRules("aria-qt-ui"),
       ];
     case "planner":
       return [

@@ -37,7 +37,7 @@ export { ROLES };
 const AGENT_DESCRIPTIONS = {
     coder: "Coordinates planning, implementation, and review.",
     explorer: "explorer coding specialist for ARIA Review-Driven Coding.",
-    visualizer: "visualizer coding specialist for ARIA Review-Driven Coding.",
+    visualizer: "Qt UI/UX Engineer for ARIA Review-Driven Coding: UX/interaction and Qt visual design, approved-scope PySide6 implementation, and capture→inspect→refine→verify visual validation.",
     planner: "planner coding specialist for ARIA Review-Driven Coding.",
     architect: "architect coding specialist for ARIA Review-Driven Coding.",
     implementer: "implementer coding specialist for ARIA Review-Driven Coding.",

@@ -15,7 +15,7 @@
  *
  * Decision: the single registration is one `skills: string[]` entry pointing
  * at the installed package's `skills/` root. `ctx.skill.transform` is
- * deliberately unused: it would duplicate the 21 on-disk `SKILL.md` contents
+ * deliberately unused: it would duplicate the 22 on-disk `SKILL.md` contents
  * into runtime `Skill.Info` objects (plus `reload` handling), while config
  * discovery keeps the packaged files canonical — the same files-are-primary
  * precedent T003 set for agents (managed files preferred over runtime
@@ -35,7 +35,7 @@
  * applier (T008 owns migration with backup) and flagged by validation.
  */
 /**
- * Canonical inventory of the 21 packaged skills (9 `rdc-*`, 12 `aria-*`),
+ * Canonical inventory of the 22 packaged skills (9 `rdc-*`, 13 `aria-*`),
  * alphabetical — the same order `readdirSync` yields, so the on-disk
  * `skills/<name>/SKILL.md` tree is the sync check, not a second copy.
  */
@@ -56,7 +56,7 @@ export interface ApplySkillsResult {
  * True only for absolute paths whose normalized form ends with the packaged
  * install suffix `node_modules/aria/skills` (npx/npm cache, extracted
  * `node_modules/aria`). This is the only lexical shape that positively proves
- * ARIA ownership: the 21 namespaced `SKILL.md` files ship only under that
+ * ARIA ownership: the 22 namespaced `SKILL.md` files ship only under that
  * suffix, while user entries (`/user/skills`, `/custom/skills`, URLs,
  * relative paths) never do. Checkout roots (`<checkout>/skills`) do NOT
  * match and are treated as unrelated (preserved, never guessed) — the live

@@ -27,8 +27,19 @@ import { ARIA_SKILL_NAMES } from "../src/skills.js";
  */
 
 const tempDirs: string[] = [];
+let originalHome: string | undefined;
+let originalXdgConfigHome: string | undefined;
+
+beforeEach(() => {
+  originalHome = process.env.HOME;
+  originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+});
 
 afterEach(async () => {
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
@@ -56,8 +67,16 @@ async function baseOptions(executor?: Executor): Promise<DoctorOptions & { workt
     JSON.stringify({ roles: Object.fromEntries(ROLES.map((role) => [role, { model: "test/probe" }])) }),
   );
   // Global Context7 remote config so the shared base report is fully healthy.
+  // Isolated per call: fresh HOME with XDG unset so the XDG-first resolver
+  // falls back to HOME (same effective path production reads, no shared
+  // sandbox state). Compat callers overwrite XDG with their own fresh dir
+  // carrying identical Context7 content, so either effective path is healthy.
+  const home = await mkdtemp(resolve(tmpdir(), "aria-doctor-runtime-home-"));
+  tempDirs.push(home);
+  process.env.HOME = home;
+  delete process.env.XDG_CONFIG_HOME;
   const { mkdir } = await import("node:fs/promises");
-  const configDir = join(process.env.HOME as string, ".config", "opencode");
+  const configDir = join(home, ".config", "opencode");
   await mkdir(configDir, { recursive: true });
   await writeFile(
     join(configDir, "opencode.json"),
@@ -118,7 +137,7 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(runtimeFinding(report, "plugin aria")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "agents (11)")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "agents (11)")?.detail).toContain("11 of 11");
-    expect(runtimeFinding(report, "skills (21 live)")?.severity).toBe("PASS");
+    expect(runtimeFinding(report, "skills (22 live)")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "plan tool")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "plan tool")?.detail).toContain("exactly once");
     const coexistence = runtimeFinding(report, "coexistence");
@@ -163,7 +182,7 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(agents?.severity).toBe("FAIL");
     expect(agents?.detail).toContain("missing: scientist");
     expect(agents?.detail).toContain("bash");
-    const skills = runtimeFinding(report, "skills (21 live)");
+    const skills = runtimeFinding(report, "skills (22 live)");
     expect(skills?.severity).toBe("FAIL");
     expect(skills?.detail).toContain(`missing: ${ARIA_SKILL_NAMES[0]}`);
   });
@@ -171,7 +190,7 @@ describe("T008 doctor V2 runtime truth", () => {
   it("skips runtime truth outside a live session with documented gaps", async () => {
     const report = await runDoctor(await baseOptions());
 
-    for (const title of ["plugin aria", "agents (11)", "skills (21 live)", "plan tool", "coexistence"]) {
+    for (const title of ["plugin aria", "agents (11)", "skills (22 live)", "plan tool", "coexistence"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
     }
@@ -290,7 +309,7 @@ describe("T004 OpenCode runtime compatibility", () => {
   it("words standalone runtime SKIP as absent live runtime evidence, not version inequality", async () => {
     const report = await runDoctor(await baseOptions(await compatExecutor("opencode 2.0.23")));
 
-    for (const title of ["plugin aria", "agents (11)", "skills (21 live)", "plan tool"]) {
+    for (const title of ["plugin aria", "agents (11)", "skills (22 live)", "plan tool"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
       expect(finding?.detail).toContain("no live OpenCode runtime evidence observed");

@@ -28,10 +28,12 @@ import type { RoleName } from "../src/types.js";
 
 const tempDirs: string[] = [];
 let originalHome: string | undefined;
+let originalXdgConfigHome: string | undefined;
 let originalWikiDir: string | undefined;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
+  originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
   originalWikiDir = process.env.WIKI_DIR;
   delete process.env.WIKI_DIR;
 });
@@ -39,6 +41,8 @@ beforeEach(() => {
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   if (originalWikiDir === undefined) delete process.env.WIKI_DIR;
   else process.env.WIKI_DIR = originalWikiDir;
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -48,6 +52,10 @@ async function makeHome(): Promise<string> {
   const home = await mkdtemp(resolve(tmpdir(), "aria-doctor-home-"));
   tempDirs.push(home);
   process.env.HOME = home;
+  // Isolate from the shared vitest sandbox XDG root: with XDG unset the
+  // XDG-first resolver falls back to HOME, so HOME-based fixtures write the
+  // same effective path production reads (avoids shared XDG state).
+  delete process.env.XDG_CONFIG_HOME;
   return home;
 }
 
@@ -642,7 +650,7 @@ describe("package capability inventory (derived from canonical permission tables
   it("derives the exact 21 packaged skills from the canonical role permissions", () => {
     expect([...PACKAGE_SKILL_NAMES]).toEqual([
       "rdc-code-exploration",
-      "rdc-visual-analysis",
+      "aria-qt-ui",
       "rdc-implementation-planning",
       "rdc-testing-discipline",
       "rdc-plan-review",

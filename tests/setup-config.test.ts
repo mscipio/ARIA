@@ -22,7 +22,7 @@ import {
  * T008 setup/config file phases: V2-only keys, preservation, idempotence,
  * backup/rollback, and lifecycle wiring. Permission renames and depth
  * evaluation semantics are T004-owned (`tests/permissions.test.ts`); the
- * 21-skill applier contract is T007-owned (`tests/skills-config.test.ts`).
+ * 22-skill applier contract is T007-owned (`tests/skills-config.test.ts`).
  */
 
 const tempDirs: string[] = [];

@@ -111,8 +111,9 @@ describe("T003 agent installation", () => {
     expect(files.planner).toContain('model: "openai/gpt-6-luna#xhigh"');
     expect(files.researcher).toContain('model: "openai/gpt-6.1-sol#medium"');
     expect(files.scientist).toContain('model: "openai/gpt-6.1-sol#medium"');
-    // Preserved V1 description intent.
+    // Preserved V1 description intent (visualizer recast as Qt UI/UX Engineer, T003).
     expect(files.coder).toContain("Coordinates planning, implementation, and review.");
+    expect(files.visualizer).toContain("Qt UI/UX Engineer");
     expect(files.researcher).toContain("external literature and evidence research");
     expect(files.scientist).toContain("Scientific authority for question specification");
     expect(files.writer).toContain("Primary scientific, academic, and professional writing agent.");

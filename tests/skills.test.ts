@@ -16,9 +16,9 @@ describe("package-owned ARIA skills", () => {
       .map((entry) => entry.name)
       .sort();
 
-    expect(names).toHaveLength(21);
+    expect(names).toHaveLength(22);
     expect(names.filter((name) => name.startsWith("rdc-"))).toHaveLength(9);
-    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(12);
+    expect(names.filter((name) => name.startsWith("aria-"))).toHaveLength(13);
     for (const name of names) {
       expect(name).toMatch(/^(rdc|aria)-/);
       expect(skill(name)).toContain(`name: ${name}`);

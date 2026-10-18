@@ -190,7 +190,7 @@ describe("T007 doctor severity categories", () => {
   it("SKIPs live-runtime lists outside a live session as unobservable, never failed", async () => {
     const { report } = await runSemDoctor("opencode 2.0.23");
 
-    for (const title of ["plugin aria", "agents (11)", "skills (21 live)", "plan tool", "coexistence"]) {
+    for (const title of ["plugin aria", "agents (11)", "skills (22 live)", "plan tool", "coexistence"]) {
       const entry = finding(report, "runtime", title);
       expect(entry?.severity).toBe("SKIP");
     }

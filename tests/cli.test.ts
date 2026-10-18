@@ -77,12 +77,74 @@ async function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ co
 }
 
 const configureFixtureRoots: string[] = [];
+const probeFixtureRoots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(configureFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   await Promise.all(depsFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
   await Promise.all(setupFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(probeFixtureRoots.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
+
+/**
+ * Deterministic `opencode` probe fixture for the four live-probe CLI tests
+ * (doctor ×2, upgrade --check, bare upgrade). Under the T019 sandbox the
+ * real `opencode mcp/plugin/debug/models` commands hang: they spawn a
+ * managed `serve --service` that collides on the live service port
+ * (127.0.0.1:49374 already in use) and retry until the test timeout
+ * (see T016 instrumentation: isolated `opencode mcp list` exits 124, service
+ * log shows port-in-use, while `--version`/engram/codegraph/zotpilot/git stay
+ * fast). The fake keeps CLI behavior faithful (real doctor/upgrade code,
+ * real exit-code contract, real formatting) while substituting only the
+ * hanging external `opencode` service calls with instant deterministic
+ * outputs; all assertions stay intact and no timeout is raised.
+ */
+const FAKE_OPENCODE_SOURCE = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "opencode 2.0.23"
+  exit 0
+fi
+if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then
+  echo "opencode v1.2.3"
+  echo "mcp:"
+  echo "  engram     connected"
+  echo "  context7   connected"
+  echo "  codegraph  connected"
+  exit 0
+fi
+if [ "$1" = "debug" ] && [ "$2" = "config" ]; then
+  echo "{}"
+  exit 0
+fi
+if [ "$1" = "plugin" ] && [ "$2" = "list" ]; then
+  echo "ID  VERSION  SOURCE"
+  echo "aria  3a4dacb  github:mscipio/ARIA#v1.1.1"
+  exit 0
+fi
+if [ "$1" = "models" ]; then
+  echo "opencode-go/muse-spark-1.3-contributor"
+  echo "openai/gpt-6-luna"
+  echo "openai/gpt-6.1-sol"
+  exit 0
+fi
+echo "unexpected fake opencode invocation: $@" >&2
+exit 1
+`;
+
+async function makeProbeFixture(): Promise<{ fakeBinDir: string }> {
+  const root = await mkdtemp(resolve(tmpdir(), "aria-probe-"));
+  probeFixtureRoots.push(root);
+  const fakeBinDir = resolve(root, "fakebin");
+  await mkdir(fakeBinDir, { recursive: true });
+  const fakeOpencode = resolve(fakeBinDir, "opencode");
+  await writeFile(fakeOpencode, FAKE_OPENCODE_SOURCE, "utf8");
+  await chmod(fakeOpencode, 0o755);
+  return { fakeBinDir };
+}
+
+function probeEnv(fakeBinDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return { ...extra, PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` };
+}
 
 interface ConfigureFixture {
   root: string;
@@ -368,7 +430,8 @@ describe("bin/aria.mjs doctor dispatch", () => {
   });
 
   it("renders plain human output with literal severity labels and separate ZotPilot CLI/MCP findings, with the exit code exactly matching the FAIL contract", async () => {
-    const result = await runCli(["doctor"]);
+    const probe = await makeProbeFixture();
+    const result = await runCli(["doctor"], probeEnv(probe.fakeBinDir));
 
     // Exit code is 0 iff no finding is FAIL (environment-dependent probe
     // results, so assert the contract relation rather than a fixed code).
@@ -404,7 +467,8 @@ describe("bin/aria.mjs doctor dispatch", () => {
   }, 60000);
 
   it("emits equally plain output under NO_COLOR", async () => {
-    const result = await runCli(["doctor"], { NO_COLOR: "1" });
+    const probe = await makeProbeFixture();
+    const result = await runCli(["doctor"], probeEnv(probe.fakeBinDir, { NO_COLOR: "1" }));
 
     expect(result.stdout.startsWith("ARIA doctor\n")).toBe(true);
     // eslint-disable-next-line no-control-regex
@@ -601,7 +665,8 @@ describe("bin/aria.mjs upgrade dispatch", () => {
   });
 
   it("reports read-only inventory via --check with current AND available releases plus the component table", async () => {
-    const result = await runCli(["upgrade", "--check"]);
+    const probe = await makeProbeFixture();
+    const result = await runCli(["upgrade", "--check"], probeEnv(probe.fakeBinDir));
 
     // Read-only inventory always reports (exit 0) even when the available
     // target is unknown (offline registry, missing CLIs, ambiguous config).
@@ -616,7 +681,8 @@ describe("bin/aria.mjs upgrade dispatch", () => {
   }, 60000);
 
   it("requires explicit approval: bare upgrade mutates nothing and exits nonzero", async () => {
-    const result = await runCli(["upgrade"]);
+    const probe = await makeProbeFixture();
+    const result = await runCli(["upgrade"], probeEnv(probe.fakeBinDir));
 
     expect(result.code).toBe(1);
     expect(result.stdout).toContain("ARIA upgrade check");

@@ -16,7 +16,7 @@ import {
  *
  * On-disk content contracts (frontmatter `name`/`owner`, method bounds) are
  * already owned by `tests/skills.test.ts` and `scripts/smoke-package.mjs`;
- * this suite covers only the T007 registration contract: the 21-skill
+ * this suite covers only the T007 registration contract: the 22-skill
  * inventory sync, the single version-locked entry, idempotence (no dup),
  * the exact 2.0.23 dependency pin, no legacy keys, and no
  * `ctx.skill.transform` registration from the V2 plugin setup.
@@ -25,15 +25,15 @@ import {
 const skillsRoot = resolve(process.cwd(), "skills");
 
 describe("T007 packaged skills single source", () => {
-  it("lists exactly the 21 packaged skills present as skills/*/SKILL.md", () => {
+  it("lists exactly the 22 packaged skills present as skills/*/SKILL.md", () => {
     const onDisk = readdirSync(skillsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
 
-    expect(onDisk).toHaveLength(21);
+    expect(onDisk).toHaveLength(22);
     expect(onDisk.filter((name) => name.startsWith("rdc-"))).toHaveLength(9);
-    expect(onDisk.filter((name) => name.startsWith("aria-"))).toHaveLength(12);
+    expect(onDisk.filter((name) => name.startsWith("aria-"))).toHaveLength(13);
     expect([...ARIA_SKILL_NAMES].sort()).toEqual(onDisk);
     for (const name of ARIA_SKILL_NAMES) {
       const text = readFileSync(join(skillsRoot, name, "SKILL.md"), "utf8");

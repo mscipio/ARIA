@@ -36,10 +36,12 @@ vi.mock("node:child_process", () => ({
 
 const tempDirs: string[] = [];
 let originalHome: string | undefined;
+let originalXdgConfigHome: string | undefined;
 let originalNoColor: string | undefined;
 
 beforeEach(() => {
   originalHome = process.env.HOME;
+  originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
   originalNoColor = process.env.NO_COLOR;
   delete process.env.NO_COLOR; // ANSI styling enabled unless a test sets it
   vi.clearAllMocks();
@@ -54,6 +56,8 @@ beforeEach(() => {
 afterEach(async () => {
   if (originalHome === undefined) delete process.env.HOME;
   else process.env.HOME = originalHome;
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   if (originalNoColor === undefined) delete process.env.NO_COLOR;
   else process.env.NO_COLOR = originalNoColor;
   await Promise.all(tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
@@ -100,6 +104,10 @@ async function makeHome(): Promise<string> {
   const home = await mkdtemp(resolve(tmpdir(), "aria-model-home-"));
   tempDirs.push(home);
   process.env.HOME = home;
+  // Isolate from the shared vitest sandbox XDG root: with XDG unset the
+  // XDG-first resolver falls back to HOME, so the HOME-based helpers below
+  // write the same effective path production reads (avoids shared XDG state).
+  delete process.env.XDG_CONFIG_HOME;
   return home;
 }
 

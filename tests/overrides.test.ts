@@ -365,13 +365,22 @@ describe("ARIA overrides", () => {
 
   describe("global config discovery", () => {
     let originalHome: string | undefined;
+    let originalXdgConfigHome: string | undefined;
 
     beforeEach(() => {
       originalHome = process.env.HOME;
+      originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+      // Isolate from the shared vitest sandbox XDG root: with XDG unset the
+      // XDG-first resolver falls back to HOME, so HOME-based fixtures write
+      // the same effective path production reads.
+      delete process.env.XDG_CONFIG_HOME;
     });
 
     afterEach(() => {
-      process.env.HOME = originalHome;
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
     });
 
     it("survives missing global config (non-fatal)", async () => {
@@ -486,6 +495,22 @@ describe("ARIA overrides", () => {
   });
 
   describe("global diagnostics", () => {
+    let originalHome: string | undefined;
+    let originalXdgConfigHome: string | undefined;
+
+    beforeEach(() => {
+      originalHome = process.env.HOME;
+      originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+      delete process.env.XDG_CONFIG_HOME;
+    });
+
+    afterEach(() => {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+    });
+
     it("includes global path in error messages", () => {
       const globalPath = "/home/user/.config/opencode/aria.json";
       expect(() => parseOverrides({ models: {} }, globalPath))

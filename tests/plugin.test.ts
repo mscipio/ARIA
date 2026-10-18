@@ -314,7 +314,7 @@ describe("ariaPlugin", () => {
     });
     expect(permission("visualizer")?.skill).toEqual({
       "*": "deny",
-      "rdc-visual-analysis": "allow",
+      "aria-qt-ui": "allow",
     });
     expect(permission("planner")?.skill).toEqual({
       "*": "deny",

@@ -560,7 +560,7 @@ function agentsRuntimeFinding(agents: DoctorV2AgentEntry[] | undefined): DoctorF
 
 function skillsRuntimeFinding(skills: DoctorV2SkillEntry[] | undefined): DoctorFinding {
   if (skills === undefined) {
-    return { severity: "SKIP", area: "runtime", title: "skills (21 live)", detail: RUNTIME_LIST_GAP };
+    return { severity: "SKIP", area: "runtime", title: "skills (22 live)", detail: RUNTIME_LIST_GAP };
   }
   const names = skills
     .map((skill) => (typeof skill.name === "string" && skill.name.length > 0 ? skill.name : skill.id))
@@ -571,13 +571,13 @@ function skillsRuntimeFinding(skills: DoctorV2SkillEntry[] | undefined): DoctorF
   const duplicated = ARIA_SKILL_NAMES.filter((name) => names.filter((seen) => seen === name).length > 1);
   if (duplicated.length > 0) problems.push(`listed more than once: ${duplicated.join(", ")}`);
   if (problems.length > 0) {
-    return { severity: "FAIL", area: "runtime", title: "skills (21 live)", detail: problems.join("; ") };
+    return { severity: "FAIL", area: "runtime", title: "skills (22 live)", detail: problems.join("; ") };
   }
   return {
     severity: "PASS",
     area: "runtime",
-    title: "skills (21 live)",
-    detail: "21 of 21 packaged skills listed exactly once",
+    title: "skills (22 live)",
+    detail: "22 of 22 packaged skills listed exactly once",
   };
 }
 

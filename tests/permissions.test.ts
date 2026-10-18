@@ -8,6 +8,7 @@ import {
   getArchivistScopedPermissions,
   getPermissionsForRole,
 } from "../src/permissions";
+import { authorizePlan } from "../src/plan-tool";
 import { getPackageRoot } from "../src/defaults";
 import type { RoleName } from "../src/types";
 import { Agent } from "@opencode/schema";
@@ -90,6 +91,86 @@ describe("T004 permission/model/delegation parity", () => {
     expect(evaluatePermission(getPermissionsForRole("reviewer"), "shell", "rm foo")).toBe("allow");
     expect(evaluatePermission(getPermissionsForRole("explorer"), "shell", "git status")).toBe("deny");
     expect(evaluatePermission(getPermissionsForRole("coder"), "shell", "git status")).toBe("deny");
+  });
+
+  it("evaluates visualizer T004 edit-capable-but-RDC-gated posture (ask shell, grant-only skill)", () => {
+    // T004 + binding clarification: a python/test-runner allowlist is NOT
+    // a strong boundary (python can exec arbitrary code), so shell is
+    // prompt-gated (`ask`, never `allow`) with the implementer deny-list
+    // after. Coder-mediated approval is a prompt-level RDC workflow
+    // convention, NOT host-enforced plan-state containment: a directly
+    // invoked edit-capable visualizer subagent may not be plan-state
+    // constrained. These assertions verify evaluated effects, not just
+    // rule presence.
+    const rules = getPermissionsForRole("visualizer");
+    // Edit allow with the shared `.env` ask gates preserved.
+    expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("allow");
+    expect(evaluatePermission(rules, "edit", ".env")).toBe("ask");
+    expect(evaluatePermission(rules, "edit", "a.env.bak")).toBe("ask");
+    expect(evaluatePermission(rules, "edit", ".env.example")).toBe("allow");
+    // Scoped-implementation navigation.
+    expect(evaluatePermission(rules, "glob", "src/**")).toBe("allow");
+    expect(evaluatePermission(rules, "grep", "pattern")).toBe("allow");
+    // Protected reads unchanged.
+    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
+    expect(evaluatePermission(rules, "read", ".env")).toBe("ask");
+    expect(evaluatePermission(rules, "read", ".env.example")).toBe("allow");
+    // Shell prompts (Qt launch/test/screenshot go through the user prompt),
+    // never allows; destructive/publishing stays denied via the reused
+    // implementer deny-list pattern (deny after ask prevails).
+    expect(evaluatePermission(rules, "shell", "git status")).toBe("ask");
+    expect(evaluatePermission(rules, "shell", "python -m pytest tests/")).toBe("ask");
+    expect(evaluatePermission(rules, "shell", "xvfb-run python screenshot.py")).toBe("ask");
+    expect(evaluatePermission(rules, "shell", "rm foo")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "rm")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "npm publish foo")).toBe("deny");
+    // Targeted visualizer-only denies after the shell ask: network egress,
+    // package-manager install/add, and git publish/mutating all evaluate
+    // deny, while the Qt/test/screenshot prompts above stay ask.
+    expect(evaluatePermission(rules, "shell", "curl https://example.com")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "wget https://example.com/pkg.tar.gz")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "npm install some-package")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "pip install some-package")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "pnpm add some-package")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "git push origin main")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "git reset --hard")).toBe("deny");
+    // The visualizer list is separate from the implementer's: the
+    // implementer's approved posture is untouched (representative egress
+    // still allows there).
+    expect(evaluatePermission(getPermissionsForRole("implementer"), "shell", "curl https://example.com")).toBe(
+      "allow",
+    );
+    expect(rules.some((rule) => rule.action === "shell" && rule.effect === "allow")).toBe(false);
+    expect(rules.some((rule) => rule.action === "shell" && rule.resource === "python *")).toBe(false);
+    // Skill grant-only `aria-qt-ui` per T003 (replaces `rdc-visual-analysis`).
+    expect(evaluatePermission(rules, "skill", "aria-qt-ui")).toBe("allow");
+    expect(evaluatePermission(rules, "skill", "rdc-visual-analysis")).toBe("deny");
+    expect(evaluatePermission(rules, "skill", "unknown-skill")).toBe("deny");
+    // Coding MCP unchanged; everything else stays denied.
+    expect(evaluatePermission(rules, "engram_*", "*")).toBe("allow");
+    expect(evaluatePermission(rules, "context7_*", "*")).toBe("allow");
+    expect(evaluatePermission(rules, "codegraph_*", "*")).toBe("allow");
+    // Unrelated research MCP tools stay denied via the explicit `zotpilot_*`
+    // deny after the fallback: the whole family denies (mutation and read
+    // alike), while the intended coding-triple allows above still prevail.
+    expect(evaluatePermission(rules, "zotpilot_manage_tags", "*")).toBe("deny");
+    expect(evaluatePermission(rules, "zotpilot_search_papers", "*")).toBe("deny");
+    // `mcp_plan` matches no registered tool (`PLAN_TOOL_NAME` is "plan";
+    // verified zero references), so no rule is emitted for it: no action
+    // keys outside the supported set.
+    expect(rules.some((rule) => rule.action === "mcp_plan")).toBe(false);
+    // Plan-tool access is denied at execution by `authorizePlan`
+    // (`PLAN_ACTIONS_BY_ROLE` excludes visualizer), not by a Rule[]: `plan`
+    // stays a legacy-banned V2 action, so unmatched `plan` falls back to
+    // `ask` with `authorizePlan` as the denial backstop.
+    expect(evaluatePermission(rules, "plan", "*")).toBe("ask");
+    expect(authorizePlan({ sessionID: "test", agent: "visualizer" }, "get")).not.toBeNull();
+    expect(authorizePlan({ sessionID: "test", agent: "visualizer" }, "replace")).not.toBeNull();
+    expect(evaluatePermission(rules, "webfetch", "https://example.com")).toBe("deny");
+    expect(evaluatePermission(rules, "websearch", "query")).toBe("deny");
+    expect(evaluatePermission(rules, "question", "*")).toBe("deny");
+    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("deny");
+    expect(evaluatePermission(rules, "subagent", "explorer")).toBe("deny");
   });
 
   it("evaluates coder delegation: 9 subagent allows, deny for others, ask fallback", () => {

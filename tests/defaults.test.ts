@@ -144,6 +144,33 @@ describe("ARIA defaults", () => {
     expect(prompt).not.toContain("delegate directly to `writer`");
   });
 
+  it("coder integrates the visualizer for UI/UX with bounded review and prompt-level approval limits", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
+    // Pre-planning design analysis: visualizer outputs, planner incorporates.
+    expect(prompt).toContain("MAY delegate design analysis to the visualizer");
+    expect(prompt).toContain("UX problems/opportunities");
+    expect(prompt).toContain("proposed layout/component structure");
+    expect(prompt).toContain("implementation-neutral requirements");
+    expect(prompt).toContain("testable visual/behavioral acceptance criteria");
+    expect(prompt).toContain("planner incorporates those findings into the persisted plan");
+    // Planner → architect QA → explicit human approval unchanged.
+    expect(prompt).toContain("Planner → architect QA → explicit human approval is unchanged");
+    expect(prompt).toContain("STOP and wait for the user to approve");
+    // Post-approval routing: approved UI tasks to visualizer, rest to implementer.
+    expect(prompt).toContain("delegates implementation to the visualizer instead of the generic implementer");
+    expect(prompt).toContain("Backend/compute/infra and unrelated tasks stay with the implementer");
+    expect(prompt).toContain("file ownership does not overlap concurrently");
+    // Review: reviewer final authority, bounded blocking, preserved procedures.
+    expect(prompt).toContain("reviewer remains the final authority");
+    expect(prompt).toContain("approved visual/behavioral criteria plus code correctness/regression");
+    expect(prompt).toContain("Bound BLOCKING findings to meaningful defects, missing required evidence");
+    expect(prompt).toContain("Remediation limits, revision handling, and scope-change procedures are unchanged");
+    // Approval limitation is prompt-level convention, not host enforcement.
+    expect(prompt).toContain("coder-mediated approval is a prompt-level workflow convention, NOT host-enforced containment");
+    expect(prompt).toContain("directly-invoked edit-capable visualizer subagent may not be plan-state constrained");
+    expect(prompt).not.toMatch(/policy engine/i);
+  });
+
   it("explorer prompt keeps role boundaries and loads exploration skill", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.explorer.promptText;
     expect(prompt).toContain("load `rdc-code-exploration`");
@@ -151,11 +178,16 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Relevant Locations");
   });
 
-  it("visualizer prompt keeps role boundaries and loads visual skill", () => {
+  it("visualizer prompt is the Qt UI/UX Engineer and loads the Qt UI skill", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.visualizer.promptText;
-    expect(prompt).toContain("load `rdc-visual-analysis`");
-    expect(prompt).toContain("Separate direct observations from interpretations");
-    expect(prompt).toContain("Actionable Requirements");
+    expect(prompt).toContain("Qt UI/UX Engineer");
+    expect(prompt).toContain("load `aria-qt-ui`");
+    expect(prompt).not.toContain("rdc-visual-analysis");
+    expect(prompt).toContain("implementation-neutral requirements");
+    expect(prompt).toContain("testable behavioral and visual acceptance criteria");
+    expect(prompt).toContain("capture→inspect→refine→verify");
+    expect(prompt).toContain("never claim an inspection that did not happen");
+    expect(prompt).toContain("Do not capture screenshots automatically");
   });
 
   it("planner prompt keeps Plan authority boundaries and loads planning skills", () => {
