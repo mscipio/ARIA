@@ -132,6 +132,9 @@ const defaultExecutor = async (command, args, options) => {
         // Finite buffer only when the caller sets one; otherwise Node's default
         // limit applies (all unrelated invocations omit maxBuffer).
         ...(options?.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
+        // Bounded timeout override only when the caller sets one; otherwise the
+        // 120s default above applies (all unrelated invocations omit timeoutMs).
+        ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
     };
     if (resolved.useComSpec) {
         const comSpecArgs = buildComSpecArgs(resolved.command, args);

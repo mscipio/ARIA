@@ -690,3 +690,68 @@ describe("R003 bounded installed-CLI update (bare-command version identity)", ()
     expect(world.calls.some((call) => call.args[1] === "remove" || call.args[1] === "add")).toBe(false);
   });
 });
+
+describe("T010 bounded install timeout (600s on the exact-target install only)", () => {
+  it("passes timeoutMs 600000 on `npm install -g <spec>` while list/remove/add, version probe, and handoff-spawn carry none", async () => {
+    const world = makeFakePluginWorld(initial106());
+    world.spawnStdout = `ARIA upgrade report\nUpgrade to ${TARGET_107.spec} completed (${TARGET_107.tag})`;
+    // Wrapper records every executor call including the `aria --version`
+    // convergence probe, which the world serves without recording.
+    const seen: RecordedCall[] = [];
+    const executor: Executor = async (command, args, options) => {
+      seen.push({ command, args, options });
+      return world.executor(command, args, options);
+    };
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
+      executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay,
+    });
+    expect(outcome.ok).toBe(true);
+
+    const installs = seen.filter((call) => call.command === "npm" && call.args[0] === "install");
+    expect(installs).toHaveLength(1);
+    expect(installs[0]?.args).toEqual(["install", "-g", TARGET_107.spec]);
+    expect(installs[0]?.options?.timeoutMs).toBe(600_000);
+    // Per-call git env still travels alongside the raised bound.
+    expect(installs[0]?.options?.env?.["NPM_CONFIG_ALLOW_GIT"]).toBe("all");
+
+    for (const call of seen) {
+      if (call.command === "npm" && call.args[0] === "install") continue;
+      expect(call.options?.timeoutMs, `${call.command} ${call.args.join(" ")}`).toBeUndefined();
+    }
+    // The observed others include the read-only probes plus the default
+    // npm-exec handoff transport (all keep the 120s default).
+    expect(seen.some((call) => call.command === "aria" && call.args[0] === "--version")).toBe(true);
+    expect(seen.some((call) => call.command === "npm" && call.args[0] === "exec")).toBe(true);
+  });
+
+  it("reports an install timeout truthfully with zero registration mutation (mirrors the stale-CLI fail path)", async () => {
+    const world = makeFakePluginWorld(initial106());
+    const before = world.rows.map((row) => row[2]);
+    const seen: RecordedCall[] = [];
+    const executor: Executor = async (command, args, options) => {
+      if (command === "npm" && args[0] === "install") {
+        seen.push({ command, args, options });
+        throw new Error(`npm install -g failed: SIGTERM after 600000ms (timeout)`);
+      }
+      return world.executor(command, args, options);
+    };
+    const outcome = await selfUpgradeAria(TARGET_107, handoffFor(TARGET_107), {
+      executor, readPersistedPlugins: persistedReaderFor(world), delay: noDelay,
+      handoffSpawn: capturingSpawn([]),
+    });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("installed CLI update did not complete");
+    expect(outcome.detail).toContain(`npm install -g ${TARGET_107.spec}`);
+    expect(outcome.detail).toContain("SIGTERM");
+    expect(outcome.detail).toContain("No changes were made");
+    expect(outcome.registration).toContain(TARGET_106.spec);
+    // Zero registration mutation: rows and persisted mirror untouched, no
+    // remove/add attempted, no handoff taken.
+    expect(world.rows.map((row) => row[2])).toEqual(before);
+    expect(world.persistedSpecs).toEqual(before);
+    expect(world.calls.some((call) => call.args[1] === "remove" || call.args[1] === "add")).toBe(false);
+    // The raised bound was applied to the attempted install.
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.options?.timeoutMs).toBe(600_000);
+  });
+});

@@ -1,4 +1,4 @@
-# ARIA v1.3.0 — Native OpenCode 2
+# ARIA v1.3.1 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -158,10 +158,10 @@ Canonical source: `src/scratch.ts` via `src/paths.ts` guards. All ARIA-controlle
 
 ## Install
 
-Canonical install is the released global package `github:mscipio/ARIA#v1.3.0`:
+Canonical install is the released global package `github:mscipio/ARIA#v1.3.1`:
 
 ```sh
-NPM_CONFIG_ALLOW_GIT=all npm install -g 'github:mscipio/ARIA#v1.3.0'
+NPM_CONFIG_ALLOW_GIT=all npm install -g 'github:mscipio/ARIA#v1.3.1'
 aria setup
 aria doctor
 ```

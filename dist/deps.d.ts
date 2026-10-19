@@ -13,6 +13,13 @@ export type ExecutorOptions = {
      * to exceed it (Engram releases list); all other calls omit it.
      */
     maxBuffer?: number;
+    /**
+     * Per-call spawn timeout (milliseconds) for the spawned process.
+     * Absent means the default 120s limit. Set only where an invocation is
+     * known to exceed it (exact-target `npm install -g`); all other calls
+     * omit it.
+     */
+    timeoutMs?: number;
 };
 export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{
     stdout: string;

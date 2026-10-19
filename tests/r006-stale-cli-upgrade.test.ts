@@ -389,4 +389,46 @@ describe("R006 stale installed CLI takes the bounded CLI-update path", () => {
     const bare = await world.executor("aria", ["--version"]);
     expect(bare.stdout.trim()).toBe(STALE_CLI);
   });
+
+  it("T010 bounded timeout: the single CLI-update install carries 600000ms while R006 verdicts are unchanged", async () => {
+    const { configDir } = await makeIsolatedConfigDir();
+    const world = makeWorld();
+    let handoffs = 0;
+
+    const result = await runUpgrade(world.executor, {
+      configDir,
+      cliVersion: STALE_CLI,
+      availableOverride: TARGET_110,
+      approval: { yes: true },
+      selfUpgradeFn: (target, handoff) =>
+        selfUpgradeAria(target, handoff, {
+          executor: world.executor,
+          readPersistedPlugins: persistedAtTarget,
+          delay: noDelay,
+          handoffSpawn: async () => {
+            handoffs++;
+            return {
+              ok: true,
+              detail: "stub handoff taken",
+              stdout: `ARIA upgrade report\nUpgrade to ${TARGET_110.spec} completed (${TARGET_110.tag})`,
+            };
+          },
+        }),
+    });
+
+    // R006 verdict unchanged: stale CLI still takes the bounded update + handoff path.
+    expect(result.stage).toBe("handoff-taken");
+    expect(result.ok).toBe(true);
+    expect(result.detail).not.toContain("no changes made");
+    expect(handoffs).toBe(1);
+    // The single exact-target install carries the raised bound; every other
+    // recorded call keeps the 120s default (no timeoutMs).
+    const installs = world.calls.filter((call) => call.command === "npm" && call.args[0] === "install");
+    expect(installs).toHaveLength(1);
+    expect(installs[0]?.options?.timeoutMs).toBe(600_000);
+    for (const call of world.calls) {
+      if (call.command === "npm" && call.args[0] === "install") continue;
+      expect(call.options?.timeoutMs, callText(call)).toBeUndefined();
+    }
+  });
 });

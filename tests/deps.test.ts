@@ -2334,6 +2334,25 @@ describe("defaultExecutor ComSpec branch", () => {
     const [file] = mockExecFile.mock.calls[0]!;
     expect(file).toBe("cmd.exe");
   });
+
+  it("keeps the 120s default timeout when timeoutMs is absent", async () => {
+    await writeTestCmd();
+    await defaultExecutor("test-cmd", ["arg"], {});
+
+    const [, , opts] = mockExecFile.mock.calls[0]!;
+    expect(opts).toHaveProperty("timeout", 120_000);
+  });
+
+  it("honors a per-call timeoutMs override on that call alone (others keep the 120s default)", async () => {
+    await writeTestCmd();
+    await defaultExecutor("test-cmd", ["first"]);
+    await defaultExecutor("test-cmd", ["second"], { timeoutMs: 600_000 });
+    await defaultExecutor("test-cmd", ["third"], {});
+
+    expect(mockExecFile).toHaveBeenCalledTimes(3);
+    const timeouts = mockExecFile.mock.calls.map((call) => (call[2] as Record<string, unknown>)["timeout"]);
+    expect(timeouts).toEqual([120_000, 600_000, 120_000]);
+  });
 });
 
 // ---------------------------------------------------------------------------

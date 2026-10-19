@@ -25,6 +25,13 @@ export type ExecutorOptions = {
    * to exceed it (Engram releases list); all other calls omit it.
    */
   maxBuffer?: number;
+  /**
+   * Per-call spawn timeout (milliseconds) for the spawned process.
+   * Absent means the default 120s limit. Set only where an invocation is
+   * known to exceed it (exact-target `npm install -g`); all other calls
+   * omit it.
+   */
+  timeoutMs?: number;
 };
 export type Executor = (command: string, args: string[], options?: ExecutorOptions) => Promise<{ stdout: string; stderr: string }>;
 
@@ -187,6 +194,9 @@ const defaultExecutor: Executor = async (command, args, options) => {
     // Finite buffer only when the caller sets one; otherwise Node's default
     // limit applies (all unrelated invocations omit maxBuffer).
     ...(options?.maxBuffer !== undefined ? { maxBuffer: options.maxBuffer } : {}),
+    // Bounded timeout override only when the caller sets one; otherwise the
+    // 120s default above applies (all unrelated invocations omit timeoutMs).
+    ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
   };
 
   if (resolved.useComSpec) {
