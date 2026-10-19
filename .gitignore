@@ -15,3 +15,5 @@ desktop.ini
 # Python
 __pycache__/
 *.py[cod]
+
+/scratch/

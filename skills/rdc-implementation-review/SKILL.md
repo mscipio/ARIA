@@ -49,3 +49,5 @@ Establish or reference the pre-implementation worktree state before attributing 
 Do not block on style, preference, unrelated pre-existing debt, theoretical edge cases, or redundant test coverage. Load `rdc-testing-discipline` when judging verification adequacy.
 
 Tracked generated artifacts produced deterministically by an approved build/code-generation step are part of the change; inspect them for unrelated output but do not block merely because they changed.
+
+Where the approved plan requires output, verify ARIA-controlled files sit under `<worktree>/scratch/` via the canonical helper (`src/scratch.ts`); do not block on placement the plan never required.

@@ -38,6 +38,10 @@ export type { AgentRule };
  * last-match-wins with V2 `shell`/`subagent` names and no legacy
  * `bash`/`task`/`plan`/`todowrite` actions. Every security-relevant field
  * stays explicit so nothing inherits builtins by accident.
+ *
+ * T004 workspace policy: generated bodies inherit the workspace execution
+ * policy from the resolved prompts (canonical `src/scratch.ts` via
+ * `src/paths.ts`); this module adds no path checks and duplicates no guards.
  */
 
 /** V1 descriptions preserved verbatim as V2 `description` frontmatter. */

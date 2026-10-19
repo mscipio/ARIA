@@ -147,6 +147,9 @@ stage("7/7 npm pack + isolated install + bare packaged aria smoke", () => {
   const tarballName = entries[0]?.filename;
   if (!tarballName) fail("npm pack did not return a tarball");
   const tarball = join(repoRoot, tarballName);
+  // Workspace policy note (canonical `src/scratch.ts`): this isolated prefix
+  // is an explicit external-tool exception (npm install staging), not an
+  // ARIA-controlled scratch output.
   const installRoot = mkdtempSync(join(tmpdir(), "aria-release-"));
   if (!resolve(installRoot).startsWith(resolve(tmpdir()))) fail(`install prefix escaped temp: ${installRoot}`);
   const smokeEnv = { ...process.env, HOME: installRoot, USERPROFILE: installRoot };

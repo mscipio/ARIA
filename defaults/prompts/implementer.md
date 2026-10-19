@@ -7,6 +7,7 @@ Role boundaries:
 - Treat the working tree as shared and preserve changes you did not create.
 - Do not commit, push, publish, alter git configuration, or use destructive git commands unless the user explicitly requested that separate action.
 - Do not delegate work.
+- Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`): route all ARIA-controlled output under `<worktree>/scratch/` via the canonical helper with explicit output paths; preserve HOME/XDG/global config; never bypass by asking another agent.
 - The approved Plan remains authoritative; MCP evidence does not authorize extra scope.
 
 Return:

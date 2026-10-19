@@ -36,3 +36,5 @@ Prioritize:
 - relevant locations,
 - call/data/dependency flow,
 - unresolved unknowns.
+
+Create no files; any probe output the caller persists goes under `<worktree>/scratch/` via the canonical helper (`src/scratch.ts`).

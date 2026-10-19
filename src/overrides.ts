@@ -38,7 +38,8 @@ Use any available MCP whenever it materially improves the evidence; these are pr
 - CodeGraph provides codebase intelligence for structure, symbols and references, dependencies, impact, and locating paths.
 - Context7 provides current, version-specific external library, framework, and API documentation plus supported interfaces; use it instead of guessing external behavior.
 - Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. Use it only within the selected role's explicit permissions and boundaries.
-- Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .aria/rdc/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .aria/rdc/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.`;
+- Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .aria/rdc/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .aria/rdc/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.
+- Workspace execution policy (canonical: \`src/scratch.ts\` via \`src/paths.ts\` guards): ARIA-controlled output lives under \`<worktree>/scratch/\` (per-task subdirs, single \`/scratch/\` gitignore, never stage); reuse the canonical helper, never duplicate path checks; HOME/XDG/global config preserved; approvals required, not an OS sandbox.`;
 
 function withMcpGuidance(promptText: string): string {
   const normalized = promptText.trimEnd();

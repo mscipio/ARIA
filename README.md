@@ -1,4 +1,4 @@
-# ARIA v1.2.0 — Native OpenCode 2
+# ARIA v1.3.0 — Native OpenCode 2
 
 **ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
 
@@ -49,7 +49,7 @@ The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace direc
 | writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-6-luna` | `xhigh` |
 | scientist (`all`) | Scientific authority: question specification, methodology design, and result interpretation | `openai/gpt-6.1-sol` | `medium` |
 
-Only implementer can use OpenCode's edit tool for application code. Implementer shell commands run without permission prompts, except destructive removal and package publishing commands, which remain blocked. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
+Only implementer and visualizer can use OpenCode's edit tool for application code, with identical effective edit/shell decisions (T003 parity): both allow ordinary development shell commands and gate protected `.env` files, except destructive removal and package publishing commands, which remain blocked. Workspace/scratch instructions and RDC approvals remain required but are not OS-level sandbox enforcement: the Unix account can still write outside those locations, and confinement is enforced only where ARIA controls paths/environment. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
 
 The six RDC coding specialists — explorer, visualizer, planner, architect, implementer, reviewer — run through OpenCode's native `task` tool. The five durable roles — `coder`, `researcher`, `archivist`, `writer`, and `scientist` — run with OpenCode `mode: all` and are available both directly and through `task`. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose). Mode availability is not authority: every role's tools are deny-by-default except what is explicitly granted, and `scientist` in particular has no unrestricted code, shell, MCP, evidence, or persistence authority.
 
@@ -152,12 +152,16 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 - **Coder** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
 - **Reviewer** independently reads the plan via `get` and evaluates each approved requirement against the actual implementation as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
 
+## Workspace execution policy
+
+Canonical source: `src/scratch.ts` via `src/paths.ts` guards. All ARIA-controlled output lives under `<worktree>/scratch/` (per-task noncolliding subdirs, single `/scratch/` gitignore, never stage, task-scoped env/helper with explicit output paths). `HOME`/`XDG`/global config preserved; atomic sibling-tmp/file-lock preserved; no OS-sandbox promise (approvals remain required). External tools that cannot accept explicit paths are documented exceptions in the canonical header. See `src/scratch.ts` for the full fail-closed policy.
+
 ## Install
 
-Canonical install is the released global package `github:mscipio/ARIA#v1.2.0`:
+Canonical install is the released global package `github:mscipio/ARIA#v1.3.0`:
 
 ```sh
-NPM_CONFIG_ALLOW_GIT=all npm install -g 'github:mscipio/ARIA#v1.2.0'
+NPM_CONFIG_ALLOW_GIT=all npm install -g 'github:mscipio/ARIA#v1.3.0'
 aria setup
 aria doctor
 ```

@@ -18,21 +18,33 @@ upstream is vendored.
 
 1. **Layout first** — see `references/design-principles.md`: hierarchy,
    spacing, density, resizing, splitters, high-DPI.
-2. **Build with widgets** — see `references/qt-widgets.md`: layouts,
+2. **Arrange the workspace** — see `references/workspace-layout.md`:
+   information architecture, image-centric workspaces, toolbars,
+   sidebars, contextual/dockable panels.
+3. **Build with widgets** — see `references/qt-widgets.md`: layouts,
    signals/slots, dialogs, keyboard access, accessibility.
-3. **Show images honestly** — see `references/pyqtgraph-imaging.md`:
+4. **Show images honestly** — see `references/pyqtgraph-imaging.md`:
    `ImageView`, histograms/LUT, window/level as display-only mapping, never
    presented as data.
-4. **Support the science workflow** — see
+5. **Constrain scientific presentation** — see
+   `references/scientific-constraints.md`: interpolation disclosure,
+   mapping labels, scales/orientation, comparison integrity.
+6. **Support the science workflow** — see
    `references/scientific-workflows.md`: multidim navigation,
    slice/orientation, zoom/pan/voxel probe, linked views, layers,
    DICOM/NIfTI input, parameter validation, background
    processing with progress/cancel.
-5. **Validate without fabrication** — see `references/visual-validation.md`:
+7. **Design the visuals** — see `references/visual-design.md`:
+   hierarchy, typography, spacing, iconography (`references/icons/`),
+   light/dark themes, interactive states.
+8. **Prototype optionally in QML** — see `references/qml-notes.md`:
+   design-only disposable prototypes, feasibility verdict, explicit
+   QML→Widgets transfer gap. No migration, no conversion tooling.
+9. **Validate without fabrication** — see `references/visual-validation.md`:
    `QWidget.grab` under Xvfb/Xvnc, QTest, tiered fallback. Never claim an
    inspection that did not happen; no automatic screenshots.
-6. **Attribute** — upstream sources, licenses, and the offline basis are
-   recorded in `references/sources-and-licenses.md`.
+10. **Attribute** — upstream sources, licenses, and the offline basis are
+    recorded in `references/sources-and-licenses.md`.
 
 ## Boundaries
 
@@ -44,3 +56,7 @@ upstream is vendored.
   substitutes for an inspection.
 - This skill owns desktop UI guidance only; it does not add agents, MCPs,
   dependencies, or config subsystems.
+- QML prototypes are design-only and disposable; production UI is Qt
+  Widgets — the transfer gap is explicit in `references/qml-notes.md`,
+  with no migration, embedding, or conversion tooling.
+- Route captures/builds/logs under `<worktree>/scratch/` via the canonical helper (`src/scratch.ts`); offline only, no OS-sandbox promise.

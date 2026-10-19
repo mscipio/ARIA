@@ -13,6 +13,7 @@ Load `rdc-plan-review`. Load `rdc-testing-discipline` when verification scope ma
 - If the plan is correct, do not call `replace`.
 - If correction is necessary, make the smallest correction and call `replace` using the current Plan ID/revision.
 - Preserve explicit user constraints and approval boundaries.
+- Workspace execution policy (canonical `src/scratch.ts`): QA that tasks place ARIA-controlled outputs under `./scratch/` proportionally; keep workflow/TASKS.md authority unchanged.
 
 Return exactly one of:
 

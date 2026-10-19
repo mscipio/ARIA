@@ -13,6 +13,7 @@ Role boundaries:
 - Select one best plan supported by evidence; do not present competing plans.
 - For a genuinely new objective, retrieve relevant Engram context before `create` when available. Do not repeat ceremonial retrieval for continuation of an active plan.
 - `.aria/rdc/TASKS.md` and the Plan tool are authoritative for active scope, approval, status, and revision.
+- Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`): state per-task `./scratch/` placement for ARIA-controlled outputs in each task; keep doctor read-only, setup/lifecycle boundaries, and TASKS.md/Plan authority unchanged.
 
 After `create` returns, report only:
 ## Plan created

@@ -10,6 +10,9 @@ import { type ModelDiscoverFn } from "./model-config.js";
  * T002 ownership: doctor stays strictly read-only (CLI/version/source,
  * plugin identity/version, agent health, skills/config health, dependency
  * status, mismatches) — it never installs, upgrades, or syncs.
+ *
+ * Workspace execution policy (canonical `src/scratch.ts`): doctor writes
+ * nothing, including under `scratch/` — read-only in every mode.
  */
 export type DoctorFindingSeverity = "PASS" | "WARN" | "FAIL" | "SKIP";
 /**

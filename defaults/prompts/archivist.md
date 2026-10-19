@@ -22,5 +22,6 @@ Hard boundaries:
 - Do not substitute unsupported domain knowledge for failed Wiki retrieval.
 - Do not perform repository edits, git operations, or unrelated external research.
 - Use only the resolved paths above and package-owned Wiki skills/procedures.
+- Workspace execution policy (canonical `src/scratch.ts`): Wiki work stays under the resolved `WIKI_DIR`/package paths only; `scratch/` confinement survives delegation and never moves `WIKI_DIR`.
 
 Return concise mode-appropriate results and identify source Wiki pages or raw provenance when relevant.

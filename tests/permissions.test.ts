@@ -93,16 +93,16 @@ describe("T004 permission/model/delegation parity", () => {
     expect(evaluatePermission(getPermissionsForRole("coder"), "shell", "git status")).toBe("deny");
   });
 
-  it("evaluates visualizer T004 edit-capable-but-RDC-gated posture (ask shell, grant-only skill)", () => {
-    // T004 + binding clarification: a python/test-runner allowlist is NOT
-    // a strong boundary (python can exec arbitrary code), so shell is
-    // prompt-gated (`ask`, never `allow`) with the implementer deny-list
-    // after. Coder-mediated approval is a prompt-level RDC workflow
-    // convention, NOT host-enforced plan-state containment: a directly
-    // invoked edit-capable visualizer subagent may not be plan-state
-    // constrained. These assertions verify evaluated effects, not just
-    // rule presence.
+  it("evaluates visualizer T003 exact edit/shell parity with implementer (shared helpers, shared decisions)", () => {
+    // T003: the visualizer reuses the canonical implementer edit + shell
+    // definitions directly (`protectedEditRules()` + `implementerShellRules()`,
+    // same order), so equivalent actions/resources evaluate IDENTICALLY.
+    // Increased authority is intentional: ordinary dev shell commands that
+    // previously prompted (`ask`) or were visualizer-denied now `allow`,
+    // matching the implementer. Workspace/scratch instructions and RDC
+    // approvals remain required but are NOT OS-level sandbox enforcement.
     const rules = getPermissionsForRole("visualizer");
+    const impl = getPermissionsForRole("implementer");
     // Edit allow with the shared `.env` ask gates preserved.
     expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("allow");
     expect(evaluatePermission(rules, "edit", ".env")).toBe("ask");
@@ -115,32 +115,36 @@ describe("T004 permission/model/delegation parity", () => {
     expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
     expect(evaluatePermission(rules, "read", ".env")).toBe("ask");
     expect(evaluatePermission(rules, "read", ".env.example")).toBe("allow");
-    // Shell prompts (Qt launch/test/screenshot go through the user prompt),
-    // never allows; destructive/publishing stays denied via the reused
-    // implementer deny-list pattern (deny after ask prevails).
-    expect(evaluatePermission(rules, "shell", "git status")).toBe("ask");
-    expect(evaluatePermission(rules, "shell", "python -m pytest tests/")).toBe("ask");
-    expect(evaluatePermission(rules, "shell", "xvfb-run python screenshot.py")).toBe("ask");
+    // Shell parity: ordinary dev commands allow (previously ask).
+    expect(evaluatePermission(rules, "shell", "git status")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "python -m pytest tests/")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "xvfb-run python screenshot.py")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "python scripts/capture.py")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "ls")).toBe("allow");
+    // Shared destructive/publishing denies prevail after the broad allow.
     expect(evaluatePermission(rules, "shell", "rm foo")).toBe("deny");
     expect(evaluatePermission(rules, "shell", "rm")).toBe("deny");
     expect(evaluatePermission(rules, "shell", "npm publish foo")).toBe("deny");
-    // Targeted visualizer-only denies after the shell ask: network egress,
-    // package-manager install/add, and git publish/mutating all evaluate
-    // deny, while the Qt/test/screenshot prompts above stay ask.
-    expect(evaluatePermission(rules, "shell", "curl https://example.com")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "wget https://example.com/pkg.tar.gz")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "npm install some-package")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "pip install some-package")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "pnpm add some-package")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "git push origin main")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "git reset --hard")).toBe("deny");
-    // The visualizer list is separate from the implementer's: the
-    // implementer's approved posture is untouched (representative egress
-    // still allows there).
-    expect(evaluatePermission(getPermissionsForRole("implementer"), "shell", "curl https://example.com")).toBe(
-      "allow",
-    );
-    expect(rules.some((rule) => rule.action === "shell" && rule.effect === "allow")).toBe(false);
+    // Former visualizer-only denies are superseded by parity: these now
+    // allow, exactly matching the implementer (increased authority).
+    for (const cmd of [
+      "curl https://example.com",
+      "wget https://example.com/pkg.tar.gz",
+      "npm install some-package",
+      "pip install some-package",
+      "pnpm add some-package",
+      "git push origin main",
+      "git reset --hard",
+    ]) {
+      expect(evaluatePermission(rules, "shell", cmd)).toBe(
+        evaluatePermission(impl, "shell", cmd),
+      );
+    }
+    expect(evaluatePermission(impl, "shell", "curl https://example.com")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "curl https://example.com")).toBe("allow");
+    // Broad shell allow is present (shared implementer helper); there is no
+    // visualizer-only `python *` allowlist resource and no blanket ask.
+    expect(rules.some((rule) => rule.action === "shell" && rule.effect === "allow")).toBe(true);
     expect(rules.some((rule) => rule.action === "shell" && rule.resource === "python *")).toBe(false);
     // Skill grant-only `aria-qt-ui` per T003 (replaces `rdc-visual-analysis`).
     expect(evaluatePermission(rules, "skill", "aria-qt-ui")).toBe("allow");

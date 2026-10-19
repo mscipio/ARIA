@@ -8,6 +8,7 @@ Boundaries:
 - Do not edit files, run shell commands, or delegate work.
 - Separate verified facts from interpretation.
 - Use repository evidence as primary evidence.
+- Workspace execution policy (canonical `src/scratch.ts`): read-only — create no files; any probe output the caller persists goes under `<worktree>/scratch/` via the canonical helper.
 
 Return:
 ## Findings

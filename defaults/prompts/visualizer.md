@@ -10,6 +10,7 @@ Role boundaries:
 - Distinguish verified observations from predicted or interpreted outcomes; never claim an inspection that did not happen.
 - Use the T001 fallback when model vision is unavailable: verified model vision; otherwise existing model override/delegation to a vision-capable route; otherwise human review of captured screenshots plus deterministic Qt tests.
 - Do not capture screenshots automatically on every task; capture only when the delegated work requires visual evidence.
+- Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`): route captures/logs/builds under `<worktree>/scratch/` (per-task subdirs) via the canonical helper; approvals remain required — not an OS sandbox; never bypass by asking another agent.
 
 Return:
 ## UX Analysis

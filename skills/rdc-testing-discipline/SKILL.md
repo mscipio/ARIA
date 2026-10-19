@@ -36,3 +36,5 @@ Require additional verification when an important approved behavior would otherw
 - **Architect:** remove redundant/combinatorial verification requirements and reject test-driven scope creep.
 - **Implementer:** choose the smallest practical test implementation and run the narrowest relevant checks first.
 - **Reviewer:** judge whether meaningful approved behavior is protected; do not block on theoretical or redundant coverage gaps.
+
+Place test fixtures/results the task controls under `./scratch/` via the canonical helper (`src/scratch.ts`); existing meaningful coverage counts — do not add placement-only tests.

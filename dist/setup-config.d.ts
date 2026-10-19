@@ -40,6 +40,10 @@ import type { ResolvedAriaConfig } from "./types.js";
  * `src/lifecycle.ts` (never `plugin <uri> --global` or `debug info`, which
  * do not exist on pinned 2.0.23; `ctx.plugin.list` stays runtime-only and
  * `debug config`/`debug paths` remain advisory, never authoritative).
+ *
+ * Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`):
+ * setup writes only global config/agent files; project outputs stay under
+ * `<worktree>/scratch/` via the canonical helper. HOME/XDG/global preserved.
  */
 /** Minimal structural config surface this module reads/writes. */
 export interface SetupConfig {

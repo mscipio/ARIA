@@ -194,78 +194,32 @@ function implementerShellRules(): AgentRule[] {
 }
 
 /**
- * T004 visualizer shell: broad `ask` first, then the implementer deny-list
- * plus visualizer-only denies after so denies prevail (last-match-wins).
- * Qt launch/test/screenshot commands therefore prompt via OpenCode
- * permission prompts instead of running silently.
+ * T003 — Visualizer/Implementer effective edit/shell parity.
  *
- * No `allow` and no python/test-runner `allow` allowlist: an allowlist of
- * python invocations is NOT a strong security boundary because `python`
- * (including `python -c`, test runners, and Qt launch helpers) can execute
- * arbitrary code. An `allow` on such commands would grant arbitrary
- * execution without a prompt. `ask` keeps the user in the loop; the
- * deny-lists keep destructive/publish/network/package-manager/git-mutating
- * operations unapprovable.
+ * The Visualizer reuses the canonical Implementer definitions directly
+ * (`protectedEditRules()` + `implementerShellRules()`, same helpers, same
+ * order) so equivalent edit/shell actions/resources receive the SAME
+ * effective decision under `evaluatePermission` last-match-wins. There is
+ * intentionally no `visualizerShellRules()` and no visualizer-only shell
+ * ask/deny list: the former blanket `shell: ask` fallback and the former
+ * `VISUALIZER_SHELL_DENIES` entries (network egress, package-manager
+ * install/add, git publish/mutating) diverged from the Implementer and are
+ * superseded by exact parity — deleted, not aligned elsewhere.
  *
- * The implementer list is reused verbatim (`npm publish*` and friends stay
- * covered there, not duplicated here). `VISUALIZER_SHELL_DENIES` below is
- * visualizer-only so the implementer's approved posture is untouched.
+ * Increased-authority note: ordinary dev shell commands (python scripts,
+ * pytest, capture scripts, Qt launching, ls/pwd/mkdir, git status, and —
+ * matching the Implementer — curl/wget egress, npm/pip installs, git
+ * push/reset) now evaluate `allow` for the Visualizer instead of `ask`/`deny`.
+ * Workspace/scratch instructions and RDC approvals remain required but are
+ * NOT OS-level sandbox enforcement: the Unix account can still write outside
+ * those locations, and confinement is enforced only where ARIA controls
+ * paths/environment (explicit-path routing + fail-closed guards). No
+ * process-wide HOME/XDG/TMPDIR redirection; explicit exceptions from T002
+ * (non-cooperative external tools) still apply.
+ *
+ * Implementer restrictions are preserved exactly (destructive-command denies,
+ * protected read/edit `.env` gates); the Implementer posture is untouched.
  */
-function visualizerShellRules(): AgentRule[] {
-  return [
-    { action: "shell", resource: "*", effect: "ask" },
-    ...IMPLEMENTER_SHELL_DENIES.map((resource) => ({
-      action: "shell",
-      resource,
-      effect: "deny" as const,
-    })),
-    ...VISUALIZER_SHELL_DENIES.map((resource) => ({
-      action: "shell",
-      resource,
-      effect: "deny" as const,
-    })),
-  ];
-}
-
-/**
- * T004 visualizer-only shell denies: network egress, package-manager
- * install/add, and git publish/mutating. Exact + ` *` pairs mirror the
- * `IMPLEMENTER_SHELL_DENIES` style (whole-value `*`/`?` wildcards).
- */
-const VISUALIZER_SHELL_DENIES: readonly string[] = [
-  // Network egress.
-  "curl",
-  "curl *",
-  "wget",
-  "wget *",
-  // Package-manager install/add (`npm publish*` and friends stay covered
-  // by the reused implementer list, not duplicated here).
-  "npm install",
-  "npm install *",
-  "npm add",
-  "npm add *",
-  "pnpm install",
-  "pnpm install *",
-  "pnpm add",
-  "pnpm add *",
-  "yarn install",
-  "yarn install *",
-  "yarn add",
-  "yarn add *",
-  "bun install",
-  "bun install *",
-  "bun add",
-  "bun add *",
-  "pip install",
-  "pip install *",
-  "pip3 install",
-  "pip3 install *",
-  // Git publish/mutating.
-  "git push",
-  "git push *",
-  "git reset --hard",
-  "git reset --hard *",
-];
 
 /**
  * Unscoped (deny-by-default) archivist Rule[] for managed files.
@@ -419,14 +373,18 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...skillRules("rdc-code-exploration"),
       ];
     case "visualizer":
-      // T004 minimum defensible edit-capable-but-RDC-gated posture.
-      // Edit + glob/grep allow scoped implementation (same `.env` ask
-      // gates and `*` resource syntax as the implementer; no new resource
-      // syntax invented). Shell stays prompt-gated (`ask`, never `allow`;
-      // see `visualizerShellRules` for the arbitrary-code rationale) with
-      // the implementer deny-list plus visualizer-only network/
-      // package-manager/git-mutating denies after so destructive/publish/
-      // egress stays denied. Unrelated research MCP tools stay denied via
+      // T003 exact edit/shell parity with the implementer: same
+      // `protectedEditRules()` and same `implementerShellRules()` helpers,
+      // same order, so `evaluatePermission` last-match-wins yields IDENTICAL
+      // effective decisions for equivalent edit/shell actions/resources.
+      // Shell therefore allows ordinary dev commands (python/pytest/capture
+      // scripts, Qt launching, ls/pwd/mkdir, git status) and denies only the
+      // shared destructive/publish list — matching the implementer exactly.
+      // Increased authority is intentional: workspace/scratch instructions
+      // and RDC approvals remain required but are NOT OS-level sandbox
+      // enforcement (the Unix account can write outside those locations;
+      // enforcement holds only where ARIA controls paths/env). Unrelated
+      // research MCP tools stay denied via
       // the explicit `zotpilot_*` deny after the fallback (last-match-wins
       // grants below never match it). Skill is grant-only `aria-qt-ui` per
       // T003 (replaces `rdc-visual-analysis`). MCP stays the coding triple;
@@ -459,7 +417,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("question"),
         denyRule("external_directory"),
         ...CODING_MCP,
-        ...visualizerShellRules(),
+        ...implementerShellRules(),
         ...subagentRules(),
         ...skillRules("aria-qt-ui"),
       ];

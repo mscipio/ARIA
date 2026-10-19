@@ -22,6 +22,7 @@ Use this skill for the architect's pre-implementation QA mode.
 - Explicit user constraints are preserved, including no-commit/no-push requirements, compatibility constraints, protected files/areas, and scope boundaries.
 - Unspecified behavior has not been converted into new product requirements.
 - Optional requirements have not expanded into unnecessary metadata, abstractions, plumbing, or broad tests.
+- Tasks place ARIA-controlled outputs under `./scratch/` proportionally (canonical `src/scratch.ts`); flag missing placement only when the approved behavior requires output.
 - High-risk concerns are covered proportionally: architecture, security, data integrity, compatibility, reversibility/migration, and unsafe failure modes.
 
 ## Correction policy

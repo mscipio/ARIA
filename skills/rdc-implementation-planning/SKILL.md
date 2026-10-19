@@ -22,6 +22,7 @@ Use this skill before creating a new persisted implementation plan.
 8. Integrate concise acceptance criteria directly into each task.
 9. Include only the minimum representative verification needed; load `rdc-testing-discipline` when verification design matters.
 10. Treat optional, “ideally,” “nice-to-have,” and secondary requirements as subordinate. Omit them when they require meaningful additional architecture or testing unless the user promoted them to requirements.
+11. State per-task `./scratch/` placement for ARIA-controlled outputs (canonical `src/scratch.ts`); keep doctor read-only and TASKS.md/Plan authority unchanged.
 
 ## Evidence
 
