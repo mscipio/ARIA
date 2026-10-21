@@ -37,6 +37,8 @@ const requiredPaths = [
   "dist/doctor.js",
   "dist/doctor.d.ts",
   "defaults/aria.defaults.json",
+  "defaults/commands/aria-push.md",
+  "defaults/commands/aria-release.md",
   "defaults/prompts/coder.md",
   "defaults/prompts/planner.md",
   "defaults/prompts/architect.md",

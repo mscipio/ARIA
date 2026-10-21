@@ -143,6 +143,7 @@ export interface SetupFilesOptions {
     globalConfigPath?: string;
     /** Managed agent directory (defaults to `~/.config/opencode/agents/`). */
     agentsDir?: string;
+    commandsDir?: string;
     /** Version-locked skills root (defaults to the installed package `skills/`). */
     skillsRoot?: string;
 }

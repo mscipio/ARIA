@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { readPackageVersion } from "./agents.js";
+import { readPackageVersion, rollbackAgentInstall } from "./agents.js";
+import { reconcileManagedCommands, rollbackCommandInstall } from "./commands.js";
 import { codegraphUpgradeComponent } from "./codegraph.js";
 import {
   context7UpgradeComponent,
@@ -22,10 +23,11 @@ import { doctorExitCode, runDoctor } from "./doctor.js";
 import { engramUpgradeComponent } from "./engram.js";
 import { classifyAriaRegistration, parsePluginList } from "./lifecycle.js";
 import { reconcileManagedAgents } from "./model-config.js";
+import { reconcileManagedAgents as reconcileAgentFiles } from "./model-config.js";
 import { openCodeGlobalDir } from "./paths.js";
+import { resolveDurableAriaSkillsRoot } from "./skills.js";
 import { checkQuotaUpgrade } from "./quota.js";
 import { defaultGlobalConfigPath, ensureAriaSkillsRefreshFile } from "./setup-config.js";
-import { getPackageSkillsRoot } from "./skills.js";
 import { zotpilotUpgradeComponent } from "./zotpilot.js";
 
 // ---------------------------------------------------------------------------
@@ -1323,7 +1325,7 @@ export async function runAriaSkillsRefreshPhase(ctx: ComponentContext): Promise<
     const configPath = ctx.configDir
       ? join(openCodeGlobalDir(ctx.configDir), "opencode.json")
       : defaultGlobalConfigPath();
-    const result = await ensureAriaSkillsRefreshFile({ configPath, skillsRoot: getPackageSkillsRoot() });
+    const result = await ensureAriaSkillsRefreshFile({ configPath, skillsRoot: resolveDurableAriaSkillsRoot() });
     if (!result.changed) {
       return { ok: true, detail: `ARIA skills already current in ${result.path} (idempotent, no changes)`, mutated: false };
     }
@@ -1350,18 +1352,35 @@ export async function runAriaSkillsRefreshPhase(ctx: ComponentContext): Promise<
  * actionable conflict detail; nothing is thrown past the phase boundary.
  */
 export async function runManagedAgentRegenPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome> {
+  let agents: Awaited<ReturnType<typeof reconcileAgentFiles>> | undefined;
+  let commands: Awaited<ReturnType<typeof reconcileManagedCommands>> | undefined;
   try {
     const dir = ctx.configDir ? join(openCodeGlobalDir(ctx.configDir), "agents") : undefined;
-    const result = await reconcileManagedAgents(process.cwd(), dir ? { dir } : {});
-    const tamperedNote = result.tampered.length > 0 ? ` (tampered regenerated: ${result.tampered.join(", ")})` : "";
+    agents = await reconcileManagedAgents(process.cwd(), dir ? { dir } : {});
+    const commandDir = ctx.configDir ? join(openCodeGlobalDir(ctx.configDir), "commands") : undefined;
+    commands = await reconcileManagedCommands(commandDir ? { dir: commandDir, version: agents.version } : { version: agents.version });
+    const tamperedNote = agents.tampered.length > 0 ? ` (tampered regenerated: ${agents.tampered.join(", ")})` : "";
     return {
       ok: true,
-      detail: `managed-agent reconciliation: ${result.written.length} written, ${result.unchanged.length} unchanged${tamperedNote} in ${result.dir} (v${result.version})`,
-      mutated: result.written.length > 0,
+      detail: `managed-agent/command reconciliation: ${agents.written.length} agents and ${commands.written.length} commands written; ${agents.unchanged.length} agents and ${commands.unchanged.length} commands unchanged${tamperedNote}`,
+      mutated: agents.written.length > 0 || commands.written.length > 0,
     };
   } catch (error) {
+    if (commands) await rollbackCommandInstall(commands.dir, commands).catch(() => undefined);
+    if (agents) await rollbackAgentInstall(agents.dir, agents).catch(() => undefined);
     const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, detail: `managed-agent reconciliation failed: ${reason}`, mutated: false };
+    return { ok: false, detail: `managed agent/command reconciliation failed: ${reason}`, mutated: false };
+  }
+}
+
+export async function runManagedCommandRegenPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome> {
+  try {
+    const dir = ctx.configDir ? join(openCodeGlobalDir(ctx.configDir), "commands") : undefined;
+    const result = await reconcileManagedCommands(dir ? { dir } : {});
+    return { ok: true, detail: `managed-command reconciliation: ${result.written.length} written, ${result.unchanged.length} unchanged in ${result.dir} (v${result.version})`, mutated: result.written.length > 0 };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { ok: false, detail: `managed-command reconciliation failed: ${reason}`, mutated: false };
   }
 }
 

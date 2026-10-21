@@ -42,6 +42,16 @@
 export declare const ARIA_SKILL_NAMES: readonly string[];
 /** Absolute `skills/` root of the loaded ARIA install. */
 export declare function getPackageSkillsRoot(packageRoot?: string): string;
+/** Compare filesystem paths by their real identity when they exist. */
+export declare function areEquivalentSkillsPaths(a: unknown, b: string): boolean;
+export declare function isEphemeralNpxInstallRoot(root: string): boolean;
+export declare function isEphemeralAriaSkillsPath(entry: unknown): boolean;
+export declare function isDurableAriaSkillsPath(entry: unknown): boolean;
+export declare function resolveGlobalAriaSkillsRoot(): string | undefined;
+export declare function resolveDurableAriaSkillsRoot(options?: {
+    installedRoot?: string;
+    globalSkillsRootResolver?: () => string | undefined;
+}): string;
 /** Minimal structural config surface this module reads/writes. */
 export interface SkillsConfig {
     skills?: unknown;

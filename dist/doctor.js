@@ -5,12 +5,13 @@ import { getPackageRoot } from "./defaults.js";
 import { defaultExecutor, doctor as dependencyDoctor, extractVersion, probeSubagentDepth, stripJsoncComments, } from "./deps.js";
 import { discoverAvailableModels } from "./model-config.js";
 import { agentFileName, defaultAgentsDir, generateAgentFiles, parseManagedHeader, readPackageVersion, } from "./agents.js";
+import { defaultCommandsDir, generateCommandFiles, parseManagedHeader as parseCommandManagedHeader } from "./commands.js";
 import { PLAN_TOOL_NAME } from "./plan-tool.js";
 import { CODING_ROLES, PACKAGE_SKILL_NAMES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
 import { deriveRoutes, ROLES } from "./routes.js";
 import { defaultGlobalConfigPath, isSameLocalPluginIdentity, resolveSetupAriaConfig } from "./setup-config.js";
 import { classifyAriaRegistration, normalizeIdentityVersion, parsePluginList, pluginSpecTagVersion } from "./lifecycle.js";
-import { ARIA_SKILL_NAMES, getPackageSkillsRoot, isAriaPackageSkillsPath } from "./skills.js";
+import { ARIA_SKILL_NAMES, areEquivalentSkillsPaths, isAriaPackageSkillsPath, resolveDurableAriaSkillsRoot } from "./skills.js";
 const defaultFileOps = {
     readText: (path) => readFile(path, "utf8"),
     stat: (path) => fsStat(path),
@@ -1185,8 +1186,8 @@ async function collectSkillFindings(packageRoot, fileOps) {
  *   shape, or a missing/unreadable/unparseable config (including dual-file
  *   ambiguity) → SKIP, never a guess about the underlying state.
  */
-async function collectConfiguredSkillsFinding(fileOps) {
-    const skillsRoot = getPackageSkillsRoot();
+async function collectConfiguredSkillsFinding(fileOps, expectedSkillsRoot) {
+    const skillsRoot = expectedSkillsRoot ?? resolveDurableAriaSkillsRoot();
     const jsonPath = defaultGlobalConfigPath();
     const jsoncPath = join(dirname(jsonPath), "opencode.jsonc");
     const stat = fileOps.stat ?? ((path) => fsStat(path));
@@ -1288,8 +1289,8 @@ async function collectConfiguredSkillsFinding(fileOps) {
                 detail: "skills[] is explicitly empty (ambiguous ownership: refusing to guess whether discovery was disabled on purpose)",
             }];
     }
-    const currentCount = skills.filter((entry) => entry === skillsRoot).length;
-    const stale = skills.filter((entry) => entry !== skillsRoot && isAriaPackageSkillsPath(entry));
+    const currentCount = skills.filter((entry) => areEquivalentSkillsPaths(entry, skillsRoot)).length;
+    const stale = skills.filter((entry) => !areEquivalentSkillsPaths(entry, skillsRoot) && isAriaPackageSkillsPath(entry));
     if (stale.length === 1 && currentCount === 0) {
         return [{
                 severity: "FAIL",
@@ -1442,6 +1443,37 @@ async function collectAgentFileFindings(worktree, agentsDir, fileOps) {
             detail: `11 of 11 match version ${version} and resolved config`,
         }];
 }
+async function collectCommandFileFindings(commandsDir, fileOps) {
+    let version;
+    let expected;
+    try {
+        version = readPackageVersion();
+        expected = generateCommandFiles(version);
+    }
+    catch (error) {
+        return [{ severity: "FAIL", area: "commands", title: "managed command files", detail: describeError(error) }];
+    }
+    const names = ["aria-push", "aria-release"];
+    const problems = [];
+    let missing = 0;
+    for (const name of names) {
+        try {
+            const content = await fileOps.readText(resolve(commandsDir, `${name}.md`));
+            if (content !== expected[name]) {
+                const header = parseCommandManagedHeader(content);
+                problems.push(header ? `${name} (version ${header.version}, expected ${version}; re-run setup)` : `${name} (unmanaged or mismatched)`);
+            }
+        }
+        catch {
+            missing += 1;
+        }
+    }
+    if (missing === names.length)
+        return [{ severity: "SKIP", area: "commands", title: "managed command files", detail: `not installed in ${commandsDir}; run aria setup` }];
+    if (missing || problems.length)
+        return [{ severity: "FAIL", area: "commands", title: "managed command files", detail: [...problems, ...(missing ? [`${missing} missing`] : [])].join("; ") }];
+    return [{ severity: "PASS", area: "commands", title: "managed command files", detail: `${names.length} of ${names.length} match version ${version}` }];
+}
 // ---------------------------------------------------------------------------
 // Wiki: packaged pipeline assets and optional WIKI_DIR accessibility
 // ---------------------------------------------------------------------------
@@ -1577,6 +1609,7 @@ export async function runDoctor(options = {}) {
     // Installed managed agent files match the current version + resolved
     // config (read-only; unrelated user agents never touched).
     findings.push(...await collectAgentFileFindings(worktree, options.agentsDir ?? defaultAgentsDir(), fileOps));
+    findings.push(...await collectCommandFileFindings(options.commandsDir ?? defaultCommandsDir(), fileOps));
     // Model discovery (failure is FAIL; nothing is guessed).
     let discovered;
     try {
@@ -1643,7 +1676,7 @@ export async function runDoctor(options = {}) {
     findings.push(...collectRuntimeFindings(options.v2));
     // Packaged skills and canonical role/ZotPilot policy validation.
     findings.push(...await collectSkillFindings(getPackageRoot(), fileOps));
-    findings.push(...await collectConfiguredSkillsFinding(fileOps));
+    findings.push(...await collectConfiguredSkillsFinding(fileOps, options.skillsRoot));
     findings.push(...rolePolicyFindings());
     // Wiki: packaged pipeline assets and optional WIKI_DIR accessibility.
     findings.push(...await collectWikiFindings(getPackageRoot(), fileOps));

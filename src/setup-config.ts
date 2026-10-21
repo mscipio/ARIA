@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { opencodeConfigPath, stripJsoncComments } from "./deps.js";
 import { resolveAriaConfig } from "./overrides.js";
 import { applyExperimentalSubagentDepthDefault } from "./permissions.js";
-import { applyAriaSkillsToConfig, getPackageSkillsRoot, isAriaPackageSkillsPath, validateAriaSkillsConfig } from "./skills.js";
+import { applyAriaSkillsToConfig, areEquivalentSkillsPaths, getPackageSkillsRoot, isAriaPackageSkillsPath, validateAriaSkillsConfig } from "./skills.js";
 import type { ResolvedAriaConfig } from "./types.js";
 
 /**
@@ -542,9 +542,14 @@ export async function ensureAriaSetupConfigFile(options: {
   const skillsValue = (parsed as SetupConfig).skills;
   if (skillsValue !== undefined && !Array.isArray(skillsValue)) {
     const carried = legacySkillStrings(skillsValue);
-    // Append only when absent: `paths` may already hold the ARIA root, and
-    // the V2 applier below is also idempotent, so never emit a duplicate.
-    (parsed as SetupConfig).skills = carried.includes(skillsRoot) ? carried : [...carried, skillsRoot];
+    // Preserve equivalent aliases; reconcile the first stale owned legacy
+    // path in place before appending a new root.
+    if (carried.length === 0) carried.push(skillsRoot);
+    const equivalent = carried.some((entry) => areEquivalentSkillsPaths(entry, skillsRoot));
+    const staleIndex = equivalent ? -1 : carried.findIndex((entry) => isAriaPackageSkillsPath(entry));
+    if (staleIndex >= 0) carried[staleIndex] = skillsRoot;
+    else if (!equivalent && carried.length > 0) carried.push(skillsRoot);
+    (parsed as SetupConfig).skills = carried;
     migratedLegacySkills = true;
   }
 
@@ -770,10 +775,10 @@ function spliceOwnedSkillsIntoSource(
     }
   }
 
-  const currentCount = beforeSkills.filter((entry) => entry === skillsRoot).length;
+  const currentCount = beforeSkills.filter((entry) => areEquivalentSkillsPaths(entry, skillsRoot)).length;
   const staleIndices: number[] = [];
   beforeSkills.forEach((entry, index) => {
-    if (entry !== skillsRoot && isAriaPackageSkillsPath(entry)) staleIndices.push(index);
+    if (!areEquivalentSkillsPaths(entry, skillsRoot) && isAriaPackageSkillsPath(entry)) staleIndices.push(index);
   });
 
   if (staleIndices.length === 1 && currentCount === 0) {

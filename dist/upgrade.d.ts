@@ -402,6 +402,7 @@ export declare function runAriaSkillsRefreshPhase(ctx: ComponentContext): Promis
  * actionable conflict detail; nothing is thrown past the phase boundary.
  */
 export declare function runManagedAgentRegenPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome>;
+export declare function runManagedCommandRegenPhase(ctx: ComponentContext): Promise<PostUpgradePhaseOutcome>;
 export interface UpgradeContinuationResult {
     stage: ContinuationStage;
     ok: boolean;

@@ -1,4 +1,5 @@
-import { isAbsolute, join } from "node:path";
+import { realpathSync, readFileSync, existsSync } from "node:fs";
+import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { getPackageRoot } from "./defaults.js";
 /**
  * T007 — Packaged skills, single source: V2 config `skills: string[]`.
@@ -69,6 +70,59 @@ export const ARIA_SKILL_NAMES = [
 export function getPackageSkillsRoot(packageRoot = getPackageRoot()) {
     return join(packageRoot, "skills");
 }
+/** Compare filesystem paths by their real identity when they exist. */
+export function areEquivalentSkillsPaths(a, b) {
+    if (typeof a !== "string" || !isAbsolute(a) || !isAbsolute(b))
+        return false;
+    const canonical = (value) => {
+        const lexical = resolve(normalize(value));
+        try {
+            return realpathSync(lexical);
+        }
+        catch {
+            return lexical;
+        }
+    };
+    return canonical(a) === canonical(b);
+}
+export function isEphemeralNpxInstallRoot(root) {
+    const parts = resolve(normalize(root)).split(sep);
+    return parts.length >= 4 && parts[parts.length - 4] === "_npx"
+        && parts[parts.length - 2] === "node_modules" && parts[parts.length - 1] === "aria";
+}
+export function isEphemeralAriaSkillsPath(entry) {
+    return isAriaPackageSkillsPath(entry) && isEphemeralNpxInstallRoot(dirname(entry));
+}
+export function isDurableAriaSkillsPath(entry) {
+    return isAriaPackageSkillsPath(entry) && !isEphemeralAriaSkillsPath(entry);
+}
+export function resolveGlobalAriaSkillsRoot() {
+    const exeDir = dirname(process.execPath);
+    const prefix = process.env.NPM_CONFIG_PREFIX?.trim() || (process.platform === "win32" ? exeDir : dirname(exeDir));
+    const globalRoot = process.platform === "win32" ? join(prefix, "node_modules") : join(prefix, "lib", "node_modules");
+    const packageRoot = join(globalRoot, "aria");
+    const skillsRoot = join(packageRoot, "skills");
+    try {
+        if (JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")).name !== "aria" || !existsSync(skillsRoot))
+            return undefined;
+        return realpathSync(skillsRoot);
+    }
+    catch {
+        return undefined;
+    }
+}
+export function resolveDurableAriaSkillsRoot(options = {}) {
+    const installedRoot = options.installedRoot ?? getPackageRoot();
+    if (!isEphemeralNpxInstallRoot(installedRoot))
+        return getPackageSkillsRoot(installedRoot);
+    const discovered = (options.globalSkillsRootResolver ?? resolveGlobalAriaSkillsRoot)();
+    return discovered && existsSync(discovered) ? (() => { try {
+        return realpathSync(discovered);
+    }
+    catch {
+        return resolve(discovered);
+    } })() : getPackageSkillsRoot(installedRoot);
+}
 /**
  * T007 v1.0.14 — positively owned packaged skills path predicate.
  *
@@ -133,10 +187,10 @@ export function applyAriaSkillsToConfig(config, packageSkillsRoot = getPackageSk
     if (current.length === 0) {
         throw new Error("skills[] is explicitly empty (ambiguous ownership: refusing to guess whether discovery was disabled on purpose). No changes were made.");
     }
-    const currentCount = current.filter((entry) => entry === packageSkillsRoot).length;
+    const currentCount = current.filter((entry) => areEquivalentSkillsPaths(entry, packageSkillsRoot)).length;
     const staleIndices = [];
     current.forEach((entry, index) => {
-        if (entry !== packageSkillsRoot && isAriaPackageSkillsPath(entry))
+        if (!areEquivalentSkillsPaths(entry, packageSkillsRoot) && isAriaPackageSkillsPath(entry))
             staleIndices.push(index);
     });
     if (staleIndices.length > 1) {
@@ -152,7 +206,7 @@ export function applyAriaSkillsToConfig(config, packageSkillsRoot = getPackageSk
     if (currentCount > 1) {
         return { added: false };
     }
-    if (current.includes(packageSkillsRoot)) {
+    if (current.some((entry) => areEquivalentSkillsPaths(entry, packageSkillsRoot))) {
         return { added: false };
     }
     current.push(packageSkillsRoot);
@@ -179,7 +233,7 @@ export function validateAriaSkillsConfig(config, packageSkillsRoot = getPackageS
             issues.push(`skills entry is not a non-empty string (got ${JSON.stringify(entry) ?? typeof entry})`);
         }
     }
-    const occurrences = skills.filter((entry) => entry === packageSkillsRoot).length;
+    const occurrences = skills.filter((entry) => areEquivalentSkillsPaths(entry, packageSkillsRoot)).length;
     if (occurrences === 0) {
         issues.push("ARIA package skills root is not registered");
     }

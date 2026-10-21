@@ -14,6 +14,7 @@ import {
   type ModelConfigureOutput,
 } from "./model-config.js";
 import { defaultAgentsDir, installAgentFiles, readPackageVersion, rollbackAgentInstall, type AgentInstallResult } from "./agents.js";
+import { defaultCommandsDir, installCommandFiles } from "./commands.js";
 import { getPackageRoot } from "./defaults.js";
 import {
   assertSetupConfigNotAmbiguous,
@@ -24,7 +25,7 @@ import {
   rollbackSetupConfigFile,
   type SetupConfigFileResult,
 } from "./setup-config.js";
-import { getPackageSkillsRoot } from "./skills.js";
+import { resolveDurableAriaSkillsRoot } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -178,6 +179,7 @@ export interface SetupFilesOptions {
   globalConfigPath?: string;
   /** Managed agent directory (defaults to `~/.config/opencode/agents/`). */
   agentsDir?: string;
+  commandsDir?: string;
   /** Version-locked skills root (defaults to the installed package `skills/`). */
   skillsRoot?: string;
 }
@@ -951,7 +953,7 @@ export async function setup(
   // T005: the default is the loaded install's own `skills/` (globally
   // installed package for bare `aria`, dev checkout for
   // `node ./bin/aria.mjs`) — never a searched-for dev checkout.
-  const skillsRoot = filesOptions.skillsRoot ?? getPackageSkillsRoot(installedRoot);
+  const skillsRoot = filesOptions.skillsRoot ?? resolveDurableAriaSkillsRoot({ installedRoot });
 
   let configState: SetupConfigFileResult;
   try {
@@ -1018,6 +1020,15 @@ export async function setup(
     written: installed.written.length,
     unchanged: installed.unchanged.length,
   };
+
+  try {
+    await installCommandFiles({ dir: filesOptions.commandsDir ?? (filesOptions.globalConfigPath ? resolve(dirname(filesOptions.globalConfigPath), "commands") : defaultCommandsDir()), version: installed.version });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await rollbackAgentInstall(agentsDir, installed).catch(() => undefined);
+    await rollbackSetupConfigFile(configState.path, configState).catch(() => undefined);
+    return { ok: false, stage: "agents", setup: { registration: { ...registration }, sync: { ok: false, error: "sync skipped due to command install failure" }, config: { ...configPhase, detail: "rolled back due to command install failure" }, agents: { ...agentsPhase, detail: message } } };
+  }
 
   // T003 effective-root forwarding: setup, sync, dependencies, and doctor
   // share one root. The effective global config dir is

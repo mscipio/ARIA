@@ -74,7 +74,7 @@ Examples:
 - researcher → `aria-research-evidence` (discovery/verification) or `aria-zotero-tutor` (tutoring an identified paper)
 - scientist → `aria-research-planning` or `aria-results-analysis`
 
-ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers its packaged `skills/` directory through OpenCode's native `skills.paths` configuration, appending it to any pre-existing paths (append-and-preserve), so skills stay version-locked to the loaded ARIA package without copying files into the user's global skill directory or depending on myopencode/another registry.
+ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers packaged skills through OpenCode's V2 `skills: string[]` configuration, appending to and preserving existing entries. Skills stay version-locked to the loaded ARIA package without copying files into another skill registry.
 
 ## Shared Plan
 
@@ -240,17 +240,25 @@ aria --help               # Show help
 aria --version            # Show version
 ```
 
+`/aria-push` and `/aria-release` are OpenCode TUI slash commands, not CLI subcommands. Setup installs their managed command files in `~/.config/opencode/commands/`; invoke them in the TUI as `/aria-push [natural-language instructions]` and `/aria-release [natural-language instructions]`.
+
 Retired commands are rejected with guidance and are not supported: `aria configure` → `aria models --config`; `aria routes` → `aria models`; `aria update` → `aria upgrade` (ARIA release moves) or `aria setup` (install missing dependencies); `aria deps sync` → `aria deps` (read-only inventory), `aria deps --upgrade` (managed upgrades), or `aria setup` (install missing). The v1.1.x public configuration surface is `aria models` / `aria models --config`.
 
 ### `aria setup`
 
-First install and bootstrap: registers the ARIA plugin globally with OpenCode, then idempotently reconciles registration, global configuration, managed agent files, and packaged skills. It installs required managed dependencies only when missing and never version-chases present ones — upgrades belong to `aria deps --upgrade`. Package-owned skills are discovered directly from the loaded package through `skills.paths`. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
+First install and bootstrap: registers the ARIA plugin globally with OpenCode, then idempotently reconciles registration, global configuration, managed agent files, packaged skills, and the two managed slash-command files in `~/.config/opencode/commands/`. Existing unmanaged conflicts are backed up; unrelated user commands are preserved. It installs required managed dependencies only when missing and never version-chases present ones — upgrades belong to `aria deps --upgrade`. Package-owned skills use OpenCode's V2 `skills: string[]` configuration and are resolved from the durable skills root below. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
 
 - **First run**: registers the plugin, then installs missing dependencies.
 - **Repeated runs**: reports `already registered`, skips duplicate global registration, and still reconciles configuration/agents/skills and installs anything missing (itself idempotent) — without upgrading anything already present.
 - **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks the dependency install.
 
-Setup fails non-zero at the labeled stage (registration or dependency install). OpenCode must be restarted after setup to load the registered plugin.
+Setup fails non-zero at the labeled stage (registration or dependency install). OpenCode must be restarted after setup to load the registered plugin and slash commands. Re-running setup reconciles managed command files without replacing unrelated user commands.
+
+#### Durable packaged skills root
+
+The canonical durable skills root is the running ARIA install. When running through an ephemeral `npx` cache, ARIA uses a verified globally installed ARIA package instead; the ephemeral cache never replaces the durable root. Symlink aliases resolving to the same real path are equivalent. If no verified global package is available, ARIA uses its supported no-global fallback. `aria doctor` is read-only: a stale/missing owned root is reported as FAIL, while an inapplicable environment is SKIP.
+
+If doctor reports a stale owned path, rerun setup or upgrade from the durable install (or run global `aria setup`). Do not hand-edit the registration to point into an `npx` cache. Check `aria doctor`, `npm root -g`, whether the configured path contains `_npx`, and whether symlinks resolve to the expected install.
 
 Setup never creates or overwrites project `aria.json`, commits, pushes, or introduces postinstall, daemon, or background behavior. `aria setup` also accepts `--plugin-spec <spec>` (see `aria --help`) to register a Git package specifier instead of the local checkout; it is not part of the normal install flow.
 
@@ -281,6 +289,16 @@ Neither `aria setup` nor any retired command runs as a postinstall script, daemo
 - `aria upgrade` (bare) — shows the same inventory without mutation, then stops: explicit `--yes` approval is required before any change is applied.
 - `aria upgrade --yes` — approves the inventoried ARIA-only target and runs the upgrade pipeline. After approval the exact target is validated before the current registration is touched; unrelated entries are preserved; everything stays XDG-contained with no `.npmrc` side effects, and any git allowlist (`NPM_CONFIG_ALLOW_GIT=all`) is process-local only.
 
+Upgrade also reconciles the two managed OpenCode slash-command files in `~/.config/opencode/commands/`; it fails closed on unmanaged same-name command conflicts without backing them up, so users must resolve those conflicts manually. Setup backs up unmanaged conflicts, and unrelated user commands are preserved.
+
+### `/aria-push`
+
+Run `/aria-push` in the OpenCode TUI, optionally followed by natural-language instructions. The coder performs the repository's 11-step review-driven push workflow: inspect status and scope, validate the approved plan, implement and verify, review changes, then prepare and push the authorized result. It may only act within the approved scope and applicable user authorization. It never force-pushes or uses destructive Git operations. Scratch/generated output stays under `./scratch/`; staging requires explicit human authorization, and scratch artifacts are never staged.
+
+### `/aria-release`
+
+Run `/aria-release` in the OpenCode TUI, optionally followed by natural-language release instructions. It reuses the push workflow, then performs release-specific version checks, gates, tag and GitHub Release creation, and verification. It does not auto-deploy. Authorization remains limited to the approved release scope; no force or destructive operations are allowed. Scratch/generated output stays under `./scratch/`, and staging requires explicit human authorization (scratch artifacts are never staged).
+
 ### `aria deps`
 
 Read-only inventory first, explicitly approved upgrades second — a two-step with no interactive prompt:
@@ -291,7 +309,7 @@ Read-only inventory first, explicitly approved upgrades second — a two-step wi
 
 ### `aria doctor`
 
-Read-only health check. It inspects — and never writes, installs, or repairs — the packaged assets, configuration, resolved role routes, model discovery, required integrations, packaged skills, and the optional ZotPilot and Wiki capabilities. Every finding is labeled with one of four literal severities:
+Read-only health check. It inspects — and never writes, installs, or repairs — the packaged assets, configuration, resolved role routes, model discovery, required integrations, packaged skills, managed command files, and the optional ZotPilot and Wiki capabilities. Managed command-file diagnostics are read-only. Every finding is labeled with one of four literal severities:
 
 - **PASS** — the check succeeded.
 - **FAIL** — a required item is missing, invalid, or disconnected. Any FAIL makes `aria doctor` exit **1**.

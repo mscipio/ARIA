@@ -72,6 +72,12 @@ export interface DoctorOptions {
     v2?: DoctorV2Snapshot;
     /** Managed agent directory verified by the file finding (defaults to global). */
     agentsDir?: string;
+    commandsDir?: string;
+    /**
+     * Canonical durable ARIA skills root expected by the read-only configured-skills
+     * finding (defaults to `resolveDurableAriaSkillsRoot()`).
+     */
+    skillsRoot?: string;
 }
 /**
  * Pinned `@opencode/plugin@2.0.23` Context domain inspection
