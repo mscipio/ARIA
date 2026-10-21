@@ -33,6 +33,6 @@ MCP evidence does not authorize work outside the approved plan.
 
 ## Boundaries
 
-Do not commit, push, publish, alter git configuration, or use destructive git commands unless the user explicitly requested that separate action.
+Do not commit, push, publish, alter git configuration, or use destructive git commands unless the user explicitly requested that separate action. Staging source changes (`git add`) requires the same explicit human authorization; editing files does not authorize staging, and scratch artifacts are never staged.
 
 Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`): route ARIA-controlled output under `<worktree>/scratch/` via the canonical helper with explicit output paths; preserve HOME/XDG/global config and atomic sibling-tmp/file-lock semantics; never bypass by asking another agent; no OS-sandbox promise.

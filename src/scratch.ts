@@ -45,9 +45,14 @@ const execFileAsync = promisify(execFile);
  * - No migration or deletion of historical artifacts outside `scratch/`.
  *   Pre-existing repo clutter stays untouched; only needed `scratch/`
  *   subdirectories are created.
- * - No staging. `ensureScratchGitignore` never runs `git add`/`git rm` and
- *   never deletes already-tracked `scratch/` paths; tracked content and the
- *   index are left byte-identical.
+  * - Scratch confinement applies only to transient/generated artifacts (logs,
+  *   fixtures, temporary outputs, verification evidence, etc.), not intentional
+  *   edits to authorized repository code, tests, configuration, or documentation.
+  *   Scratch artifacts are never staged. `ensureScratchGitignore` never runs
+  *   `git add`/`git rm` and never deletes already-tracked `scratch/` paths;
+  *   tracked content and the index are left byte-identical. Staging explicitly
+  *   approved source changes is permitted only during human-authorized Git
+  *   operations; editing files does not itself authorize staging.
  *
  * Explicit exceptions (not promised): tools that do not accept explicit
  * output paths or per-call env — hardcoded `~/.cache` writers, absolute

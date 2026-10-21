@@ -38,6 +38,14 @@ describe("T004 workspace execution policy integration", () => {
     for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"] as const) {
       expect(files[role], `${role} generated file carries the policy`).toContain("src/scratch.ts");
     }
+    const effectiveInstructions = `${resolved.roles.implementer.promptText}\n${files.implementer}`;
+    // Authorized edits to repository source remain in scope; scratch only
+    // confines transient/generated output and is never a staging location.
+    expect(effectiveInstructions).toContain("does not restrict intentional edits to authorized repository code");
+    expect(effectiveInstructions).toContain("confine transient/generated artifacts");
+    expect(effectiveInstructions).toContain("scratch artifacts are never staged");
+    expect(effectiveInstructions).toContain("human authorization");
+    expect(effectiveInstructions).toContain("editing files does not authorize staging");
     // Non-MCP roles keep their own prompts (no shared MCP block) but carry a
     // concise confinement pointer where delegation/confinement is relevant.
     for (const role of ["scientist", "researcher", "writer", "archivist"] as const) {
@@ -48,7 +56,7 @@ describe("T004 workspace execution policy integration", () => {
   it("survives handoff: child-task instructions forbid bypass by asking another agent", async () => {
     const worktree = await scratchWorktree("policy-handoff");
     const resolved = resolveAriaConfig(worktree);
-    expect(resolved.roles.coder.promptText).toContain("survives handoff");
+    expect(resolved.roles.coder.promptText).toContain("delegation cannot expand authorization");
     expect(resolved.roles.coder.promptText).toContain("no bypass by asking another agent");
     expect(resolved.roles.scientist.promptText).toContain("survives delegation");
     expect(resolved.roles.writer.promptText).toContain("survives delegation");
