@@ -176,6 +176,7 @@ const DISCOVERED_MODELS: ModelDiscovery = {
       modelID: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
       variants: [],
+      variantsObservable: true,
     },
     {
       id: "openai/gpt-5.6-terra",
@@ -233,6 +234,7 @@ function makeManyModels(count: number): ModelDiscovery {
         modelID: `model-${number}`,
         name: `Model ${number}`,
         variants: [],
+        variantsObservable: true,
       };
     }),
   };
@@ -248,6 +250,7 @@ const WITH_LUNA_MODELS: ModelDiscovery = {
       modelID: "gpt-5.6-luna",
       name: "GPT 5.6 Luna",
       variants: [],
+      variantsObservable: true,
     },
   ],
 };
@@ -373,11 +376,17 @@ describe("parseModelVerbose", () => {
 
 describe("discoverAvailableModels", () => {
   it("discovers models with plain opencode models and leaves variant capability unknown", async () => {
-    execMocks.execFile.mockImplementation(
-      (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
-        callback(null, PLAIN_MODELS_OUTPUT, "");
-      },
-    );
+    execMocks.execFile
+      .mockImplementationOnce(
+        (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+          callback(null, PLAIN_MODELS_OUTPUT, "");
+        },
+      )
+      .mockImplementationOnce(
+        (_file: string, _args: string[], _options: unknown, callback: ExecCallback) => {
+          callback(new Error("model metadata unavailable"));
+        },
+      );
 
     const discovered = await discoverAvailableModels("/tmp/example-worktree");
 
@@ -392,16 +401,20 @@ describe("discoverAvailableModels", () => {
       expect(model.variants).toEqual([]);
       expect(model.variantsObservable).toBeUndefined();
     }
-    expect(execMocks.execFile).toHaveBeenCalledTimes(1);
+    expect(execMocks.execFile).toHaveBeenCalledTimes(2);
     expect(execMocks.execFile).toHaveBeenCalledWith(
       "opencode",
       ["models"],
       expect.objectContaining({ cwd: "/tmp/example-worktree" }),
       expect.any(Function),
     );
-    for (const call of execMocks.execFile.mock.calls) {
-      expect(call[1]).toEqual(["models"]);
-    }
+    expect(execMocks.execFile).toHaveBeenNthCalledWith(
+      2,
+      "opencode",
+      ["api", "--standalone", "model.list"],
+      expect.objectContaining({ cwd: "/tmp/example-worktree" }),
+      expect.any(Function),
+    );
   });
 
   it("fails cleanly when the opencode CLI exits non-zero", async () => {

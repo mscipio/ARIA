@@ -43,8 +43,10 @@ export declare function parseModelList(stdout: string): AvailableModel[];
  * reported variant IDs.
  *
  * Retained as a tested parser only: OpenCode 2.0.26 rejects `--verbose`
- * ("Unrecognized flag: --verbose"), so discovery uses plain
- * `opencode models` and never assumes `--verbose` support.
+ * ("Unrecognized flag: --verbose"), and v2.1.2 `opencode models --help`
+ * exposes no metadata flag, so discovery uses plain `opencode models`
+ * plus the verified `opencode api --standalone model.list` surface and
+ * never assumes `--verbose` support.
  */
 export declare function parseModelVerbose(stdout: string): AvailableModel[];
 /**
@@ -52,15 +54,25 @@ export declare function parseModelVerbose(stdout: string): AvailableModel[];
  * worktree.
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
- * shells out to plain `opencode models` for the usable identifier list.
- * OpenCode 2.0.26 offers no supported `--verbose` variant-metadata
- * surface (verified: the flag is rejected with "Unrecognized flag:
- * --verbose"), so variant capability stays unestablished here (`variants`
- * is empty and `variantsObservable` is absent); doctor reports a
- * configured variant as unknown rather than verified or failed.
+ * shells out to plain `opencode models` for the usable identifier list and
+ * overlays variant metadata from the verified
+ * `opencode api --standalone model.list` surface (`GET /api/model`;
+ * `GET /api/provider` returns empty, so it is not used). Each API entry's
+ * ARIA identifier is normalized as `providerID + '/' + id`, preserving
+ * model ID semantics, and its `variants[]` IDs become the model's reported
+ * variant IDs. An API-reported (even empty) `variants` array marks the
+ * model observable (`variantsObservable: true`); identifiers absent from
+ * the API, or malformed/unavailable API output, keep the plain-list
+ * unobservable fallback (`variants` empty, `variantsObservable` absent) so
+ * unknown metadata is never confirmed as no variants. Doctor reports an
+ * unobservable model's configured variant as unknown rather than verified
+ * or failed.
  *
- * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
- * configuration untouched.
+ * CLI failures of the plain list (non-zero exit or no output) fail
+ * discovery cleanly and leave configuration untouched. A failed or
+ * malformed variant-metadata call falls back to the usable plain list
+ * (still safe: the chooser below never drops an existing variant for an
+ * unobservable model).
  */
 export declare function discoverAvailableModels(worktree: string): Promise<ModelDiscovery>;
 /**

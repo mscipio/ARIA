@@ -61,10 +61,10 @@ function isolatedChildEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return { ...rest, ...extraRest, ...cliSandboxEnv };
 }
 
-async function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runCli(args: string[], env: NodeJS.ProcessEnv = {}, cwd = repoRoot): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
     const result = await execFileAsync(process.execPath, [binPath, ...args], {
-      cwd: repoRoot,
+      cwd,
       env: isolatedChildEnv(env),
       timeout: CLI_TIMEOUT_MS,
       maxBuffer: 16 * 1024 * 1024,
@@ -751,7 +751,7 @@ describe("bin/aria.mjs models dispatch (T002 surface gating for T003)", () => {
     // Sandboxed HOME plus no repo-root project overrides: the packaged
     // defaults render, so one representative row proves the table reflects
     // the resolved configuration through the public `models` form.
-    const result = await runCli(["models"]);
+    const result = await runCli(["models"], {}, cliSandboxEnv.HOME);
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("role  model  effort");

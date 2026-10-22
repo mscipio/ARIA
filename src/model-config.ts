@@ -68,10 +68,13 @@ function describeDiscoveryError(error: unknown): string {
 }
 
 // `opencode models` prints one usable model identifier per line. Verified
-// against OpenCode 2.0.26: `opencode models --verbose` is rejected
-// ("Unrecognized flag: --verbose", exit 1), so there is no supported
-// `--verbose` variant-metadata surface. Discovery never assumes one:
-// variant capability stays unestablished (see `discoverAvailableModels`).
+// against OpenCode v2.1.2: `opencode models --help` exposes no
+// metadata/verbose flag, so variant metadata comes from the verified
+// `opencode api --standalone model.list` surface (`GET /api/model`), whose
+// `data[]` entries carry `{id, providerID, name, variants: [{id}]}`.
+// Discovery overlays that metadata onto the plain list; identifiers absent
+// from the API (or malformed API output) stay unobservable (see
+// `discoverAvailableModels`).
 const MODEL_ID_PATTERN = /^[^/\s]+\/[^/\s]+(?:\/[^/\s]+)*$/;
 
 function splitModelIdentifier(id: string): { providerID: string; modelID: string } {
@@ -112,6 +115,73 @@ export function parseModelList(stdout: string): AvailableModel[] {
   return models;
 }
 
+interface ModelListApiVariant {
+  id?: unknown;
+}
+
+interface ModelListApiEntry {
+  id?: unknown;
+  providerID?: unknown;
+  name?: unknown;
+  variants?: unknown;
+}
+
+/**
+ * Parse verified `opencode api --standalone model.list` output
+ * (`GET /api/model` shape: `{location, data: [{id, providerID, name,
+ * enabled, variants: [{id, settings}]}]}`) into variant metadata keyed by
+ * the normalized ARIA identifier (`providerID + '/' + id`, preserving model
+ * ID semantics). Only entries with string `id`/`providerID` and an array
+ * `variants` are returned; an empty array is a valid observable no-variant
+ * entry. Malformed payloads yield an empty map so callers keep the model's
+ * plain-list unobservable fallback instead of confirming no variants.
+ */
+function parseModelListApi(stdout: string): Map<string, { variants: string[]; name: string | undefined }> {
+  const byId = new Map<string, { variants: string[]; name: string | undefined }>();
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout) as unknown;
+  } catch {
+    return byId;
+  }
+  const data = typeof payload === "object" && payload !== null && Array.isArray((payload as { data?: unknown }).data)
+    ? (payload as { data: unknown[] }).data
+    : Array.isArray(payload)
+      ? payload
+      : [];
+  for (const entry of data) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const { id, providerID, name, variants } = entry as ModelListApiEntry;
+    if (typeof id !== "string" || id.trim().length === 0) continue;
+    if (typeof providerID !== "string" || providerID.trim().length === 0) continue;
+    if (!Array.isArray(variants)) continue;
+    const ariaId = `${providerID}/${id}`;
+    if (!MODEL_ID_PATTERN.test(ariaId)) continue;
+    const variantIds: string[] = [];
+    let malformedVariant = false;
+    for (const variant of variants as unknown[]) {
+      const variantId = typeof variant === "string"
+        ? variant
+        : typeof variant === "object" && variant !== null
+          ? (variant as ModelListApiVariant).id
+          : undefined;
+      if (typeof variantId !== "string" || variantId.trim().length === 0) {
+        malformedVariant = true;
+        break;
+      }
+      variantIds.push(variantId);
+    }
+    // Any malformed variant element invalidates the entry: omit it so the
+    // model stays unobservable instead of confirming an empty list.
+    if (malformedVariant) continue;
+    byId.set(ariaId, {
+      variants: variantIds,
+      name: typeof name === "string" && name.trim().length > 0 ? name : undefined,
+    });
+  }
+  return byId;
+}
+
 interface VerboseModelInfo {
   name?: unknown;
   variants?: unknown;
@@ -148,8 +218,10 @@ function verboseModelFromBlock(id: string, jsonText: string): AvailableModel | u
  * reported variant IDs.
  *
  * Retained as a tested parser only: OpenCode 2.0.26 rejects `--verbose`
- * ("Unrecognized flag: --verbose"), so discovery uses plain
- * `opencode models` and never assumes `--verbose` support.
+ * ("Unrecognized flag: --verbose"), and v2.1.2 `opencode models --help`
+ * exposes no metadata flag, so discovery uses plain `opencode models`
+ * plus the verified `opencode api --standalone model.list` surface and
+ * never assumes `--verbose` support.
  */
 export function parseModelVerbose(stdout: string): AvailableModel[] {
   const lines = stdout.split("\n");
@@ -191,15 +263,25 @@ export function parseModelVerbose(stdout: string): AvailableModel[] {
  * worktree.
  *
  * `aria setup` is a standalone CLI without a PluginInput client, so this
- * shells out to plain `opencode models` for the usable identifier list.
- * OpenCode 2.0.26 offers no supported `--verbose` variant-metadata
- * surface (verified: the flag is rejected with "Unrecognized flag:
- * --verbose"), so variant capability stays unestablished here (`variants`
- * is empty and `variantsObservable` is absent); doctor reports a
- * configured variant as unknown rather than verified or failed.
+ * shells out to plain `opencode models` for the usable identifier list and
+ * overlays variant metadata from the verified
+ * `opencode api --standalone model.list` surface (`GET /api/model`;
+ * `GET /api/provider` returns empty, so it is not used). Each API entry's
+ * ARIA identifier is normalized as `providerID + '/' + id`, preserving
+ * model ID semantics, and its `variants[]` IDs become the model's reported
+ * variant IDs. An API-reported (even empty) `variants` array marks the
+ * model observable (`variantsObservable: true`); identifiers absent from
+ * the API, or malformed/unavailable API output, keep the plain-list
+ * unobservable fallback (`variants` empty, `variantsObservable` absent) so
+ * unknown metadata is never confirmed as no variants. Doctor reports an
+ * unobservable model's configured variant as unknown rather than verified
+ * or failed.
  *
- * CLI failures (non-zero exit or no output) fail discovery cleanly and leave
- * configuration untouched.
+ * CLI failures of the plain list (non-zero exit or no output) fail
+ * discovery cleanly and leave configuration untouched. A failed or
+ * malformed variant-metadata call falls back to the usable plain list
+ * (still safe: the chooser below never drops an existing variant for an
+ * unobservable model).
  */
 export async function discoverAvailableModels(worktree: string): Promise<ModelDiscovery> {
   const listResult = await runOpencode(["models"], worktree).catch((error: unknown) => {
@@ -212,6 +294,22 @@ export async function discoverAvailableModels(worktree: string): Promise<ModelDi
   const models = parseModelList(listResult.stdout);
   if (models.length === 0) {
     throw new ModelDiscoveryError("opencode models returned no usable models");
+  }
+  // Variant metadata overlay: private-instance call, no packages or
+  // persistent service needed. Failures fall back to the usable plain list.
+  try {
+    const apiResult = await runOpencode(["api", "--standalone", "model.list"], worktree);
+    const metadata = parseModelListApi(apiResult.stdout);
+    for (const model of models) {
+      const meta = metadata.get(model.id);
+      if (!meta) continue;
+      model.variants = meta.variants;
+      model.variantsObservable = true;
+      if (meta.name !== undefined) model.name = meta.name;
+    }
+  } catch {
+    // Keep the plain-list unobservable fallback; never confirm no variants
+    // from unavailable metadata.
   }
   return { models };
 }
@@ -533,9 +631,13 @@ async function ask<T>(
 }
 
 /**
- * Compact variant selection after a model is chosen: Enter keeps the model
- * with no variant (clearing any previous one), a number selects a reported
- * variant.
+ * Compact variant selection after a model is chosen: a number selects a
+ * reported variant, Enter keeps the model with no variant override. An
+ * observable empty variant list (API-reported `variants: []`) confirms the
+ * model has no variants, so a previous variant is safely cleared. An
+ * unobservable model (no API metadata) never confirms no variants, so the
+ * selection fails closed without touching `pending` (configureModels then
+ * writes nothing).
  */
 async function chooseVariant(
   model: AvailableModel,
@@ -545,6 +647,10 @@ async function chooseVariant(
   output: ModelConfigureOutput,
 ): Promise<"done" | "failed"> {
   if (model.variants.length === 0) {
+    if (model.variantsObservable !== true) {
+      output("  Variant metadata unavailable; configuration left unchanged.");
+      return "failed";
+    }
     const entry: RoleOverride = { ...pending[role], model: model.id };
     delete entry.variant;
     pending[role] = entry;

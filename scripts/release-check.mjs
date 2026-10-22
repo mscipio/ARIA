@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import process from "node:process";
 
 // Canonical release gate (T001). Deterministic order:
@@ -32,10 +31,6 @@ function runNpm(args, options = { stdio: "inherit" }) {
 
 function run(cmd, args) {
   execFileSync(cmd, args, { stdio: "inherit" });
-}
-
-function capture(cmd, args, options = {}) {
-  return execFileSync(cmd, args, { encoding: "utf8", ...options });
 }
 
 function stage(label, fn) {
@@ -73,8 +68,6 @@ function fail(message) {
   process.exit(1);
 }
 
-let packageVersion = "";
-
 stage("1/7 version/package sanity", () => {
   let pkg;
   try {
@@ -83,7 +76,7 @@ stage("1/7 version/package sanity", () => {
     fail(`cannot read package.json: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (pkg.name !== "aria") fail(`package name must be "aria", got ${JSON.stringify(pkg.name)}`);
-  if (typeof pkg.version !== "string" || !/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+  if (typeof pkg.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version)) {
     fail(`package version must be semver x.y.z, got ${JSON.stringify(pkg.version)}`);
   }
   if (pkg.private !== false) fail(`package must set "private": false for publishing`);
@@ -99,27 +92,32 @@ stage("1/7 version/package sanity", () => {
   if (typeof pkg.engines?.node !== "string" || pkg.engines.node.length === 0) {
     fail(`package.json "engines.node" must be declared`);
   }
-  packageVersion = pkg.version;
   console.log(`release-check: package aria@${pkg.version}`);
 });
 
 stage("2/7 compile and verify dist sync", () => {
-  // Snapshot pre-build tracked dist state BEFORE compile deletes/rebuilds
-  // it: a hand-edited (stale) dist that rebuilds to HEAD would otherwise
-  // silently repair and pass the post-build check. Any pre-build dirtiness
-  // must FAIL (never silently repair and pass).
-  const before = capture("git", ["status", "--porcelain", "--", "dist/"]).trim();
+  // Compare the complete tracked diff from HEAD and untracked dist contents
+  // before/after compile. Staged RC dist is valid when compile leaves it intact.
+  const captureDistState = () => {
+    const tracked = execFileSync("git", ["diff", "--binary", "HEAD", "--", "dist/"]);
+    const untrackedPaths = execFileSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "-z", "--", "dist/"],
+    )
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+    const untracked = untrackedPaths.map((path) => [
+      path,
+      readFileSync(join(repoRoot, path)).toString("base64"),
+    ]);
+    return JSON.stringify({ tracked: tracked.toString("base64"), untracked });
+  };
+  const before = captureDistState();
   runNpm(["run", "compile"]);
-  // The compile above rebuilds dist/ from src/. If the tracked dist/ was
-  // stale, the rebuild changes tracked files — which must FAIL the gate
-  // (never silently repair and pass). t013 dist-parity coverage in the
-  // focused subset is the second stale-dist detector.
-  const after = capture("git", ["status", "--porcelain", "--", "dist/"]).trim();
-  if (before.length > 0) {
-    fail(`tracked dist/ was stale before compile (repaired by rebuild, not passed):\n${before}`);
-  }
-  if (after.length > 0) {
-    fail(`tracked dist/ is stale (compile changed tracked files):\n${after}`);
+  const after = captureDistState();
+  if (before !== after) {
+    fail("dist/ changed during compile (precompile state was not synchronized with src/)");
   }
 });
 
@@ -141,38 +139,8 @@ stage("6/7 focused lifecycle/hotfix Vitest subset", () => {
   runNpm(["test", "--", ...FOCUSED_TESTS]);
 });
 
-stage("7/7 npm pack + isolated install + bare packaged aria smoke", () => {
-  const packed = JSON.parse(capture(npm, [...npmPrefix, "pack", "--json"], { cwd: repoRoot }));
-  const entries = Array.isArray(packed) ? packed : Object.values(packed);
-  const tarballName = entries[0]?.filename;
-  if (!tarballName) fail("npm pack did not return a tarball");
-  const tarball = join(repoRoot, tarballName);
-  // Workspace policy note (canonical `src/scratch.ts`): this isolated prefix
-  // is an explicit external-tool exception (npm install staging), not an
-  // ARIA-controlled scratch output.
-  const installRoot = mkdtempSync(join(tmpdir(), "aria-release-"));
-  if (!resolve(installRoot).startsWith(resolve(tmpdir()))) fail(`install prefix escaped temp: ${installRoot}`);
-  const smokeEnv = { ...process.env, HOME: installRoot, USERPROFILE: installRoot };
-  try {
-    runNpm(["init", "--yes"], { cwd: installRoot, stdio: "ignore" });
-    runNpm(["install", "--ignore-scripts", "--no-save", tarball], { cwd: installRoot, stdio: "inherit" });
-    const ariaBin = join(installRoot, "node_modules", ".bin", "aria");
-    const reported = capture(process.execPath, [ariaBin, "--version"], {
-      cwd: installRoot,
-      env: smokeEnv,
-    }).trim();
-    if (reported !== packageVersion) {
-      fail(`bare aria --version mismatch: got ${JSON.stringify(reported)}, expected ${JSON.stringify(packageVersion)}`);
-    }
-    const help = capture(process.execPath, [ariaBin, "--help"], { cwd: installRoot, env: smokeEnv });
-    if (!help.includes("aria setup") || !help.includes("aria doctor") || !help.includes("aria upgrade")) {
-      fail("bare aria --help is missing the setup/doctor/upgrade surface");
-    }
-    console.log(`release-check: bare packaged aria --version ${reported}`);
-  } finally {
-    rmSync(tarball, { force: true });
-    rmSync(installRoot, { recursive: true, force: true });
-  }
+stage("7/7 npm pack + isolated install + packaged aria smoke", () => {
+  runNpm(["run", "smoke:package"]);
 });
 
 console.log("release-check: PASS - all stages green");

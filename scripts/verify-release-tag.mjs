@@ -122,7 +122,7 @@ stage("1/6 tag→commit identity", () => {
   } catch {
     fail(`package.json at tag ${JSON.stringify(tag)} is not valid JSON`);
   }
-  if (typeof pkg.version !== "string" || !/^\d+\.\d+\.\d+$/.test(pkg.version)) {
+  if (typeof pkg.version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version)) {
     fail(`tagged package version must be semver x.y.z, got ${JSON.stringify(pkg.version)}`);
   }
   expectedVersion = pkg.version;

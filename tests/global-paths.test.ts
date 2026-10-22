@@ -48,6 +48,7 @@ const NO_VARIANT_MODELS: ModelDiscovery = {
       modelID: "deepseek-v4-pro",
       name: "DeepSeek V4 Pro",
       variants: [],
+      variantsObservable: true,
     },
     {
       id: "openai/gpt-5.6-terra",
