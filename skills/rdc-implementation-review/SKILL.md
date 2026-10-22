@@ -12,6 +12,8 @@ Use this skill for independent post-implementation verification.
 
 ## Requirements assessment
 
+When an approved persisted plan governs the implementation, preserve the full plan-based RDC review:
+
 1. Read the approved persisted plan in full.
 2. Enumerate every task and every explicit acceptance criterion.
 3. Verify each criterion against the actual changed code and relevant runtime/test evidence.
@@ -20,6 +22,8 @@ Use this skill for independent post-implementation verification.
    - `FAIL`,
    - `INSUFFICIENT EVIDENCE`.
 5. Never return an overall clean verdict while an explicit approved criterion remains unverified or unsatisfied.
+
+When no approved persisted plan governs a fast-path implementation, assess it against the original user request instead: identify the requested behavior and affected behavior, inspect the implementation for that behavior, and assess relevant verification evidence. Classify the requested behavior as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`; do not invent plan tasks or acceptance criteria, and do not require a persisted plan merely to review the fast path.
 
 ## Code review focus
 
@@ -36,6 +40,8 @@ Prioritize concrete:
 - missing verification for meaningful approved behavior.
 
 Every finding must have a credible trigger, impact, repository evidence, and smallest plausible fix. Do not report speculative concerns.
+
+Separate material blockers from non-blocking suggestions. Report useful non-blocking improvements, but do not delay acceptance or turn them into blockers; preserve independent review where the full RDC workflow or meaningful risk requires it, without repeating a valid completed review in later delivery steps.
 
 ## Provenance baseline
 

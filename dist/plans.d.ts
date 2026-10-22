@@ -10,7 +10,7 @@ export type SharedPlan = {
     version: 3;
     id: string;
     revision: number;
-    status: "active" | "closed";
+    status: "active" | "closed" | "cancelled";
     approval: PlanApproval;
     title: string;
     createdAt: string;
@@ -27,6 +27,10 @@ export declare function approvePlan(worktree: string, expectedPlanID: string, ex
 export declare function updatePlanTask(worktree: string, expectedPlanID: string, expectedRevision: number, taskID: string, status: PlanTaskStatus, evidence?: string, signal?: AbortSignal): Promise<SharedPlan>;
 export declare function addPlanTasks(worktree: string, expectedPlanID: string, expectedRevision: number, tasks: string[], signal?: AbortSignal): Promise<SharedPlan>;
 export declare function remediatePlanTasks(worktree: string, expectedPlanID: string, expectedRevision: number, tasks: string[], signal?: AbortSignal): Promise<SharedPlan>;
+export declare function cancelPlan(worktree: string, expectedPlanID: string, expectedRevision: number, reason: string, signal?: AbortSignal): Promise<{
+    plan: SharedPlan;
+    archived: string;
+}>;
 export declare function replacePlan(worktree: string, expectedPlanID: string, expectedRevision: number, title: string, tasks: string[], signal?: AbortSignal): Promise<SharedPlan>;
 export declare function closePlan(worktree: string, expectedPlanID: string, expectedRevision: number, signal?: AbortSignal): Promise<{
     plan: SharedPlan;

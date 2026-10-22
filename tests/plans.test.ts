@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   addPlanTasks,
   approvePlan,
+  cancelPlan,
   closePlan,
   createPlan,
   readActivePlan,
@@ -171,6 +172,7 @@ describe("shared Markdown plan", () => {
 
     const remediated = await remediatePlanTasks(root, completed.id, completed.revision, ["Fix bug"]);
     expect(remediated.approval).toBe("approved");
+    expect(remediated.revision).toBe(completed.revision + 1);
     expect(remediated.tasks).toHaveLength(2);
     expect(remediated.tasks[1]?.text).toBe("Fix bug");
   });
@@ -182,12 +184,61 @@ describe("shared Markdown plan", () => {
       .rejects.toThrow(/must be approved/);
   });
 
-  it("remediate rejects while existing tasks are incomplete", async () => {
+  it("remediate appends remediation while preserving existing incomplete task history", async () => {
     const root = await project();
     const plan = await createPlan(root, "Remediate incomplete", ["A", "B"]);
     const approved = await approvePlan(root, plan.id, plan.revision);
-    await expect(remediatePlanTasks(root, approved.id, approved.revision, ["Fix"]))
-      .rejects.toThrow(/All existing tasks must be completed/);
+    const completed = await updatePlanTask(root, approved.id, approved.revision, "T001", "completed", "verified A");
+    const started = await updatePlanTask(root, completed.id, completed.revision, "T002", "in_progress", "started B");
+    const remediated = await remediatePlanTasks(root, started.id, started.revision, ["Fix"]);
+    expect(remediated.tasks.map(({ id, text, status, evidence }) => ({ id, text, status, evidence }))).toEqual([
+      { id: "T001", text: "A", status: "completed", evidence: "verified A" },
+      { id: "T002", text: "B", status: "in_progress", evidence: "started B" },
+      { id: "T003", text: "Fix", status: "pending", evidence: undefined },
+    ]);
+    expect(remediated.tasks.slice(0, 2)).toEqual(started.tasks);
+    expect(remediated.approval).toBe("approved");
+    expect(remediated.revision).toBe(started.revision + 1);
+  });
+
+  it("cancels by archiving the complete plan history and allows a new pending plan", async () => {
+    const root = await project();
+    const plan = await createPlan(root, "Superseded", ["Unfinished task"]);
+    const approved = await approvePlan(root, plan.id, plan.revision);
+    const started = await updatePlanTask(root, approved.id, approved.revision, "T001", "in_progress", "started");
+    const cancelled = await cancelPlan(root, started.id, started.revision, "User directed a replacement");
+    const archive = await readFile(cancelled.archived, "utf8");
+
+    expect(cancelled.plan.status).toBe("cancelled");
+    expect(cancelled.plan.revision).toBe(started.revision + 1);
+    expect(cancelled.plan.id).toBe(plan.id);
+    expect(cancelled.plan.approval).toBe(started.approval);
+    expect(cancelled.plan.tasks).toEqual(started.tasks);
+    expect(archive).toContain(`Plan ID: ${plan.id}`);
+    expect(archive).toContain("Status: **cancelled**");
+    expect(archive).toContain(`Revision: **${started.revision + 1}**`);
+    expect(archive).toContain("Outcome: cancelled");
+    expect(archive).toContain("Plan status before cancellation: active");
+    expect(archive).toContain(`Revision before cancellation: ${started.revision}`);
+    expect(archive).toContain("Approval: approved");
+    expect(archive).toContain("- [~] **T001** Unfinished task");
+    expect(archive).toContain("Reason: User directed a replacement");
+    expect(await readActivePlan(root)).toBeNull();
+    const next = await createPlan(root, "Replacement", ["New work"]);
+    expect(next.approval).toBe("pending");
+  });
+
+  it("keeps the active plan intact when cancellation archive creation fails", async () => {
+    const root = await project();
+    const plan = await createPlan(root, "Archive conflict", ["Task"]);
+    const archiveDirectory = join(root, ".aria/rdc", "plans");
+    await mkdir(archiveDirectory);
+    await writeFile(join(archiveDirectory, `${plan.id}.md`), "unrelated archive", "utf8");
+
+    await expect(cancelPlan(root, plan.id, plan.revision, "Superseded by direction"))
+      .rejects.toThrow(/archive already exists/);
+    expect((await readActivePlan(root))?.plan).toEqual(plan);
+    expect(await readFile(join(archiveDirectory, `${plan.id}.md`), "utf8")).toBe("unrelated archive");
   });
 
   it("remediate appends tasks and keeps approval", async () => {

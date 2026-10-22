@@ -7,6 +7,7 @@ import { resolveAriaConfig } from "./overrides.js";
 import {
   addPlanTasks,
   approvePlan,
+  cancelPlan,
   closePlan,
   createPlan,
   readActivePlan,
@@ -103,7 +104,7 @@ function pluginOptions(options: unknown): AriaPluginOptions {
 }
 
 const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>> = {
-  coder: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
+  coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
   planner: new Set(["get", "create"]),
   architect: new Set(["get", "replace"]),
   reviewer: new Set(["get"]),
@@ -741,14 +742,14 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
         description: "Read or update the shared project plan in .aria/rdc/TASKS.md.",
         args: {
           action: tool.schema
-            .enum(["create", "get", "replace", "add", "remediate", "update", "approve", "close"])
+            .enum(["create", "get", "replace", "add", "remediate", "cancel", "update", "approve", "close"])
             .describe("Plan action to perform"),
           title: tool.schema.string().optional().describe("Plan title for create or replace"),
           tasks: tool.schema.array(tool.schema.string()).optional().describe("Task texts for create, replace, add, or remediate"),
           expectedPlanID: tool.schema
             .string()
             .optional()
-            .describe("Plan id from get; required by replace, update, add, remediate, approve, and close"),
+            .describe("Plan id from get; required by replace, update, add, remediate, cancel, approve, and close"),
           expectedRevision: tool.schema.number().int().positive().optional().describe("Current plan revision"),
           taskID: tool.schema.string().optional().describe("Task id for update, e.g. T001"),
           status: tool.schema
@@ -756,6 +757,7 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
             .optional()
             .describe("New task status for update"),
           evidence: tool.schema.string().optional().describe("Verification evidence when completing a task"),
+          reason: tool.schema.string().optional().describe("Required reason when cancelling or superseding a plan"),
         },
         async execute(args, context) {
           const title = planToolTitle(args);
@@ -799,6 +801,19 @@ export const ariaPlugin: Plugin = async (input, options = {}) => {
                 return ok(formatPlanOutput(
                   await remediatePlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort),
                 ));
+              }
+              case "cancel": {
+                if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for cancel");
+                if (args.expectedRevision === undefined) return formatToolError("expectedRevision is required for cancel");
+                if (!args.reason) return formatToolError("reason is required for cancel");
+                const cancelled = await cancelPlan(
+                  root,
+                  args.expectedPlanID,
+                  args.expectedRevision,
+                  args.reason,
+                  context.abort,
+                );
+                return ok(`Cancelled plan ${cancelled.plan.id}. Archived to ${cancelled.archived}`);
               }
               case "update": {
                 if (!args.expectedPlanID) return formatToolError("expectedPlanID is required for update");

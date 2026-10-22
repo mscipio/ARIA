@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { getPackageRoot } from "./defaults.js";
 import { resolveAriaConfig } from "./overrides.js";
-import { addPlanTasks, approvePlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
+import { addPlanTasks, approvePlan, cancelPlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
 import { formatClosedPlanOutput, formatPlanOutput, formatToolError, planToolTitle, } from "./present.js";
 function stringField(value, key) {
     if (!value || typeof value !== "object")
@@ -80,7 +80,7 @@ function pluginOptions(options) {
     return configPath ? { configPath } : {};
 }
 const PLAN_ACTIONS_BY_ROLE = {
-    coder: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
+    coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
     planner: new Set(["get", "create"]),
     architect: new Set(["get", "replace"]),
     reviewer: new Set(["get"]),
@@ -635,14 +635,14 @@ export const ariaPlugin = async (input, options = {}) => {
                 description: "Read or update the shared project plan in .aria/rdc/TASKS.md.",
                 args: {
                     action: tool.schema
-                        .enum(["create", "get", "replace", "add", "remediate", "update", "approve", "close"])
+                        .enum(["create", "get", "replace", "add", "remediate", "cancel", "update", "approve", "close"])
                         .describe("Plan action to perform"),
                     title: tool.schema.string().optional().describe("Plan title for create or replace"),
                     tasks: tool.schema.array(tool.schema.string()).optional().describe("Task texts for create, replace, add, or remediate"),
                     expectedPlanID: tool.schema
                         .string()
                         .optional()
-                        .describe("Plan id from get; required by replace, update, add, remediate, approve, and close"),
+                        .describe("Plan id from get; required by replace, update, add, remediate, cancel, approve, and close"),
                     expectedRevision: tool.schema.number().int().positive().optional().describe("Current plan revision"),
                     taskID: tool.schema.string().optional().describe("Task id for update, e.g. T001"),
                     status: tool.schema
@@ -650,6 +650,7 @@ export const ariaPlugin = async (input, options = {}) => {
                         .optional()
                         .describe("New task status for update"),
                     evidence: tool.schema.string().optional().describe("Verification evidence when completing a task"),
+                    reason: tool.schema.string().optional().describe("Required reason when cancelling or superseding a plan"),
                 },
                 async execute(args, context) {
                     const title = planToolTitle(args);
@@ -697,6 +698,16 @@ export const ariaPlugin = async (input, options = {}) => {
                                 if (!args.tasks)
                                     return formatToolError("tasks are required for remediate");
                                 return ok(formatPlanOutput(await remediatePlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, context.abort)));
+                            }
+                            case "cancel": {
+                                if (!args.expectedPlanID)
+                                    return formatToolError("expectedPlanID is required for cancel");
+                                if (args.expectedRevision === undefined)
+                                    return formatToolError("expectedRevision is required for cancel");
+                                if (!args.reason)
+                                    return formatToolError("reason is required for cancel");
+                                const cancelled = await cancelPlan(root, args.expectedPlanID, args.expectedRevision, args.reason, context.abort);
+                                return ok(`Cancelled plan ${cancelled.plan.id}. Archived to ${cancelled.archived}`);
                             }
                             case "update": {
                                 if (!args.expectedPlanID)

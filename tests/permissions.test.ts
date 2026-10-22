@@ -27,6 +27,13 @@ function actionsFor(role: RoleName): string[] {
 }
 
 describe("T004 permission/model/delegation parity", () => {
+  it("authorizes plan cancellation for coder only", () => {
+    expect(authorizePlan({ sessionID: "test", agent: "coder" }, "cancel")).toBeNull();
+    for (const agent of ["planner", "architect", "reviewer"]) {
+      expect(authorizePlan({ sessionID: "test", agent }, "cancel")).not.toBeNull();
+    }
+  });
+
   it("never emits legacy V1 actions as V2 rules", () => {
     const roles: RoleName[] = [
       "coder",

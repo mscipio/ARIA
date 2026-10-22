@@ -30,9 +30,9 @@
  */
 export declare const PLAN_TOOL_NAME = "plan";
 export declare const PLAN_TOOL_DESCRIPTION = "Read or update the shared project plan in .aria/rdc/TASKS.md.";
-export declare const PLAN_TOOL_ACTIONS: readonly ["create", "get", "replace", "add", "remediate", "update", "approve", "close"];
+export declare const PLAN_TOOL_ACTIONS: readonly ["create", "get", "replace", "add", "remediate", "cancel", "update", "approve", "close"];
 export type PlanToolAction = (typeof PLAN_TOOL_ACTIONS)[number];
-/** V1 `PLAN_ACTIONS_BY_ROLE` preserved verbatim (coder has no `replace`). */
+/** Role-scoped plan actions; cancellation is explicitly coder-only. */
 export declare const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>>;
 /** V1 `authorizePlan` preserved verbatim (sessionID required, role auth). */
 export declare function authorizePlan(context: unknown, action: string): string | null;
@@ -64,6 +64,7 @@ export interface PlanToolInput {
     taskID?: string;
     status?: "pending" | "in_progress" | "completed" | "blocked";
     evidence?: string;
+    reason?: string;
 }
 export interface PlanToolContext {
     sessionID?: unknown;
@@ -92,6 +93,6 @@ export declare function createPlanTool(planRoot: string): {
     input: Record<string, unknown>;
     execute: (input: unknown, context: PlanToolContext) => Promise<PlanToolResult>;
 };
-/** Is the action string one of the eight supported plan actions? */
+/** Is the action string one of the supported plan actions? */
 export declare function isPlanToolAction(value: unknown): value is PlanToolAction;
 //# sourceMappingURL=plan-tool.d.ts.map

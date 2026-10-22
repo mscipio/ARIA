@@ -22,6 +22,8 @@ export function planToolTitle(args: {
       return args.title ? `Replace plan · ${args.title}` : "Replace plan";
     case "close":
       return "Archive plan";
+    case "cancel":
+      return "Cancel plan";
     case "add":
       return "Add plan tasks";
     case "remediate":

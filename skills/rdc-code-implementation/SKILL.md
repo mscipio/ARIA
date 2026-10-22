@@ -23,6 +23,10 @@ Use this skill when implementing an approved task.
 9. Diagnose failures and distinguish implementation defects from pre-existing or environmental failures.
 10. Finish the allowed implementation when feasible; do not return a plan instead of coding.
 
+## Fast-path scope
+
+The Phase 1 fast path excludes UI/UX implementation. Do not add or change user-interface or user-experience behavior as part of a Phase 1 fast-path implementation; UI/UX work remains subject to the applicable full RDC requirements.
+
 ## MCP use
 
 - CodeGraph: navigation, references, dependencies, impact.

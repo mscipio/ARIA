@@ -63,7 +63,7 @@ function parsePlan(markdown) {
         typeof value.revision !== "number" ||
         !Number.isInteger(value.revision) ||
         value.revision < 1 ||
-        (value.status !== "active" && value.status !== "closed") ||
+        (value.status !== "active" && value.status !== "closed" && value.status !== "cancelled") ||
         (value.approval !== "pending" && value.approval !== "approved") ||
         typeof value.title !== "string" ||
         typeof value.createdAt !== "string" ||
@@ -327,9 +327,6 @@ export async function remediatePlanTasks(worktree, expectedPlanID, expectedRevis
         requireActive(plan);
         requirePlanCas(plan, expectedPlanID, expectedRevision);
         requireApproved(plan);
-        if (plan.tasks.some((task) => task.status !== "completed")) {
-            throw new Error("All existing tasks must be completed before adding remediation tasks");
-        }
         if (plan.tasks.length + tasks.length > MAX_TASKS)
             throw new Error("TASKS.md cannot contain more than 100 tasks");
         const start = plan.tasks.length + 1;
@@ -342,6 +339,54 @@ export async function remediatePlanTasks(worktree, expectedPlanID, expectedRevis
         plan.updatedAt = new Date().toISOString();
         await writePlan(file.root, file.path, plan, signal);
         return plan;
+    }, signal);
+}
+export async function cancelPlan(worktree, expectedPlanID, expectedRevision, reason, signal) {
+    const normalizedReason = line(reason, "Cancellation reason");
+    const file = await activePlanFile(worktree);
+    return withFileLock(file.path, async () => {
+        const plan = await readUnlocked(file.path);
+        if (!plan)
+            throw new Error("No active TASKS.md exists");
+        requireActive(plan);
+        requirePlanCas(plan, expectedPlanID, expectedRevision);
+        const cancelled = {
+            ...plan,
+            status: "cancelled",
+            revision: plan.revision + 1,
+            updatedAt: new Date().toISOString(),
+        };
+        const markdown = `${renderPlan(cancelled)}\n## Cancellation\n\n- Outcome: cancelled\n- Plan ID: ${cancelled.id}\n- Plan status before cancellation: ${plan.status}\n- Revision before cancellation: ${plan.revision}\n- Approval: ${cancelled.approval}\n- Reason: ${normalizedReason}\n`;
+        const archive = await safeProjectFile(worktree, `${ARIA_RDC_STATE_DIR}/plans/${plan.id}.md`, { createParent: true });
+        await verifySafeParent(archive.root, archive.path);
+        let archiveHandle;
+        let createdArchive = false;
+        try {
+            archiveHandle = await open(archive.path, "wx");
+            createdArchive = true;
+            await archiveHandle.writeFile(markdown, "utf8");
+            await archiveHandle.sync();
+            await archiveHandle.close();
+        }
+        catch (error) {
+            await archiveHandle?.close().catch(() => undefined);
+            if (createdArchive)
+                await unlink(archive.path).catch(() => undefined);
+            if (error.code === "EEXIST") {
+                throw new Error(`An archive already exists for plan ${plan.id}`);
+            }
+            throw error;
+        }
+        try {
+            if (signal?.aborted)
+                throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted");
+            await unlink(file.path);
+        }
+        catch (error) {
+            await unlink(archive.path).catch(() => undefined);
+            throw error;
+        }
+        return { plan: cancelled, archived: archive.path };
     }, signal);
 }
 export async function replacePlan(worktree, expectedPlanID, expectedRevision, title, tasks, signal) {

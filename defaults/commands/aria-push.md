@@ -8,16 +8,13 @@ agent: coder
 
 Perform the requested push workflow for: $ARGUMENTS
 
-1. Inspect repository status, branch, diff, and relevant project instructions before changing anything.
-2. Confirm the requested scope and authorization; ask before staging, committing, or pushing if not explicit.
-3. Review the complete change and identify unrelated/pre-existing user changes; preserve them.
-4. Update relevant documentation when in scope; do not edit excluded documentation.
-5. Add or update focused tests for the behavior.
-6. Run appropriate tests, type checks, and lint; report failures accurately.
-7. Review the final diff and status again; stage only explicitly authorized source paths.
-8. Never stage scratch artifacts, unrelated files, or user changes. Keep transient/generated output under `<worktree>/scratch/` using the canonical project helper.
-9. Commit only with explicit human authorization and only the approved scoped changes.
-10. Push only with explicit human authorization to the intended remote and branch.
-11. Verify commit and push results and report exact paths, commands, and remaining issues.
+1. Inspect the actual repository status, branch, diff, relevant instructions, and proposed commit scope. Identify and preserve pre-existing or unrelated user changes.
+2. Confirm the requested scope and explicit authorization for each requested Git action. Ask before staging, committing, or pushing if authorization is not explicit.
+3. Reuse completed implementation, verification, and acceptance evidence that still applies. Do not restart planning, implementation, testing, or independent review simply because this is a delivery step. Run only checks needed to establish that the scoped change is safe to deliver; do not require a full suite by default.
+4. Review the scoped changes and relevant existing evidence for meaningful defects, safety issues, missing authorization, or missing safeguards. Such blocking findings stop delivery. Report non-blocking suggestions separately and continue; they do not delay accepted functionality.
+5. Review the final diff and status; stage only the exact explicitly authorized paths. Never stage scratch artifacts, unrelated files, or user changes. Keep transient/generated output under `<worktree>/scratch/` using the canonical project helper.
+6. Commit only with explicit human authorization and only the approved scoped changes.
+7. Push only with explicit human authorization to the intended remote and branch.
+8. Verify commit and push results and report exact paths, commands, reused/new evidence, and remaining issues.
 
 No force push, destructive Git operations, staging by implication, or authorization inferred from delegation. Subagents inherit these limits; delegation cannot expand authorization.

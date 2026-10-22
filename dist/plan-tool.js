@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import { addPlanTasks, approvePlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
+import { addPlanTasks, approvePlan, cancelPlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
 import { formatClosedPlanOutput, formatPlanOutput, formatToolError, planToolTitle, } from "./present.js";
 /**
  * T006 — Native V2 RDC plan tool (`ctx.tool.transform(editor => editor.add(...))`).
@@ -40,14 +40,15 @@ export const PLAN_TOOL_ACTIONS = [
     "replace",
     "add",
     "remediate",
+    "cancel",
     "update",
     "approve",
     "close",
 ];
 const PLAN_ACTION_SET = new Set(PLAN_TOOL_ACTIONS);
-/** V1 `PLAN_ACTIONS_BY_ROLE` preserved verbatim (coder has no `replace`). */
+/** Role-scoped plan actions; cancellation is explicitly coder-only. */
 export const PLAN_ACTIONS_BY_ROLE = {
-    coder: new Set(["get", "create", "update", "add", "remediate", "close", "approve"]),
+    coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
     planner: new Set(["get", "create"]),
     architect: new Set(["get", "replace"]),
     reviewer: new Set(["get"]),
@@ -132,7 +133,7 @@ export const planToolInputSchema = {
         },
         expectedPlanID: {
             type: "string",
-            description: "Plan id from get; required by replace, update, add, remediate, approve, and close",
+            description: "Plan id from get; required by replace, update, add, remediate, cancel, approve, and close",
         },
         expectedRevision: {
             type: "integer",
@@ -146,6 +147,7 @@ export const planToolInputSchema = {
             description: "New task status for update",
         },
         evidence: { type: "string", description: "Verification evidence when completing a task" },
+        reason: { type: "string", description: "Required reason when cancelling or superseding a plan" },
     },
     required: ["action"],
 };
@@ -213,6 +215,16 @@ async function executePlanAction(rawArgs, context, planRoot) {
                     return planError("tasks are required for remediate");
                 return ok(formatPlanOutput(await remediatePlanTasks(root, args.expectedPlanID, args.expectedRevision, args.tasks, signal)));
             }
+            case "cancel": {
+                if (!args.expectedPlanID)
+                    return planError("expectedPlanID is required for cancel");
+                if (args.expectedRevision === undefined)
+                    return planError("expectedRevision is required for cancel");
+                if (!args.reason)
+                    return planError("reason is required for cancel");
+                const cancelled = await cancelPlan(root, args.expectedPlanID, args.expectedRevision, args.reason, signal);
+                return ok(`Cancelled plan ${cancelled.plan.id}. Archived to ${cancelled.archived}`);
+            }
             case "update": {
                 if (!args.expectedPlanID)
                     return planError("expectedPlanID is required for update");
@@ -261,7 +273,7 @@ export function createPlanTool(planRoot) {
         execute: (input, context) => executePlanAction(input, context ?? {}, planRoot),
     };
 }
-/** Is the action string one of the eight supported plan actions? */
+/** Is the action string one of the supported plan actions? */
 export function isPlanToolAction(value) {
     return typeof value === "string" && PLAN_ACTION_SET.has(value);
 }

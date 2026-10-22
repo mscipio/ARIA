@@ -89,9 +89,9 @@ describe("T006 native V2 plan tool", () => {
     expect(mcpSpy).not.toHaveBeenCalled();
   });
 
-  it("exposes the eight-action JSON-Schema input with action required", () => {
+  it("exposes the nine-action JSON-Schema input with action required", () => {
     expect([...PLAN_TOOL_ACTIONS].sort()).toEqual(
-      ["add", "approve", "close", "create", "get", "remediate", "replace", "update"].sort(),
+      ["add", "approve", "cancel", "close", "create", "get", "remediate", "replace", "update"].sort(),
     );
     const schema = planToolInputSchema as {
       properties?: { action?: { enum?: string[] } };
@@ -123,13 +123,14 @@ describe("T006 native V2 plan tool", () => {
       { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix"] },
       { action: "approve", expectedPlanID: planID, expectedRevision: revision },
       { action: "close", expectedPlanID: planID, expectedRevision: revision },
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "not authorized" },
     ]) {
       const denied = await tool.execute(args, toolContext("planner", `planner-${args.action}`));
       expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
       expect(denied.metadata.title).toBe("Error");
     }
 
-    // architect: get + replace allowed, create/update/add/close rejected, coder-only approve rejected
+    // architect: get + replace allowed; cancellation and other coder mutations are rejected
     const architectGet = await tool.execute({ action: "get" }, toolContext("architect", "architect-get"));
     expect(contentOf(architectGet)).toContain("Plan: ACL plan");
     const replaced = await tool.execute(
@@ -149,6 +150,7 @@ describe("T006 native V2 plan tool", () => {
       },
       { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
       { action: "close", expectedPlanID: planID, expectedRevision: revision },
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "not authorized" },
     ]) {
       const denied = await tool.execute(args, toolContext("architect", `architect-${args.action}`));
       expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
@@ -166,6 +168,7 @@ describe("T006 native V2 plan tool", () => {
       { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix"] },
       { action: "approve", expectedPlanID: planID, expectedRevision: revision },
       { action: "close", expectedPlanID: planID, expectedRevision: revision },
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "not authorized" },
     ]) {
       const denied = await tool.execute(args, toolContext("reviewer", `reviewer-${args.action}`));
       expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
@@ -239,6 +242,37 @@ describe("T006 native V2 plan tool", () => {
     );
     expect(contentOf(stale)).toMatch(/revision conflict/);
     expect(stale.metadata.title).toBe("Error");
+  });
+
+  it("allows coder-directed cancellation only with a reason and current CAS, then permits a new plan", async () => {
+    const root = await project();
+    const tool = createPlanTool(root);
+    const coder = (session: string) => toolContext("coder", session);
+    const created = await tool.execute({ action: "create", title: "Old", tasks: ["Work"] }, coder("create-old"));
+    const planID = planIDOf(contentOf(created));
+    const revision = revisionOf(contentOf(created));
+    const missingReason = await tool.execute(
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision }, coder("missing-reason"),
+    );
+    expect(contentOf(missingReason)).toMatch(/reason is required/);
+    const stale = await tool.execute(
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision + 1, reason: "User directed" },
+      coder("stale-cancel"),
+    );
+    expect(contentOf(stale)).toMatch(/revision conflict/);
+    const cancelled = await tool.execute(
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "User directed replacement" },
+      coder("cancel"),
+    );
+    expect(cancelled.metadata.title).toBe("Cancel plan");
+    expect(contentOf(cancelled)).toContain(`Cancelled plan ${planID}`);
+    const archive = await readFile(join(root, ".aria/rdc/plans", `${planID}.md`), "utf8");
+    expect(archive).toContain("Status: **cancelled**");
+    expect(archive).toContain(`Revision: **${revision + 1}**`);
+    expect(archive).toContain("Outcome: cancelled");
+    expect(archive).toContain("Reason: User directed replacement");
+    const next = await tool.execute({ action: "create", title: "New", tasks: ["New work"] }, coder("create-new"));
+    expect(contentOf(next)).toContain("Approval: pending");
   });
 
   it("guards filesystem-root and symlink-to-root startup locations", async () => {
@@ -417,6 +451,7 @@ describe("T006 native V2 plan tool", () => {
     expect(remediated.metadata.title).toBe("Add remediation tasks");
     expect(contentOf(remediated)).toContain("Approval: approved");
     expect(contentOf(remediated)).toContain("Fix blocking issue");
+    expect(revisionOf(contentOf(remediated))).toBe(revision + 1);
     revision = revisionOf(contentOf(remediated));
     const fixDone = await tool.execute(
       {
