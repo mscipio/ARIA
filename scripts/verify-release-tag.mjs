@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
+import { createUniqueScratchDir } from "../dist/scratch.js";
 
 // Short post-tag verifier (T004). Verifies provenance and essential packaged
 // startup for an immutable release tag WITHOUT rerunning behavioral
@@ -74,10 +74,11 @@ if (expectSha !== undefined && !/^[0-9a-f]{4,40}$/i.test(expectSha)) {
 let tagSha = "";
 let expectedVersion = "";
 
-// Isolated sandbox: every path below stays under one temp root. Created
+// Isolated sandbox: every path below stays under one canonical worktree
+// scratch run directory. Created
 // before any stage so failure cleanup (including unknown-tag failures) is
 // uniform; only the exact-tag install stage below may use the network.
-const sandboxRoot = mkdtempSync(join(tmpdir(), "aria-verify-"));
+const sandboxRoot = await createUniqueScratchDir(repoRoot, "release-verifier", "run");
 const installRoot = join(sandboxRoot, "install");
 const homeDir = join(sandboxRoot, "home");
 const xdgConfig = join(sandboxRoot, "xdg-config");
@@ -89,8 +90,9 @@ const fakeBin = join(sandboxRoot, "fake-bin");
 for (const dir of [installRoot, homeDir, xdgConfig, xdgData, xdgCache, xdgState, npmCache, fakeBin]) {
   mkdirSync(dir, { recursive: true });
 }
-if (!resolve(sandboxRoot).startsWith(resolve(tmpdir()))) {
-  fail(`sandbox escaped temp: ${sandboxRoot}`);
+function isWithinDirectory(path, directory) {
+  const relativePath = relative(resolve(directory), resolve(path));
+  return relativePath === "" || (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
 }
 
 process.on("exit", (code) => {
@@ -216,12 +218,12 @@ try {
       fail(`bare aria --version mismatch: got ${JSON.stringify(reported)}, tag package is ${JSON.stringify(expectedVersion)}`);
     }
     console.log(`verify-release-tag: bare aria --version ${reported}`);
-    const resolvedRoot = resolve(repoRoot);
+    const resolvedRoot = realpathSync(repoRoot);
     const resolvedInstall = resolve(installedDir);
-    if (!resolve(resolvedInstall).startsWith(resolve(installRoot))) {
+    if (!isWithinDirectory(resolvedInstall, installRoot)) {
       fail(`installed package escaped the sandbox: ${resolvedInstall}`);
     }
-    if (resolvedInstall === resolvedRoot || resolvedInstall.startsWith(`${resolvedRoot}/`)) {
+    if (isWithinDirectory(resolvedInstall, resolvedRoot) && !isWithinDirectory(resolvedInstall, sandboxRoot)) {
       fail(`installed package is checkout-backed: ${resolvedInstall}`);
     }
     const installedPkg = JSON.parse(readFileSync(join(installedDir, "package.json"), "utf8"));
