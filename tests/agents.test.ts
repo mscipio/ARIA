@@ -201,6 +201,20 @@ describe("T003 agent installation", () => {
     }
   });
 
+  it("generates coder guidance for fail-closed unauthorized plan corrections", async () => {
+    const resolved = resolveAriaConfig(process.cwd());
+    const files = generateAgentFiles(resolved, FIXTURE_VERSION);
+
+    const guidance = files.coder.toLowerCase().replace(/\s+/g, " ");
+    expect(guidance).toMatch(/if .*plan.*rejects?.*unauthori[sz]ed.* do not retry/);
+    expect(guidance).toMatch(/candidate.*authori[sz]ed.*exact action/);
+    expect(guidance).toMatch(/real native.*(?:task|tool).*permission path/);
+    expect(guidance).toMatch(/(?:single|only once|one) handoff/);
+    expect(guidance).toMatch(/no .*candidate.*(?:blocker|blocked).*caller.*stop/);
+    expect(guidance).toMatch(/approved.scope corrections?.*`remediate`/);
+    expect(guidance).toMatch(/never substitute.*architect.only `replace`/);
+  });
+
   it("installs idempotently and never touches unrelated user agents", async () => {
     const resolved = resolveAriaConfig(await worktree());
     const dir = resolve(await worktree(), "agents");

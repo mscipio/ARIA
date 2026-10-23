@@ -151,6 +151,17 @@ describe("ARIA overrides", () => {
       expect(config.roles.scientist.promptText).toContain("scientific authority");
     });
 
+    it("injects fail-closed unauthorized-plan guidance into every ARIA role prompt", () => {
+      const config = resolveAriaConfig(tmpdir());
+      for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
+        const prompt = config.roles[role].promptText;
+        expect(prompt).toContain("do not retry that action");
+        expect(prompt).toContain("real delegation/tool permission path");
+        expect(prompt).toContain("report the blocker to the caller/coordinator and stop");
+        expect(prompt).toContain("Never impersonate a role or bypass authority");
+      }
+    });
+
     it("overrides model only and clears the inherited default variant", async () => {
       const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
       tempDirs.push(root);

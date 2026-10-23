@@ -1,9 +1,11 @@
 import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, parse, resolve } from "node:path";
+import { dirname, join, parse, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import aria from "../src/index";
+import { createUniqueScratchDir } from "../src/scratch.js";
 import {
   createPlanTool,
   isFilesystemRoot,
@@ -22,6 +24,13 @@ afterEach(async () => {
 
 async function project(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "aria-plan-tool-"));
+  tempDirs.push(root);
+  return root;
+}
+
+async function scratchProject(task: string): Promise<string> {
+  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const root = await createUniqueScratchDir(repoRoot, "tests/fixtures", task);
   tempDirs.push(root);
   return root;
 }
@@ -181,13 +190,90 @@ describe("T006 native V2 plan tool", () => {
       { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "X", tasks: ["T"] },
       coder("coder-replace"),
     );
-    expect(contentOf(coderReplace)).toMatch(/may not replace/);
+    expect(contentOf(coderReplace)).toContain("Role coder may not replace the plan. Authorized role(s) for replace: architect.");
     expect(contentOf(await tool.execute({ action: "get" }, toolContext("researcher", "researcher-get")))).toMatch(
-      /may not get/,
+      /Role researcher may not get the plan\. Authorized role\(s\) for get: coder, planner, architect, reviewer\./,
     );
     const missingSession = await tool.execute({ action: "get" }, toolContext("coder", ""));
     expect(contentOf(missingSession)).toMatch(/sessionID is required/);
     expect(missingSession.metadata.title).toBe("Error");
+  });
+
+  it("fails unauthorized premise edits closed and preserves plan history at the approval boundary", async () => {
+    const root = await scratchProject("t007-premise-recovery");
+    const tool = createPlanTool(root);
+    const coder = (session: string) => toolContext("coder", session);
+    const created = await tool.execute(
+      { action: "create", title: "Premise recovery", tasks: ["Verified completed work", "Questioned premise"] },
+      coder("create"),
+    );
+    const planID = planIDOf(contentOf(created));
+    let revision = revisionOf(contentOf(created));
+    const approved = await tool.execute({ action: "approve", expectedPlanID: planID, expectedRevision: revision }, coder("approve"));
+    revision = revisionOf(contentOf(approved));
+
+    const started = await tool.execute(
+      { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "in_progress" },
+      coder("start-completed-work"),
+    );
+    revision = revisionOf(contentOf(started));
+    const completed = await tool.execute(
+      {
+        action: "update",
+        expectedPlanID: planID,
+        expectedRevision: revision,
+        taskID: "T001",
+        status: "completed",
+        evidence: "verified before premise review",
+      },
+      coder("complete-work"),
+    );
+    revision = revisionOf(contentOf(completed));
+    // There is no native delegate-candidate dispatch interface here. The
+    // registered role/action contract is the supported boundary: non-coders
+    // cannot mutate, and rejected calls do not alter the active plan.
+    for (const agent of ["planner", "architect", "reviewer"]) {
+      const denied = await tool.execute(
+        {
+          action: "update",
+          expectedPlanID: planID,
+          expectedRevision: revision,
+          taskID: "T002",
+          status: "blocked",
+          evidence: "premise questioned",
+        },
+        toolContext(agent, `${agent}-premise-update`),
+      );
+      expect(contentOf(denied)).toContain(`Role ${agent} may not update the plan`);
+      expect(denied.metadata.title).toBe("Error");
+    }
+    const unchanged = await tool.execute({ action: "get" }, coder("verify-denial"));
+    expect(planIDOf(contentOf(unchanged))).toBe(planID);
+    expect(revisionOf(contentOf(unchanged))).toBe(revision);
+    expect(contentOf(unchanged)).toContain("Approval: approved");
+    expect(contentOf(unchanged)).toContain("- [x] T001 Verified completed work");
+
+    // One explicitly authorized coder action adds factual correction tasks
+    // without erasing completed work or changing approval. A scope addition
+    // remains a separate action and resets approval for renewed review.
+    const corrected = await tool.execute(
+      { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Correct false premise"] },
+      coder("authorized-remediation"),
+    );
+    revision = revisionOf(contentOf(corrected));
+    expect(planIDOf(contentOf(corrected))).toBe(planID);
+    expect(contentOf(corrected)).toContain("Approval: approved");
+    expect(contentOf(corrected)).toContain("- [x] T001 Verified completed work");
+    expect(contentOf(corrected)).toContain("Correct false premise");
+
+    const scopeChange = await tool.execute(
+      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Expand scope"] },
+      coder("scope-change"),
+    );
+    expect(planIDOf(contentOf(scopeChange))).toBe(planID);
+    expect(revisionOf(contentOf(scopeChange))).toBe(revision + 1);
+    expect(contentOf(scopeChange)).toContain("Approval: pending");
+    expect(contentOf(scopeChange)).toContain("- [x] T001 Verified completed work");
   });
 
   it("rejects stale plan id and revision (app-owned CAS)", async () => {
