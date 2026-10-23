@@ -1,7 +1,7 @@
 import { Plugin } from "@opencode/plugin";
 
 import { createPlanTool, resolvePlanRootFromLocation } from "./plan-tool.js";
-import { readProjectAriaOverrides, resolveAriaConfig } from "./overrides.js";
+import { ROLES, resolveAriaConfig } from "./overrides.js";
 import {
   applyArchivistRuntimeTransform,
   applyProjectModelTransforms,
@@ -16,19 +16,15 @@ import {
  *
  * T005 production wiring: the real plugin setup path resolves the
  * project-local `opencode.json(c)` overlay with the accepted resolver and
- * applies only the resolved per-project agent changes via the supported V2
- * `agent.transform` → `agent.update` surface (existing ARIA role IDs only,
- * model/variant fields only). Prompts, permissions, modes, unrelated agents,
- * and global agent files are never touched; project overrides are read-only
- * here and never written to disk.
+ * seeds every canonical ARIA route via the supported V2 `agent.transform` →
+ * `agent.update` surface, then applies project `opencode.json(c)` model
+ * overrides. Only model/variant fields are changed; other agent metadata,
+ * unrelated agents, and global agent files are untouched. Project overrides
+ * are read-only here and never written to disk.
  *
- * T002 effective routing: the same transform first applies the local ARIA
- * project layer (`aria.json` roles) as resolved atomic model+variant pairs
- * via the accepted `resolveAriaConfig`/`readProjectAriaOverrides` resolvers
- * and the existing `applyProjectModelTransforms` helper (model-only clears
- * the inherited variant; variant-only keeps the resolved model). The
- * OpenCode-native `opencode.json(c)` overlay applies after, so its existing
- * precedence is preserved when both layers pin the same role.
+ * Effective routing uses `resolveAriaConfig` for defaults, global and project
+ * ARIA layers across all canonical roles. The OpenCode-native
+ * `opencode.json(c)` overlay applies after, preserving its higher precedence.
  *
  * v1.0.14 T006 archivist runtime binding: canonical managed files keep
  * `{{packageRoot}}` / `{{WIKI_DIR}}` placeholders (byte-identical from any
@@ -92,41 +88,26 @@ const aria = Plugin.define({
     // (ConfigValidationError/SyntaxError) — never silently reinterpreted.
     const overlay = readProjectAgentModelOverrides(worktree);
     const hasOverlay = Object.keys(overlay).length > 0;
-    // T002: local ARIA project routes (`aria.json` roles) were missing from
-    // the runtime — managed global files carry defaults+global only, and the
-    // transform above applied just `opencode.json(c)`. Resolve the
-    // project-touched roles to their accepted atomic model+variant pairs and
-    // apply them first; `opencode.json(c)` still applies after so its
-    // existing precedence wins on conflict. Only model/variant fields of
-    // existing agents are patched; empty overrides touch nothing.
-    const projectAriaRoles = readProjectAriaOverrides(worktree).roles ?? {};
-    const ariaTouched = Object.entries(projectAriaRoles).filter(
-      ([, override]) => override?.model !== undefined || override?.variant !== undefined,
-    );
-    const hasAriaOverlay = ariaTouched.length > 0;
-    let ariaOverlay: ProjectModelOverlay = {};
-    if (hasAriaOverlay) {
-      const resolved = resolveAriaConfig(worktree);
-      ariaOverlay = Object.fromEntries(
-        ariaTouched.map(([role]) => {
-          const route = resolved.roles[role as keyof typeof resolved.roles];
-          return [
-            role,
-            route.variant === undefined ? { model: route.model } : { model: route.model, variant: route.variant },
-          ];
-        }),
-      );
-    }
-    // Archivist runtime binding always runs when an agent domain exists (it
-    // resolves location-independent placeholders in-memory); model overlays
-    // run only when present. Guarded for agent-less hosts: with no overlay
-    // and no agent domain there is nothing to patch.
     const agentDomain = (ctx as { agent?: { transform?: unknown } } | undefined)?.agent;
-    if (!hasOverlay && !hasAriaOverlay && typeof agentDomain?.transform !== "function") {
+    if (typeof agentDomain?.transform !== "function") {
       return () => {
         // Plan tool (T006) already registered above when a tool domain exists.
       };
     }
+    // Resolve defaults + global + project ARIA layers for every canonical role.
+    // Seed those routes first, then apply OpenCode-native project agent models
+    // as the higher-precedence overlay.
+    const resolved = resolveAriaConfig(worktree);
+    const ariaOverlay: ProjectModelOverlay = Object.fromEntries(
+      ROLES.map((role) => {
+        const route = resolved.roles[role];
+        return [
+          role,
+          route.variant === undefined ? { model: route.model } : { model: route.model, variant: route.variant },
+        ];
+      }),
+    );
+    // Archivist runtime binding follows route seeding and project model overrides.
     await ctx.agent.transform((editor) => {
       const adapter = {
         get: (id: string) =>
@@ -137,9 +118,7 @@ const aria = Plugin.define({
           });
         },
       };
-      if (hasAriaOverlay) {
-        applyProjectModelTransforms(adapter, ariaOverlay);
-      }
+      applyProjectModelTransforms(adapter, ariaOverlay);
       if (hasOverlay) {
         applyProjectModelTransforms(adapter, overlay);
       }

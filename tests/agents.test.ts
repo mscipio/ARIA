@@ -1,29 +1,30 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ROLES,
+  agentFileChecksum,
   agentFileName,
   formatAgentModel,
   generateAgentFile,
   generateAgentFiles,
+  AgentReconciliationError,
   installAgentFiles,
   isAriaManaged,
   parseManagedHeader,
+  reconcileManagedAgents,
   rollbackAgentInstall,
 } from "../src/agents";
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions";
 import { resolveAriaConfig } from "../src/overrides";
+import { createUniqueScratchDir } from "../src/scratch.js";
 import type { RoleName } from "../src/types";
-// Pinned 2.0.23 loaded-agent behavior (pinned via `@opencode/plugin@2.0.23`
-// in package.json, which depends on `@opencode/schema@2.0.23`): the tests
-// below decode generated frontmatter through the real Agent/Model schemas
-// instead of asserting on strings, so accidental builtin inheritance would
-// fail the suite.
-import { Agent, Model } from "@opencode/schema";
+// Pinned 2.0.23 loaded-agent behavior: generated agent frontmatter is decoded
+// through the real Agent schema to guard against accidental builtin inheritance.
+import { Agent } from "@opencode/schema";
 
 // T008 transient-rollback fault injection (adversarial regression only).
 // Passthrough mock for `node:fs/promises`: real FS unless a one-shot
@@ -63,6 +64,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const tempDirs: string[] = [];
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // T002 deterministic version fixture: behavioral generation results must not
 // branch on the checkout's release version. Every simulated version below
@@ -77,7 +79,7 @@ afterEach(async () => {
 });
 
 async function worktree(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "aria-agents-"));
+  const root = await createUniqueScratchDir(REPO_ROOT, "tests/agents", "case");
   tempDirs.push(root);
   return root;
 }
@@ -105,12 +107,9 @@ describe("T003 agent installation", () => {
     expect(files.planner).toContain("mode: subagent");
     expect(files.archivist).toContain("mode: all");
     expect(files.scientist).toContain("mode: all");
-    // V2 model selector: provider/model with #variant appended.
-    expect(files.coder).toContain('model: "opencode-go/muse-spark-1.3-contributor#xhigh"');
-    expect(files.explorer).toContain('model: "opencode-go/muse-spark-1.3-contributor#high"');
-    expect(files.planner).toContain('model: "openai/gpt-6-luna#xhigh"');
-    expect(files.researcher).toContain('model: "openai/gpt-6.1-sol#medium"');
-    expect(files.scientist).toContain('model: "openai/gpt-6.1-sol#medium"');
+    // Model routing is runtime-only; global generated agent files do not bake
+    // a model or variant into their frontmatter.
+    for (const content of Object.values(files)) expect(content).not.toMatch(/^model: /m);
     // Preserved V1 description intent (visualizer recast as Qt UI/UX Engineer, T003).
     expect(files.coder).toContain("Coordinates planning, implementation, and review.");
     expect(files.visualizer).toContain("Qt UI/UX Engineer");
@@ -151,7 +150,7 @@ describe("T003 agent installation", () => {
     for (const [role, content] of Object.entries(files)) {
       // Every security-relevant field is explicit in frontmatter.
       expect(content).toContain("description: ");
-      expect(content).toContain("model: ");
+      expect(content).not.toMatch(/^model: /m);
       expect(content).toContain("mode: ");
       expect(content).toContain("permissions:");
       // V1 permission names must never leak into V2 rules (T001 evidence
@@ -253,6 +252,81 @@ describe("T003 agent installation", () => {
     expect((await readdir(dir)).some((entry) => entry.includes(".aria-backup-"))).toBe(false);
   });
 
+  it("preflights managed checksum/layout conflicts without changing any role files", async () => {
+    const resolved = resolveAriaConfig(await worktree());
+    const dir = join(await worktree(), "agents");
+    await mkdir(dir, { recursive: true });
+    const generated = generateAgentFiles(resolved, FIXTURE_VERSION);
+    for (const role of ROLES) await writeFile(join(dir, agentFileName(role)), generated[role]);
+
+    const invalidChecksum = generated.coder.replace(/^# aria-checksum: [0-9a-f]{64}$/m, `# aria-checksum: ${"0".repeat(64)}`);
+    const extraFrontmatter = generated.explorer.replace("mode: subagent\n", "mode: subagent\nextra: retained\n");
+    await writeFile(join(dir, agentFileName("coder")), invalidChecksum);
+    await writeFile(join(dir, agentFileName("explorer")), extraFrontmatter);
+    const originals = Object.fromEntries(
+      await Promise.all(ROLES.map(async (role) => [role, await readFile(join(dir, agentFileName(role)), "utf8")] as const)),
+    ) as Record<RoleName, string>;
+    const entriesBefore = (await readdir(dir)).sort();
+
+    let thrown: unknown;
+    try {
+      await reconcileManagedAgents(resolved, { dir, version: FIXTURE_VERSION });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AgentReconciliationError);
+    const conflicts = (thrown as AgentReconciliationError).conflicts;
+    expect(conflicts.map(({ role }) => role)).toEqual(["coder", "explorer"]);
+    const checksumHeader = parseManagedHeader(originals.coder);
+    expect(isAriaManaged(originals.coder)).toBe(true);
+    expect(checksumHeader?.version).toBe(FIXTURE_VERSION);
+    expect(checksumHeader?.checksum).toBe("0".repeat(64));
+    expect(checksumHeader?.checksum).not.toBe(parseManagedHeader(generated.coder)?.checksum);
+    const frontmatterHeader = parseManagedHeader(originals.explorer);
+    expect(isAriaManaged(originals.explorer)).toBe(true);
+    expect(frontmatterHeader).toEqual(parseManagedHeader(generated.explorer));
+    for (const role of ROLES) {
+      expect(await readFile(join(dir, agentFileName(role)), "utf8"), `${role} preserved`).toBe(originals[role]);
+    }
+    expect((await readdir(dir)).sort()).toEqual(entriesBefore);
+    expect((await readdir(dir)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("checksum-validates and migrates owned legacy route frontmatter without losing other fields", async () => {
+    const resolved = resolveAriaConfig(await worktree());
+    const dir = join(await worktree(), "agents");
+    await mkdir(dir, { recursive: true });
+    const generated = generateAgentFiles(resolved, FIXTURE_VERSION);
+    for (const role of ROLES) await writeFile(join(dir, agentFileName(role)), generated[role]);
+
+    const current = generated.coder;
+    const lines = current.split("\n");
+    const closing = lines.indexOf("---", 1);
+    const descriptionLine = lines.find((line) => line.startsWith("description: "))!;
+    const modeLine = lines.find((line) => line.startsWith("mode: "))!;
+    const description = JSON.parse(descriptionLine.slice("description: ".length)) as string;
+    const mode = modeLine.slice("mode: ".length).trim();
+    const body = `${lines.slice(closing + 2, -1).join("\n")}\n`;
+    const legacyModel = "openai/legacy-coder#high";
+    const legacyChecksum = agentFileChecksum(description, legacyModel, mode, getPermissionsForRole("coder"), body);
+    const legacy = current
+      .replace(/^# aria-checksum: [0-9a-f]{64}$/m, `# aria-checksum: ${legacyChecksum}`)
+      .replace(descriptionLine, `${descriptionLine}\nmodel: ${JSON.stringify(legacyModel)}`);
+    await writeFile(join(dir, agentFileName("coder")), legacy);
+
+    const result = await reconcileManagedAgents(resolved, { dir, version: FIXTURE_VERSION });
+
+    expect(result.written).toContain("coder");
+    expect(result.tampered).not.toContain("coder");
+    expect(result.previousContents.coder).toBe(legacy);
+    const migrated = await readFile(join(dir, agentFileName("coder")), "utf8");
+    expect(migrated).toBe(generated.coder);
+    expect(migrated).not.toMatch(/^model: /m);
+    expect(migrated).toContain("description: ");
+    expect(migrated).toContain("permissions:");
+    expect(migrated).toContain(resolved.roles.coder.promptText);
+  });
+
   it("recovers when post-move replacement fails and the immediate restore is transient (T008 adversarial)", async () => {
     const resolved = resolveAriaConfig(await worktree());
     const dir = resolve(await worktree(), "agents");
@@ -351,13 +425,11 @@ describe("T003 agent installation", () => {
     expect(closing).toBeGreaterThan(0);
     const frontmatter = lines.slice(1, closing);
     const descriptionLine = frontmatter.find((line) => line.startsWith("description: "));
-    const modelLine = frontmatter.find((line) => line.startsWith("model: "));
     const modeLine = frontmatter.find((line) => line.startsWith("mode: "));
     expect(descriptionLine).toBeDefined();
-    expect(modelLine).toBeDefined();
+    expect(frontmatter.some((line) => line.startsWith("model: "))).toBe(false);
     expect(modeLine).toBeDefined();
     const description = JSON.parse(descriptionLine!.slice("description: ".length)) as string;
-    const model = JSON.parse(modelLine!.slice("model: ".length)) as string;
     const mode = modeLine!.slice("mode: ".length).trim();
     const permissions: { action: string; resource: string; effect: string }[] = [];
     for (let index = 0; index < frontmatter.length; index += 1) {
@@ -374,12 +446,8 @@ describe("T003 agent installation", () => {
       });
     }
 
-    // Pinned 2.0.23 loader behavior: the V2 model selector parses, the
-    // explicit parity permissions decode, and the full Agent.Info loads with
-    // our explicit rules rather than the builtin permissive defaults.
-    const modelRef = Model.Ref.parse(model);
-    expect(modelRef.providerID).toBe("opencode-go");
-    expect(modelRef.id).toBe("muse-spark-1.3-contributor");
+    // Pinned 2.0.23 loader behavior: explicit parity permissions decode and
+    // the full Agent.Info loads without inheriting permissive builtin defaults.
     const loaded = Agent.Info.make({
       id: Agent.ID.make("explorer"),
       name: Agent.Name.make("explorer"),
@@ -388,11 +456,6 @@ describe("T003 agent installation", () => {
       hidden: false,
       permissions: permissions as [{ action: string; resource: string; effect: "deny" }],
       description,
-      model: {
-        providerID: modelRef.providerID,
-        id: modelRef.id,
-        ...(modelRef.variant ? { variant: modelRef.variant } : {}),
-      },
     });
     expect(loaded.permissions).toEqual(getPermissionsForRole("explorer"));
     // Explorer carries V2 shell/subagent denies (never legacy bash/task) and

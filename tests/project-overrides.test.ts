@@ -1,11 +1,13 @@
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { generateAgentFiles } from "../src/agents";
 import aria from "../src/index";
 import { resolveAriaConfig, ROLES } from "../src/overrides";
+import { createUniqueScratchDir } from "../src/scratch.js";
 import {
   applyArchivistRuntimeTransform,
   applyProjectModelOverlay,
@@ -18,6 +20,7 @@ import {
 } from "../src/project-overrides";
 
 const tempDirs: string[] = [];
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // T002 deterministic version fixture: behavioral results must not branch on
 // the checkout's release version. Only t005-package-paths and equivalent
@@ -132,14 +135,14 @@ describe("T005 project overrides", () => {
     expect(() => parseProjectAgentOverrides({ agents: "bad" })).toThrow();
   });
 
-  it("patches only overlaid agents via agent.update and never touches globals", async () => {
+  it("upserts overlaid agent routes via agent.update and preserves unrelated metadata", async () => {
     const overlay = {
       planner: { model: "openai/gpt-5.4-mini", variant: "high" },
       reviewer: { model: "opencode-go/custom-reviewer" },
     } as const;
 
     const store = new Map<string, Record<string, unknown>>([
-      ["planner", { model: { providerID: "openai", id: "old" } }],
+      ["planner", { model: { providerID: "openai", id: "old" }, prompt: "keep" }],
       ["reviewer", { model: { providerID: "x", id: "y", variant: "z" } }],
       ["coder", { model: { providerID: "keep", id: "keep" } }],
     ]);
@@ -149,7 +152,9 @@ describe("T005 project overrides", () => {
         get: (id) => store.get(id),
         update: (id, fn) => {
           updated.push(id);
-          fn(store.get(id)!);
+          const agent = store.get(id) ?? {};
+          fn(agent);
+          store.set(id, agent);
         },
       },
       overlay,
@@ -158,25 +163,47 @@ describe("T005 project overrides", () => {
     expect(updated).toEqual(["planner", "reviewer"]);
     expect(store.get("planner")).toEqual({
       model: { providerID: "openai", id: "gpt-5.4-mini", variant: "high" },
+      prompt: "keep",
     });
     // Model-only overlay clears the stale variant as an intact pair.
     expect(store.get("reviewer")).toEqual({ model: { providerID: "opencode-go", id: "custom-reviewer" } });
-    // Globals untouched: roles without an overlay are never updated.
+    // Roles without an overlay are never updated.
     expect(store.get("coder")).toEqual({ model: { providerID: "keep", id: "keep" } });
 
-    // Missing agents are skipped, never materialized.
-    const skipped = applyProjectModelTransforms(
-      { get: () => undefined, update: () => { throw new Error("must not update"); } },
+    // Missing roles are materialized through agent.update.
+    const missing = new Map<string, Record<string, unknown>>();
+    const upserted = applyProjectModelTransforms(
+      { get: (id) => missing.get(id), update: (id, fn) => {
+        const agent = missing.get(id) ?? {};
+        fn(agent);
+        missing.set(id, agent);
+      } },
       overlay,
     );
-    expect(skipped).toEqual([]);
+    expect(upserted).toEqual(["planner", "reviewer"]);
+    expect(missing.get("planner")).toEqual({ model: { providerID: "openai", id: "gpt-5.4-mini", variant: "high" } });
   });
 
-  it("production setup applies project opencode.json overrides via agent.transform only", async () => {
+  it("production setup seeds ARIA routes and applies project agent overrides via agent.transform", async () => {
+    const savedHome = process.env.HOME;
+    const savedXdg = process.env.XDG_CONFIG_HOME;
     const savedWikiDir = process.env.WIKI_DIR;
+    const testRoot = await createUniqueScratchDir(REPO_ROOT, "tests/fixtures", "project-route-setup");
+    tempDirs.push(testRoot);
+    process.env.XDG_CONFIG_HOME = join(testRoot, "xdg");
     delete process.env.WIKI_DIR;
     try {
-      const root = await worktree();
+      const root = join(testRoot, "worktree");
+      await mkdir(root, { recursive: true });
+      const globalConfigDir = resolve(process.env.XDG_CONFIG_HOME!, "opencode");
+      await mkdir(globalConfigDir, { recursive: true });
+      await writeFile(
+        resolve(globalConfigDir, "aria.json"),
+        JSON.stringify({ roles: {
+          implementer: { model: "openai/global-implementer", variant: "medium" },
+          planner: { model: "openai/global-planner", variant: "medium" },
+        } }),
+      );
       await writeFile(
         resolve(root, "opencode.json"),
         JSON.stringify({
@@ -185,6 +212,13 @@ describe("T005 project overrides", () => {
             reviewer: { model: { providerID: "opencode-go", model: "custom-reviewer" } },
           },
         }),
+      );
+      await writeFile(
+        resolve(root, "aria.json"),
+        JSON.stringify({ roles: {
+          planner: { model: "openai/project-planner#low" },
+          scientist: { variant: "project-variant" },
+        } }),
       );
       const canonical = resolveAriaConfig(root);
       const version = FIXTURE_VERSION;
@@ -208,7 +242,9 @@ describe("T005 project overrides", () => {
         get: (id: string) => store.get(id),
         update: (id: string, fn: (agent: Record<string, unknown>) => void) => {
           updated.push(id);
-          fn(store.get(id)!);
+          const agent = store.get(id) ?? {};
+          fn(agent);
+          store.set(id, agent);
         },
       };
 
@@ -234,15 +270,34 @@ describe("T005 project overrides", () => {
       });
       // Model-only object form clears the inherited variant as an intact pair.
       expect(store.get("reviewer")).toEqual({ model: { providerID: "opencode-go", id: "custom-reviewer" } });
-      // Only overlaid roles were patched, in canonical role order.
-      expect(updated).toEqual(["planner", "reviewer"]);
-      // Non-overridden roles retain their canonical defaults.
+      expect(store.get("scientist")).toEqual({
+        model: {
+          providerID: canonical.roles.scientist.model.split("/")[0],
+          id: canonical.roles.scientist.model.split("/").slice(1).join("/"),
+          variant: "project-variant",
+        },
+      });
+      // Global ARIA routes seed lower-precedence roles; project ARIA overrides
+      // global routes; OpenCode-native agent models override both.
+      expect(store.get("implementer")).toEqual({
+        model: { providerID: "openai", id: "global-implementer", variant: "medium" },
+      });
+      expect(store.get("planner")).toEqual({
+        model: { providerID: "openai", id: "gpt-5.4-mini", variant: "high" },
+      });
+      // All canonical roles are seeded; project OpenCode overrides apply last.
+      expect(updated).toEqual([...ROLES, "planner", "reviewer"]);
+      // A role with no override retains its canonical route and metadata.
       expect(store.get("coder")).toEqual(coderBefore);
       // Global generated defs are unchanged and setup wrote no files.
       expect(generateAgentFiles(canonical, version)).toEqual(globalDefs);
-      expect(await readdir(root)).toEqual(["opencode.json"]);
+      expect((await readdir(root)).sort()).toEqual(["aria.json", "opencode.json"]);
       await cleanup?.();
     } finally {
+      if (savedHome === undefined) delete process.env.HOME;
+      else process.env.HOME = savedHome;
+      if (savedXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = savedXdg;
       if (savedWikiDir === undefined) delete process.env.WIKI_DIR;
       else process.env.WIKI_DIR = savedWikiDir;
     }

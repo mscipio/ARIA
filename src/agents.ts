@@ -86,6 +86,17 @@ function checksumPayload(
   return [description, model, mode, JSON.stringify(permissions), body].join("\n");
 }
 
+function routeIndependentChecksum(
+  description: string,
+  mode: string,
+  permissions: readonly AgentRule[],
+  body: string,
+): string {
+  return createHash("sha256")
+    .update([description, mode, JSON.stringify(permissions), body].join("\n"), "utf8")
+    .digest("hex");
+}
+
 export function agentFileChecksum(
   description: string,
   model: string,
@@ -99,33 +110,45 @@ export function agentFileChecksum(
 /**
  * Render one deterministic managed agent file. The body is the resolved
  * system prompt verbatim (exactly one trailing newline); frontmatter carries
- * the `agents.<id>` fields plus ARIA ownership comments (comments, never
- * fields, so the V2 schema surface is untouched).
+ * only agent fields independent of model routing plus ARIA ownership comments.
+ * Models are applied at runtime and are deliberately not baked into these
+ * globally managed files.
  */
 export function generateAgentFile(role: RoleName, resolved: ResolvedRoleConfig, version: string): string {
   const description = AGENT_DESCRIPTIONS[role];
-  const model = formatAgentModel(resolved.model, resolved.variant);
   const body = resolved.promptText.endsWith("\n") ? resolved.promptText : `${resolved.promptText}\n`;
   const permissions = getPermissionsForRole(role);
-  const checksum = agentFileChecksum(description, model, resolved.mode, permissions, body);
+  const checksum = routeIndependentChecksum(description, resolved.mode, permissions, body);
+  return renderManagedAgentFile({ description, mode: resolved.mode, permissions, body, version, checksum });
+}
+
+function renderManagedAgentFile(input: {
+  description: string;
+  mode: string;
+  permissions: readonly AgentRule[];
+  body: string;
+  version: string;
+  checksum: string;
+  model?: string;
+}): string {
   const lines = [
     "---",
     MANAGED_MARKER + " — DO NOT EDIT.",
     "# Regenerated deterministically by ARIA setup from defaults/aria.defaults.json + prompt/override machinery.",
-    `# aria-version: ${version}`,
-    `# aria-checksum: ${checksum}`,
-    `description: ${yamlString(description)}`,
-    `model: ${yamlString(model)}`,
-    `mode: ${resolved.mode}`,
+    `# aria-version: ${input.version}`,
+    `# aria-checksum: ${input.checksum}`,
+    `description: ${yamlString(input.description)}`,
+    ...(input.model === undefined ? [] : [`model: ${yamlString(input.model)}`]),
+    `mode: ${input.mode}`,
     "permissions:",
-    ...permissions.map(
+    ...input.permissions.map(
       (rule) => `  - action: ${yamlString(rule.action)}\n    resource: ${yamlString(rule.resource)}\n    effect: ${rule.effect}`,
     ),
     "---",
     "",
     "",
   ];
-  return `${lines.join("\n")}${body}`;
+  return `${lines.join("\n")}${input.body}`;
 }
 
 /** Render all eleven managed agent files in canonical role order. */
@@ -224,24 +247,44 @@ async function readExisting(path: string): Promise<string | undefined> {
 function verifyManagedContent(content: string): boolean {
   const header = parseManagedHeader(content);
   if (!header) return false;
-  const match = content.match(/^---\n(?:.*\n)*?---\n\n([\s\S]*)$/);
-  const body = match?.[1] ?? "";
-  const descriptionLine = content.split("\n").find((line) => line.startsWith("description: "));
-  const modelLine = content.split("\n").find((line) => line.startsWith("model: "));
-  const modeLine = content.split("\n").find((line) => line.startsWith("mode: "));
-  if (!descriptionLine || !modelLine || !modeLine) return false;
+  const lines = content.split("\n");
+  if (lines[0] !== "---") return false;
+  const closing = lines.indexOf("---", 1);
+  if (closing < 0 || lines[closing + 1] !== "") return false;
+  const frontmatter = lines.slice(1, closing);
+  const body = lines.slice(closing + 2).join("\n");
+  const valueLine = (prefix: string): string | undefined => frontmatter.find((line) => line.startsWith(prefix));
+  const descriptionLine = valueLine("description: ");
+  const modelLine = valueLine("model: ");
+  const modeLine = valueLine("mode: ");
+  if (!descriptionLine || !modeLine) return false;
   let description: string;
-  let model: string;
+  let model: string | undefined;
   try {
     description = JSON.parse(descriptionLine.slice("description: ".length)) as string;
-    model = JSON.parse(modelLine.slice("model: ".length)) as string;
+    if (modelLine) model = JSON.parse(modelLine.slice("model: ".length)) as string;
   } catch {
     return false;
   }
+  if (typeof description !== "string" || (modelLine && typeof model !== "string")) return false;
   const mode = modeLine.slice("mode: ".length).trim();
   const permissions = parsePermissionsFromContent(content);
   if (!permissions) return false;
-  return agentFileChecksum(description, model, mode, permissions, body) === header.checksum;
+  const checksum = model !== undefined
+    ? agentFileChecksum(description, model, mode, permissions, body)
+    : routeIndependentChecksum(description, mode, permissions, body);
+  if (checksum !== header.checksum) return false;
+  // Re-rendering the parsed fields recognizes only the exact generated layouts;
+  // unchecksummed frontmatter or ownership metadata is never migrated.
+  return renderManagedAgentFile({
+    description,
+    ...(model === undefined ? {} : { model }),
+    mode,
+    permissions,
+    body,
+    version: header.version,
+    checksum: header.checksum,
+  }) === content;
 }
 
 /** Parse the frontmatter `permissions:` Rule[] from generated bytes. */
@@ -497,6 +540,14 @@ async function preflightRolePath(dir: string, role: RoleName, wanted: string): P
       path,
       kind: "unowned",
       detail: "pre-existing file carries no ARIA ownership marker (never silently overwritten)",
+    };
+  }
+  if (!verifyManagedContent(existing)) {
+    return {
+      role,
+      path,
+      kind: "ambiguous",
+      detail: "ARIA-owned file has invalid integrity or an unsupported/hand-edited generated layout; refusing to overwrite",
     };
   }
   return null;

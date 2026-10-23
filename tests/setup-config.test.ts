@@ -591,21 +591,14 @@ describe("T008 setup lifecycle file phases", () => {
     expect(written.default_agent).toBe("coder");
     expect(validateAriaSetupConfig(written, { pluginUri, skillsRoot: SKILLS_ROOT })).toEqual([]);
 
-    const expectedModels: Record<string, string> = {
-      coder: "opencode-go/muse-spark-1.3-contributor#xhigh",
-      explorer: "opencode-go/muse-spark-1.3-contributor#high",
-      visualizer: "opencode-go/muse-spark-1.3-contributor#xhigh",
-      planner: "openai/gpt-6-luna#xhigh",
-      architect: "openai/gpt-6.1-sol#high",
-      implementer: "opencode-go/muse-spark-1.3-contributor#xhigh",
-      reviewer: "openai/gpt-6.1-sol#medium",
-      researcher: "openai/gpt-6.1-sol#medium",
-      archivist: "opencode-go/muse-spark-1.3-contributor#high",
-      writer: "openai/gpt-6-luna#xhigh",
-      scientist: "openai/gpt-6.1-sol#medium",
-    };
-    for (const [role, model] of Object.entries(expectedModels)) {
-      expect(await readFile(join(agentsDir, `${role}.md`), "utf8")).toContain(`model: "${model}"`);
+    const resolved = resolveSetupAriaConfig(worktree);
+    for (const [role, route] of Object.entries(resolved.roles)) {
+      const markdown = await readFile(join(agentsDir, `${role}.md`), "utf8");
+      const frontmatter = markdown.slice(0, markdown.indexOf("\n---\n"));
+      expect(frontmatter).not.toMatch(/^\s*(?:model|variant):/m);
+      // Routing remains available from the setup resolver rather than being
+      // persisted into managed Markdown.
+      expect(route.model).toMatch(/\//);
     }
   });
 

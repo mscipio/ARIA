@@ -194,17 +194,16 @@ export function applyProjectModelOverlay(
   return { roles };
 }
 
-/** Minimal editor surface needed for the narrow runtime patch. */
+/** Minimal editor surface needed for runtime model route updates. */
 export interface ProjectModelAgentEditor {
   get(id: string): { model?: unknown } | undefined;
   update(id: string, update: (agent: Record<string, unknown>) => void): void;
 }
 
 /**
- * Narrow runtime patch: `agent.update` for model/variant only, and only for
- * roles present in the overlay whose agent exists. Roles without an overlay
- * are never touched; missing agents are skipped (never materialized here —
- * managed files remain the creation mechanism).
+ * Runtime model patch: `agent.update` for model/variant only, for each role in
+ * the overlay. `agent.update` upserts missing roles; other agent metadata is
+ * preserved, and roles without an overlay are not touched.
  *
  * @returns roles whose model was patched, in canonical role order.
  */
@@ -216,7 +215,6 @@ export function applyProjectModelTransforms(
   for (const role of ROLES) {
     const override = overlay[role];
     if (!override) continue;
-    if (!editor.get(role)) continue;
     const ref = toRuntimeModelRef(override);
     const next: Record<string, unknown> = { providerID: ref.providerID, id: ref.id };
     if (ref.variant !== undefined) next.variant = ref.variant;

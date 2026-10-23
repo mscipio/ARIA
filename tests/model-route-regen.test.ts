@@ -7,9 +7,10 @@ import { pathToFileURL } from "node:url";
 import { configureModels, type ModelDiscovery } from "../src/model-config.js";
 import { setup } from "../src/lifecycle.js";
 import type { Executor } from "../src/deps.js";
+import { resolveSetupAriaConfig } from "../src/setup-config.js";
 
-// T003 ordering: after a successful route write, managed agents are
-// regenerated from freshly resolved routes in the same invocation.
+// T003 ordering: after a successful route write, route-free managed agents
+// are regenerated in the same invocation while the resolver retains routing.
 
 const tempDirs: string[] = [];
 let originalHome: string | undefined;
@@ -94,9 +95,14 @@ describe("T003 model-route ordering", () => {
     });
 
     expect(result.status).toBe("configured");
-    // Agent output matches the newly committed route without a second setup.
+    // The managed Markdown no longer carries routes; the canonical resolver
+    // sees the freshly committed assignment without a second setup.
     const plannerAgent = await readFile(resolve(agentsDir, "planner.md"), "utf8");
-    expect(plannerAgent).toContain('model: "opencode-go/muse-spark-1.3-contributor#xhigh"');
+    expect(plannerAgent.slice(0, plannerAgent.indexOf("\n---\n"))).not.toMatch(/^\s*(?:model|variant):/m);
+    expect(resolveSetupAriaConfig(worktree).roles.planner).toMatchObject({
+      model: "opencode-go/muse-spark-1.3-contributor",
+      variant: "xhigh",
+    });
     // Unmanaged backup + unrelated preserved.
     const coderBackup = await readFile(resolve(agentsDir, "coder.md"), "utf8");
     expect(coderBackup).toContain("muse-spark");
@@ -177,9 +183,10 @@ describe("T003 model-route ordering", () => {
       return { status: "configured" as const, message: "mock configured" };
     };
 
+    const worktree = await makeWorktree();
     const result = await setup(binaryUrl, executor, okSync, {
       configure: true,
-      worktree: await makeWorktree(),
+      worktree,
       configureModelsFn,
       files: { globalConfigPath, agentsDir, skillsRoot: resolve(filesRoot, "skills") },
     });
@@ -187,7 +194,11 @@ describe("T003 model-route ordering", () => {
     expect(result.ok).toBe(true);
     expect(result.setup?.model?.status).toBe("configured");
     const plannerAgent = await readFile(resolve(agentsDir, "planner.md"), "utf8");
-    expect(plannerAgent).toContain('model: "opencode-go/muse-spark-1.3-contributor#xhigh"');
+    expect(plannerAgent.slice(0, plannerAgent.indexOf("\n---\n"))).not.toMatch(/^\s*(?:model|variant):/m);
+    expect(resolveSetupAriaConfig(worktree).roles.planner).toMatchObject({
+      model: "opencode-go/muse-spark-1.3-contributor",
+      variant: "xhigh",
+    });
   });
 
   it("setup --configure leaves agents untouched when configuration fails", async () => {
