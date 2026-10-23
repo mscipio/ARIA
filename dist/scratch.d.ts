@@ -97,10 +97,10 @@ export declare function ensureScratchDirs(worktree: string, subdirs?: readonly s
  * verified scratch root; symlink escapes fail closed.
  */
 export declare function createUniqueScratchDir(worktree: string, scope: string, prefix: string): Promise<string>;
-/** Deterministic per-task directory: `<scratch>/<taskId>/` (created when missing). */
-export declare function createTaskScratch(worktree: string, taskId: string): Promise<string>;
+/** Per-day deterministic directory: `<scratch>/<UTC date>/<task name>/`; a new UTC day intentionally gets a new path. */
+export declare function createTaskScratch(worktree: string, taskId: string, taskName?: string): Promise<string>;
 /** Concurrent-safe unique run directory under the per-task directory. */
-export declare function createTaskRunDir(worktree: string, taskId: string, prefix?: string): Promise<string>;
+export declare function createTaskRunDir(worktree: string, taskId: string, prefix?: string, taskName?: string): Promise<string>;
 /**
  * Task-scoped directories plus per-call env for ARIA-controlled operations.
  * Route caches, logs, captures, builds, and test outputs through `dirs`
@@ -121,7 +121,7 @@ export declare function createTaskRunDir(worktree: string, taskId: string, prefi
  * `caches/python` under the scratch root, surfaced as `NPM_CONFIG_CACHE`,
  * `PIP_CACHE_DIR`, and `PYTHONPYCACHEPREFIX`.
  */
-export declare function scratchTaskScope(worktree: string, taskId: string): Promise<ScratchTaskScope>;
+export declare function scratchTaskScope(worktree: string, taskId: string, taskName?: string): Promise<ScratchTaskScope>;
 /**
  * Atomically write a file under `scratch/` (path relative to the scratch
  * root, e.g. `logs/run.log`): sibling-temp + `verifySafeParent` + rename,

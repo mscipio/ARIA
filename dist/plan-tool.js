@@ -65,7 +65,10 @@ export function authorizePlan(context, action) {
         return "A sessionID is required to use ARIA RDC plan tools";
     const agent = stringField(context, "agent");
     if (!agent || !PLAN_ACTIONS_BY_ROLE[agent]?.has(action)) {
-        return `Role ${agent ?? "unknown"} may not ${action} the plan`;
+        const authorizedRoles = Object.entries(PLAN_ACTIONS_BY_ROLE)
+            .filter(([, actions]) => actions.has(action))
+            .map(([role]) => role);
+        return `Role ${agent ?? "unknown"} may not ${action} the plan. Authorized role(s) for ${action}: ${authorizedRoles.join(", ") || "none"}.`;
     }
     return null;
 }

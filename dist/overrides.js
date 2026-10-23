@@ -28,6 +28,7 @@ Use any available MCP whenever it materially improves the evidence; these are pr
 - Context7 provides current, version-specific external library, framework, and API documentation plus supported interfaces; use it instead of guessing external behavior.
 - Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. Use it only within the selected role's explicit permissions and boundaries.
 - Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .aria/rdc/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .aria/rdc/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.
+- If the Plan tool rejects an action as unauthorized, do not retry that action. Report the exact attempted action and the authorized role(s) named by the error. Before a single handoff, verify the candidate role is actually authorized for that exact action and that a real delegation/tool permission path exists in the current workflow. If no supported candidate exists, report the blocker to the caller/coordinator and stop. Never impersonate a role or bypass authority; delegation does not grant permission.
 - Workspace execution policy (canonical: \`src/scratch.ts\` via \`src/paths.ts\` guards): confine transient/generated artifacts (logs, fixtures, temporary outputs, verification evidence, etc.) to \`<worktree>/scratch/\`; this does not restrict intentional edits to authorized repository code, tests, configuration, or documentation. Never stage scratch artifacts. Staging explicitly approved source changes is permitted only during human-authorized Git operations; editing does not itself authorize staging. Subagents inherit these same source-edit, scratch, staging, and human-authorization distinctions; delegation cannot expand authorization, and there is no bypass by asking another agent. Reuse the canonical helper, never duplicate path checks; HOME/XDG/global config preserved; approvals required, not an OS sandbox.`;
 function withMcpGuidance(promptText) {
     const normalized = promptText.trimEnd();
@@ -214,9 +215,7 @@ export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.
                 ...roleDefaults,
                 model,
                 variant,
-                promptText: role === "scientist" || role === "archivist" || role === "writer" || role === "researcher"
-                    ? readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")
-                    : withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
+                promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
             }];
     }));
     roles.coder.promptText = roles.coder.promptText.replace("{{routing}}", generateRouting({ roles }));

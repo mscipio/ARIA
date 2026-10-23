@@ -54,7 +54,7 @@ export declare function toRuntimeModelRef(override: RoleOverride): {
  * their resolved route; the input is never mutated and no files are written.
  */
 export declare function applyProjectModelOverlay(resolved: ResolvedAriaConfig, overlay: ProjectModelOverlay): ResolvedAriaConfig;
-/** Minimal editor surface needed for the narrow runtime patch. */
+/** Minimal editor surface needed for runtime model route updates. */
 export interface ProjectModelAgentEditor {
     get(id: string): {
         model?: unknown;
@@ -62,10 +62,9 @@ export interface ProjectModelAgentEditor {
     update(id: string, update: (agent: Record<string, unknown>) => void): void;
 }
 /**
- * Narrow runtime patch: `agent.update` for model/variant only, and only for
- * roles present in the overlay whose agent exists. Roles without an overlay
- * are never touched; missing agents are skipped (never materialized here —
- * managed files remain the creation mechanism).
+ * Runtime model patch: `agent.update` for model/variant only, for each role in
+ * the overlay. `agent.update` upserts missing roles; other agent metadata is
+ * preserved, and roles without an overlay are not touched.
  *
  * @returns roles whose model was patched, in canonical role order.
  */

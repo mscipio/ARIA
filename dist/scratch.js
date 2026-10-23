@@ -1,6 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { assertContained, canonicalWorktree, ensureSafeDirectory, safeProjectFile, verifySafeParent, withFileLock, } from "./paths.js";
@@ -158,16 +158,59 @@ function validateTaskId(taskId) {
     }
     return id;
 }
-/** Deterministic per-task directory: `<scratch>/<taskId>/` (created when missing). */
-export async function createTaskScratch(worktree, taskId) {
-    const id = validateTaskId(taskId);
+function taskSlug(taskId, taskName) {
+    const source = taskName?.trim() || taskId.replace(/([a-z])([A-Z0-9])/g, "$1 $2");
+    const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56).replace(/-+$/g, "");
+    return slug || "task";
+}
+/** Date-scoped task directory. Repeated task IDs resolve to the same path only within the same UTC day. */
+async function resolveTaskDir(worktree, id, taskName) {
     const { root, scratch } = await resolveScratchRoot(worktree);
-    return resolveScratchDir(root, scratch, id, true);
+    const date = new Date().toISOString().slice(0, 10); // UTC date is the deterministic date rule.
+    const dateDir = await resolveScratchDir(root, scratch, date, true);
+    const slug = taskSlug(id, taskName);
+    const marker = ".aria-task-id";
+    const identity = `${id}\n${taskName?.trim() ?? ""}\n`;
+    const idSuffix = createHash("sha256").update(id).digest("hex").slice(0, 6);
+    // Serialize allocation so parallel processes cannot split the same task
+    // between the unsuffixed and collision paths.
+    const taskDir = await withFileLock(dateDir, async () => {
+        const unsuffixed = join(dateDir, slug);
+        for (const candidate of [unsuffixed, join(dateDir, `${slug}-${idSuffix}`)]) {
+            try {
+                await mkdir(candidate);
+                await writeFile(join(candidate, marker), identity, { flag: "wx" });
+                return candidate;
+            }
+            catch (error) {
+                if (error.code !== "EEXIST")
+                    throw error;
+            }
+            await ensureSafeDirectory(root, candidate, false);
+            try {
+                if ((await readFile(join(candidate, marker), "utf8")) === identity)
+                    return candidate;
+            }
+            catch (error) {
+                if (error.code !== "ENOENT")
+                    throw error;
+            }
+        }
+        throw new Error(`Unable to allocate a unique scratch directory for task ${id}`);
+    });
+    assertContained(scratch, taskDir, "Scratch task directory");
+    return { root, scratch, taskDir };
+}
+/** Per-day deterministic directory: `<scratch>/<UTC date>/<task name>/`; a new UTC day intentionally gets a new path. */
+export async function createTaskScratch(worktree, taskId, taskName) {
+    const id = validateTaskId(taskId);
+    return (await resolveTaskDir(worktree, id, taskName)).taskDir;
 }
 /** Concurrent-safe unique run directory under the per-task directory. */
-export async function createTaskRunDir(worktree, taskId, prefix = "run") {
+export async function createTaskRunDir(worktree, taskId, prefix = "run", taskName) {
     const id = validateTaskId(taskId);
-    return createUniqueScratchDir(worktree, id, prefix);
+    const { root, scratch, taskDir } = await resolveTaskDir(worktree, id, taskName);
+    return createUniqueScratchDir(root, relative(scratch, taskDir), prefix);
 }
 /**
  * Task-scoped directories plus per-call env for ARIA-controlled operations.
@@ -189,26 +232,26 @@ export async function createTaskRunDir(worktree, taskId, prefix = "run") {
  * `caches/python` under the scratch root, surfaced as `NPM_CONFIG_CACHE`,
  * `PIP_CACHE_DIR`, and `PYTHONPYCACHEPREFIX`.
  */
-export async function scratchTaskScope(worktree, taskId) {
+export async function scratchTaskScope(worktree, taskId, taskName) {
     const id = validateTaskId(taskId);
-    const { root, scratch } = await resolveScratchRoot(worktree);
+    const { root, scratch, taskDir } = await resolveTaskDir(worktree, id, taskName);
     await ensureSafeDirectory(root, scratch, true);
-    const taskDir = await resolveScratchDir(root, scratch, id, true);
+    const taskScope = relative(scratch, taskDir);
     const [tmp, testFixtures, testResults, logs, screenshots, videos, capturesDir, npmCache, pipCache, pythonCache, builds, environments, runtime, experiments] = await Promise.all([
-        resolveScratchDir(root, scratch, `${id}/tmp`, true),
-        resolveScratchDir(root, scratch, `${id}/tests/fixtures`, true),
-        resolveScratchDir(root, scratch, `${id}/tests/results`, true),
-        resolveScratchDir(root, scratch, `${id}/logs`, true),
-        resolveScratchDir(root, scratch, `${id}/captures/screenshots`, true),
-        resolveScratchDir(root, scratch, `${id}/captures/videos`, true),
-        resolveScratchDir(root, scratch, `${id}/captures`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/tmp`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/tests/fixtures`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/tests/results`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/logs`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/captures/screenshots`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/captures/videos`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/captures`, true),
         resolveScratchDir(root, scratch, "caches/npm", true),
         resolveScratchDir(root, scratch, "caches/pip", true),
         resolveScratchDir(root, scratch, "caches/python", true),
-        resolveScratchDir(root, scratch, `${id}/builds`, true),
-        resolveScratchDir(root, scratch, `${id}/environments`, true),
-        resolveScratchDir(root, scratch, `${id}/runtime`, true),
-        resolveScratchDir(root, scratch, `${id}/experiments`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/builds`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/environments`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/runtime`, true),
+        resolveScratchDir(root, scratch, `${taskScope}/experiments`, true),
     ]);
     return {
         root,

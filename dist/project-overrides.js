@@ -146,10 +146,9 @@ export function applyProjectModelOverlay(resolved, overlay) {
     return { roles };
 }
 /**
- * Narrow runtime patch: `agent.update` for model/variant only, and only for
- * roles present in the overlay whose agent exists. Roles without an overlay
- * are never touched; missing agents are skipped (never materialized here —
- * managed files remain the creation mechanism).
+ * Runtime model patch: `agent.update` for model/variant only, for each role in
+ * the overlay. `agent.update` upserts missing roles; other agent metadata is
+ * preserved, and roles without an overlay are not touched.
  *
  * @returns roles whose model was patched, in canonical role order.
  */
@@ -158,8 +157,6 @@ export function applyProjectModelTransforms(editor, overlay) {
     for (const role of ROLES) {
         const override = overlay[role];
         if (!override)
-            continue;
-        if (!editor.get(role))
             continue;
         const ref = toRuntimeModelRef(override);
         const next = { providerID: ref.providerID, id: ref.id };

@@ -9,8 +9,9 @@ export declare function agentFileChecksum(description: string, model: string, mo
 /**
  * Render one deterministic managed agent file. The body is the resolved
  * system prompt verbatim (exactly one trailing newline); frontmatter carries
- * the `agents.<id>` fields plus ARIA ownership comments (comments, never
- * fields, so the V2 schema surface is untouched).
+ * only agent fields independent of model routing plus ARIA ownership comments.
+ * Models are applied at runtime and are deliberately not baked into these
+ * globally managed files.
  */
 export declare function generateAgentFile(role: RoleName, resolved: ResolvedRoleConfig, version: string): string;
 /** Render all eleven managed agent files in canonical role order. */
