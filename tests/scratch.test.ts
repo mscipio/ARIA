@@ -101,16 +101,34 @@ describe("T002 workspace/scratch policy", () => {
 
   it("creates concurrent-safe noncolliding directories per task", async () => {
     const worktree = await fixtureWorktree("collide");
-    const taskDir = await createTaskScratch(worktree, "task-p2");
-    expect(taskDir).toBe(join((await resolveScratchRoot(worktree)).scratch, "task-p2"));
+    const taskDir = await createTaskScratch(worktree, "task-p2", "Create task scratch layout");
+    expect(taskDir).toBe(join((await resolveScratchRoot(worktree)).scratch, new Date().toISOString().slice(0, 10), "create-task-scratch-layout"));
     const runs = await Promise.all(
-      Array.from({ length: 8 }, () => createTaskRunDir(worktree, "task-p2", "run")),
+      Array.from({ length: 8 }, () => createTaskRunDir(worktree, "task-p2", "run", "Create task scratch layout")),
     );
     expect(new Set(runs).size).toBe(8);
     for (const run of runs) {
       expect(containedUnder(taskDir, run)).toBe(true);
       expect((await lstat(run)).isDirectory()).toBe(true);
     }
+  });
+
+  it("reuses a task directory and suffixes only same-name collisions without touching history", async () => {
+    const worktree = await fixtureWorktree("task-names");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const date = new Date().toISOString().slice(0, 10);
+    const historic = join(scratch, date, "human-readable-task");
+    await mkdir(historic, { recursive: true });
+    const historicalFile = join(historic, "keep.txt");
+    await writeFile(historicalFile, "historic");
+
+    const first = await createTaskScratch(worktree, "opaque-id-one", "Human readable task");
+    const repeated = await createTaskScratch(worktree, "opaque-id-one", "Human readable task");
+    const collision = await createTaskScratch(worktree, "opaque-id-two", "Human readable task");
+    expect(first).toBe(repeated);
+    expect(first).not.toBe(historic);
+    expect(collision).toMatch(/human-readable-task-[a-f0-9]{6}$/);
+    expect(await readFile(historicalFile, "utf8")).toBe("historic");
   });
 
   it("keeps task-owned outputs disjoint across task scopes while caches stay shared", async () => {
