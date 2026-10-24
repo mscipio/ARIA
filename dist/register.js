@@ -5,6 +5,7 @@ import { getPackageRoot } from "./defaults.js";
 import { resolveAriaConfig } from "./overrides.js";
 import { addPlanTasks, approvePlan, cancelPlan, closePlan, createPlan, readActivePlan, remediatePlanTasks, replacePlan, updatePlanTask, } from "./plans.js";
 import { formatClosedPlanOutput, formatPlanOutput, formatToolError, planToolTitle, } from "./present.js";
+import { PLAN_PREMISE_RECOVERY_ROLES, PLAN_PREMISE_RECOVERY_TOOL_NAME, } from "./plan-premise-recovery-tool.js";
 function stringField(value, key) {
     if (!value || typeof value !== "object")
         return undefined;
@@ -112,6 +113,7 @@ const BASE_PERMISSION = {
     doom_loop: "ask",
     skill: "deny",
     plan: "deny",
+    [PLAN_PREMISE_RECOVERY_TOOL_NAME]: "deny",
 };
 const PROTECTED_READ = {
     "*": "allow",
@@ -138,6 +140,11 @@ const REQUIRED_MCP_PERMISSION = {
     "context7_*": "allow",
     "codegraph_*": "allow",
 };
+function planPremiseRecoveryPermission(role) {
+    return PLAN_PREMISE_RECOVERY_ROLES.includes(role)
+        ? { [PLAN_PREMISE_RECOVERY_TOOL_NAME]: "allow" }
+        : {};
+}
 // Verified ZotPilot MCP inventory (environment-provided; not part of this
 // repository's dependencies). Verified against zotpilot 0.5.3 in this
 // environment: the FastMCP server is named `zotpilot` (`zotpilot mcp serve`),
@@ -186,12 +193,15 @@ const ROLE_PERMISSIONS = {
     explorer: {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
+        ...planPremiseRecoveryPermission("explorer"),
         skill: skillAccess("rdc-code-exploration"),
     },
     visualizer: {
         ...BASE_PERMISSION,
         ...REQUIRED_MCP_PERMISSION,
+        ...planPremiseRecoveryPermission("visualizer"),
         read: PROTECTED_READ,
+        scratch_task: "allow",
         skill: skillAccess("aria-qt-ui"),
     },
     planner: {
@@ -213,7 +223,9 @@ const ROLE_PERMISSIONS = {
     implementer: {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
+        ...planPremiseRecoveryPermission("implementer"),
         edit: PROTECTED_EDIT,
+        scratch_task: "allow",
         bash: {
             "*": "allow",
             "rm": "deny",
@@ -233,6 +245,8 @@ const ROLE_PERMISSIONS = {
     reviewer: {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
+        ...planPremiseRecoveryPermission("reviewer"),
+        scratch_task: "allow",
         bash: "allow",
         webfetch: "allow",
         websearch: "allow",
@@ -241,6 +255,7 @@ const ROLE_PERMISSIONS = {
     },
     researcher: {
         ...BASE_PERMISSION,
+        ...planPremiseRecoveryPermission("researcher"),
         read: PROTECTED_READ,
         glob: "allow",
         grep: "allow",
@@ -272,6 +287,7 @@ const ROLE_PERMISSIONS = {
     },
     "archivist": {
         ...BASE_PERMISSION,
+        ...planPremiseRecoveryPermission("archivist"),
         read: { "*": "deny" },
         edit: { "*": "deny" },
         glob: "deny",
@@ -283,6 +299,7 @@ const ROLE_PERMISSIONS = {
     },
     writer: {
         ...BASE_PERMISSION,
+        ...planPremiseRecoveryPermission("writer"),
         read: PROTECTED_READ,
         skill: skillAccess("aria-academic-writing", "aria-writing-anti-ai", "aria-review-response", "aria-paper-self-review", "aria-document-design"),
         task: {
@@ -294,6 +311,7 @@ const ROLE_PERMISSIONS = {
     },
     scientist: {
         ...BASE_PERMISSION,
+        ...planPremiseRecoveryPermission("scientist"),
         read: PROTECTED_READ,
         glob: "allow",
         grep: "allow",
@@ -390,8 +408,10 @@ function coderPermission() {
         ...REQUIRED_MCP_PERMISSION,
         edit: "deny",
         bash: "deny",
+        scratch_task: "allow",
         task: TASK_PERMISSIONS,
         plan: "allow",
+        [PLAN_PREMISE_RECOVERY_TOOL_NAME]: "deny",
         skill: {
             "rdc-adversarial-review": "deny",
         },

@@ -56,4 +56,4 @@ Do not block on style, preference, unrelated pre-existing debt, theoretical edge
 
 Tracked generated artifacts produced deterministically by an approved build/code-generation step are part of the change; inspect them for unrelated output but do not block merely because they changed.
 
-Where the approved plan requires output, verify ARIA-controlled files sit under `<worktree>/scratch/` via the canonical helper (`src/scratch.ts`); do not block on placement the plan never required.
+Before creating transient/generated verification artifacts (for example, logs or test results), invoke the native `scratch_task` tool with the approved task ID and a concise, descriptive task name, then use the returned paths under the UTC-date directory. Fail closed if task identity, project location, or allocation is unavailable; never invent paths or fall back to `process.cwd()`. Verify ARIA-controlled outputs use those paths; do not invent placement requirements for outputs the approved plan does not require.

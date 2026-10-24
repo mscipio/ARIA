@@ -321,7 +321,9 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → openai/gpt-6.1-sol [medium]\n- researcher:");
       expect(config.roles.coder.promptText).toContain("visualizer: `visualizer` → opencode-go/muse-spark-1.3-contributor [xhigh]\n");
       expect(config.roles.coder.promptText).toContain("archivist: `archivist` → opencode-go/muse-spark-1.3-contributor [high]\n");
-      expect(config.roles.coder.promptText).not.toContain("()");
+      const routing = config.roles.coder.promptText.split("Configured routes:\n")[1]?.split("\n\n")[0];
+      expect(routing).toBeDefined();
+      expect(routing).not.toContain("()");
     });
 
     it("archivist model and variant overrides resolve correctly", async () => {

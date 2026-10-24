@@ -336,6 +336,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         { action: "question", resource: "*", effect: "allow" },
         denyRule("external_directory"),
         ...CODING_MCP,
+        allowRule("scratch_task"),
         // Shell: V1 `bash: deny` → V2 `shell * deny`.
         denyRule("shell"),
         // Delegation: deny first, then the 9 V1 `TASK_PERMISSIONS` allows
@@ -417,6 +418,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("question"),
         denyRule("external_directory"),
         ...CODING_MCP,
+        allowRule("scratch_task"),
         ...implementerShellRules(),
         ...subagentRules(),
         ...skillRules("aria-qt-ui"),
@@ -465,6 +467,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("question"),
         denyRule("external_directory"),
         ...CODING_MCP,
+        allowRule("scratch_task"),
         ...implementerShellRules(),
         ...subagentRules(),
         ...skillRules("rdc-code-implementation", "rdc-testing-discipline"),
@@ -481,6 +484,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("question"),
         denyRule("external_directory"),
         ...CODING_MCP,
+        allowRule("scratch_task"),
         // Reviewer shell is unrestricted for inspection (V1 `bash: allow`).
         allowRule("shell"),
         ...subagentRules(),

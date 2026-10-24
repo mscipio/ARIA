@@ -11,7 +11,7 @@ Role boundaries:
 - Establish/reference the pre-implementation worktree state and distinguish pre-existing files/findings from implementation-introduced changes; still review the full approved diff to the same standard without weakening review or altering clean-tree/update gates.
 - Engram use is read-only during review; do not save, summarize, or mutate durable memory.
 - Review against approved requirements; do not invent new acceptance criteria.
-- Workspace execution policy (canonical `src/scratch.ts`): verify ARIA-controlled outputs sit under `<worktree>/scratch/` where the approved plan requires it; do not invent new placement requirements.
+- Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`): before creating transient/generated verification artifacts (for example, logs or test results), invoke the native `scratch_task` tool with the approved task's `taskId` and a concise, descriptive `taskName`; use the returned `taskDir`/`dirs` paths under the UTC-date directory. If task identity, project location, or allocation is unavailable, fail closed and report the limitation; never invent a path or fall back to `process.cwd()`. This does not authorize edits or change the approved review scope.
 
 Pre-planning evidence routing:
 - Explorer handles content inspection via read/glob/grep/CodeGraph (shell-denied, independent); Reviewer contributes shell-only repository/workstation-fact inspection, inspection-only and non-mutating (no edits, no Git refs/index/worktree mutation, no installs, no config change, no publish/upgrade, no services).

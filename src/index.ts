@@ -1,6 +1,8 @@
 import { Plugin } from "@opencode/plugin";
 
 import { createPlanTool, resolvePlanRootFromLocation } from "./plan-tool.js";
+import { createPlanPremiseRecoveryTool } from "./plan-premise-recovery-tool.js";
+import { createScratchTaskTool } from "./scratch-tool.js";
 import { ROLES, resolveAriaConfig } from "./overrides.js";
 import {
   applyArchivistRuntimeTransform,
@@ -33,13 +35,12 @@ import {
  * `WIKI_DIR` is set). No files are written; other roles are untouched except
  * via the T005 overlay above.
  *
- * T006 production wiring: the shared plan tool is registered natively via
- * `ctx.tool.transform(editor => editor.add(...))` — no command workaround,
- * no MCP sidecar. The runtime owns registration only; CAS, file locking,
- * and atomic `.aria/rdc/TASKS.md` persistence stay ARIA-owned in
- * `src/plans.ts`. The persistence root is the setup-time startup location
- * (`ctx.location`); V2 `Tool.Context` carries no per-invocation directory,
- * so per-invocation scoping is a V1-only semantic (see `src/plan-tool.ts`).
+ * T006/T021/T007 production wiring: native plan, task-scratch, and the
+ * one-shot plan-premise recovery tool are registered via
+ * `ctx.tool.transform(editor => editor.add(...))` — no command workaround or
+ * MCP sidecar. Plan persistence and recovery use the setup-time `ctx.location`
+ * root; scratch uses that location as well. Missing location evidence never
+ * falls back to `process.cwd()`.
  */
 function projectDirectoryFromContext(ctx: unknown): string | undefined {
   if (!ctx || typeof ctx !== "object") return undefined;
@@ -58,9 +59,10 @@ function projectDirectoryFromContext(ctx: unknown): string | undefined {
 const aria = Plugin.define({
   id: "aria",
   async setup(ctx) {
-    // T006: register the native plan tool first so it is present even when
-    // there is no project overlay (or no worktree at all). The root is the
-    // setup-time startup location; execution validates meaningfulness.
+    const worktree = projectDirectoryFromContext(ctx);
+    // T006/T021: register the native plan and scratch tools before project
+    // overlays, including when no worktree exists. Each tool validates its
+    // own setup-time location at execution (scratch allocation fails closed).
     // Guarded for location/tool-less hosts (e.g. smoke `setup({})`).
     const location = (ctx as { location?: unknown } | undefined)?.location;
     const planRoot = resolvePlanRootFromLocation(location);
@@ -69,6 +71,13 @@ const aria = Plugin.define({
       await (toolDomain.transform as (callback: (editor: { add: (tool: never) => void }) => void) => Promise<unknown>)(
         (editor) => {
           editor.add(createPlanTool(planRoot) as never);
+          editor.add(createScratchTaskTool(worktree) as never);
+          // Native @opencode/plugin session APIs are runtime-owned. Keep the
+          // session domain in this setup closure and expose recovery only when
+          // the host supplies it (real V2 plugin hosts always do).
+          if (ctx.session) {
+            editor.add(createPlanPremiseRecoveryTool(planRoot, ctx.session) as never);
+          }
         },
       );
     }
@@ -78,10 +87,9 @@ const aria = Plugin.define({
     // location): the worktree comes from ctx — never process.cwd(). When
     // ctx carries no project/location directory there is nothing to
     // overlay (absent => no change).
-    const worktree = projectDirectoryFromContext(ctx);
     if (!worktree) {
       return () => {
-        // Plan tool (T006) already registered above when a tool domain exists.
+        // Native tools (T006/T021) were already registered when a tool domain exists.
       };
     }
     // Invalid project models throw per the accepted helper semantics
@@ -91,7 +99,7 @@ const aria = Plugin.define({
     const agentDomain = (ctx as { agent?: { transform?: unknown } } | undefined)?.agent;
     if (typeof agentDomain?.transform !== "function") {
       return () => {
-        // Plan tool (T006) already registered above when a tool domain exists.
+        // Native tools (T006/T021) were already registered when a tool domain exists.
       };
     }
     // Resolve defaults + global + project ARIA layers for every canonical role.
@@ -125,7 +133,7 @@ const aria = Plugin.define({
       applyArchivistRuntimeTransform(adapter, worktree);
     });
     return () => {
-      // No registrations yet beyond the narrow T005 transform; reserved for T003+ disposables.
+      // No additional setup-time resources require disposal.
     };
   },
 });

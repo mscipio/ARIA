@@ -8,8 +8,11 @@ import {
   getArchivistScopedPermissions,
   getPermissionsForRole,
 } from "../src/permissions";
+import { generateAgentFiles } from "../src/agents";
 import { authorizePlan } from "../src/plan-tool";
 import { getPackageRoot } from "../src/defaults";
+import { resolveAriaConfig } from "../src/overrides";
+import { effectiveRolePermissions } from "../src/register";
 import type { RoleName } from "../src/types";
 import { Agent } from "@opencode/schema";
 
@@ -25,6 +28,48 @@ const LEGACY_ACTIONS = ["bash", "task", "plan", "todowrite", "list", "lsp", "doo
 function actionsFor(role: RoleName): string[] {
   return getPermissionsForRole(role).map((rule) => rule.action);
 }
+
+describe("T022 native scratch task permissions", () => {
+  it("grants scratch allocation only to artifact-producing roles and renders matching guidance", () => {
+    const artifactRoles = new Set<RoleName>(["coder", "visualizer", "implementer", "reviewer"]);
+    const roles: RoleName[] = [
+      "coder",
+      "explorer",
+      "visualizer",
+      "planner",
+      "architect",
+      "implementer",
+      "reviewer",
+      "researcher",
+      "archivist",
+      "writer",
+      "scientist",
+    ];
+    const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
+    const registered = effectiveRolePermissions();
+
+    for (const role of roles) {
+      const permitted = artifactRoles.has(role);
+      const rules = getPermissionsForRole(role);
+      expect(evaluatePermission(rules, "scratch_task", "*")).toBe(permitted ? "allow" : "ask");
+      const merged = [...Agent.Info.default(Agent.ID.make(role)).permissions, ...rules];
+      expect(evaluatePermission(merged, "scratch_task", "*")).toBe(permitted ? "allow" : "ask");
+      const grant = generated[role].match(/- action: "scratch_task"\n\s+resource: "\*"\n\s+effect: (allow|ask|deny)/);
+      expect(grant?.[1] ?? null).toBe(permitted ? "allow" : null);
+      expect(generated[role].includes("invoke the native `scratch_task` tool")).toBe(permitted);
+      expect(generated[role]).toContain("Persistent project data");
+      expect(generated[role]).toContain("authoritative `.aria/rdc/TASKS.md` plan");
+      if (permitted) {
+        expect(generated[role]).toContain("Use the returned `taskDir` and exact returned `dirs` paths");
+        expect(generated[role]).toContain("`testFixtures`/`testResults`");
+        expect(generated[role]).toContain("`npmCache`/`pipCache`/`pythonCache`");
+        expect(registered[role].scratch_task).toBe("allow");
+      } else {
+        expect(registered[role].scratch_task).toBeUndefined();
+      }
+    }
+  });
+});
 
 describe("T004 permission/model/delegation parity", () => {
   it("authorizes plan cancellation for coder only", () => {

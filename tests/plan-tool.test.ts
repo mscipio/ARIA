@@ -71,7 +71,7 @@ function revisionOf(text: string): number {
 }
 
 describe("T006 native V2 plan tool", () => {
-  it("registers natively via ctx.tool.transform(editor => editor.add(...)) with no command/MCP sidecar", async () => {
+  it("registers native tools via ctx.tool.transform(editor => editor.add(...)) with no command/MCP sidecar", async () => {
     const root = await project();
     const added: Array<{ name?: unknown }> = [];
     const toolTransform = vi.fn(async (callback: (editor: { add: (tool: never) => void }) => void) => {
@@ -92,8 +92,9 @@ describe("T006 native V2 plan tool", () => {
     await (cleanup as () => Promise<void> | void)();
 
     expect(toolTransform).toHaveBeenCalledTimes(1);
-    expect(added).toHaveLength(1);
+    expect(added).toHaveLength(2);
     expect(added[0]).toMatchObject({ name: "plan" });
+    expect(added[1]).toMatchObject({ name: "scratch_task" });
     expect(commandTransform).not.toHaveBeenCalled();
     expect(mcpSpy).not.toHaveBeenCalled();
   });

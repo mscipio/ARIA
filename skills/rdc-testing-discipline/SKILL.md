@@ -56,4 +56,4 @@ Require additional verification when an important approved behavior would otherw
 
 Preserved boundaries: destructive/unauthorized-action, scientific-data, and consequential-security protections, plus plan approval/revision/TASKS.md, setup/lifecycle, and read-only doctor boundaries, stay intact. Do not broaden remediation/review cycles, add plan tasks, commit, release, or stage anything.
 
-Place test fixtures/results the task controls under `./scratch/` via the canonical helper (`src/scratch.ts`); existing meaningful coverage counts — do not add placement-only tests.
+Before creating task-controlled test fixtures/results or other transient verification artifacts, invoke the native `scratch_task` tool with the approved task ID and a concise, descriptive task name; use its returned paths under the UTC-date directory (for example, `dirs.testFixtures`, `dirs.testResults`, and `dirs.logs`). Fail closed when task identity, project location, or allocation is unavailable; never invent paths or fall back to `process.cwd()`. Existing meaningful coverage counts — do not add placement-only tests.
