@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,7 @@ import {
   rollbackAgentInstall,
 } from "../src/agents";
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions";
+import { PLAN_PREMISE_RECOVERY_TOOL_NAME } from "../src/plan-premise-recovery-tool";
 import { resolveAriaConfig } from "../src/overrides";
 import { createUniqueScratchDir } from "../src/scratch.js";
 import type { RoleName } from "../src/types";
@@ -304,6 +306,47 @@ describe("T003 agent installation", () => {
     }
     expect((await readdir(dir)).sort()).toEqual(entriesBefore);
     expect((await readdir(dir)).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("strictly upgrades an intact managed definition with stale recovery permissions", async () => {
+    const resolved = resolveAriaConfig(await worktree());
+    const dir = join(await worktree(), "agents");
+    await mkdir(dir, { recursive: true });
+    const generated = generateAgentFiles(resolved, FIXTURE_VERSION);
+    for (const role of ROLES) await writeFile(join(dir, agentFileName(role)), generated[role]);
+
+    // Simulate a valid previous generated file before this permission rule was
+    // introduced: the old rules and body still match its ownership checksum.
+    const previousPermissions = getPermissionsForRole("explorer").filter(
+      (rule) => rule.action !== PLAN_PREMISE_RECOVERY_TOOL_NAME,
+    );
+    const previousWithoutChecksum = generated.explorer.replace(
+      /  - action: "plan_premise_recovery"\n    resource: "\*"\n    effect: (?:allow|deny)\n/,
+      "",
+    );
+    const lines = previousWithoutChecksum.split("\n");
+    const descriptionLine = lines.find((line) => line.startsWith("description: "))!;
+    const description = JSON.parse(descriptionLine.slice("description: ".length)) as string;
+    const mode = lines.find((line) => line.startsWith("mode: "))!.slice("mode: ".length);
+    const closing = lines.indexOf("---", 1);
+    const body = `${lines.slice(closing + 2, -1).join("\n")}\n`;
+    const oldChecksum = createHash("sha256")
+      .update([description, mode, JSON.stringify(previousPermissions), body].join("\n"), "utf8")
+      .digest("hex");
+    const previous = previousWithoutChecksum.replace(
+      /^# aria-checksum: [0-9a-f]{64}$/m,
+      `# aria-checksum: ${oldChecksum}`,
+    );
+    expect(previous).not.toContain(`action: "${PLAN_PREMISE_RECOVERY_TOOL_NAME}"`);
+    await writeFile(join(dir, agentFileName("explorer")), previous);
+
+    const result = await reconcileManagedAgents(resolved, { dir, version: FIXTURE_VERSION });
+
+    expect(result.written).toEqual(["explorer"]);
+    expect(result.unchanged).toEqual(ROLES.filter((role) => role !== "explorer"));
+    expect(result.tampered).not.toContain("explorer");
+    expect(result.previousContents.explorer).toBe(previous);
+    expect(await readFile(join(dir, agentFileName("explorer")), "utf8")).toBe(generated.explorer);
   });
 
   it("checksum-validates and migrates owned legacy route frontmatter without losing other fields", async () => {

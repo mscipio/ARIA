@@ -11,7 +11,8 @@ import {
 import { generateAgentFiles } from "../src/agents";
 import { authorizePlan } from "../src/plan-tool";
 import { getPackageRoot } from "../src/defaults";
-import { resolveAriaConfig } from "../src/overrides";
+import { PLAN_PREMISE_RECOVERY_ROLES, PLAN_PREMISE_RECOVERY_TOOL_NAME } from "../src/plan-premise-recovery-tool";
+import { ROLES, resolveAriaConfig } from "../src/overrides";
 import { effectiveRolePermissions } from "../src/register";
 import type { RoleName } from "../src/types";
 import { Agent } from "@opencode/schema";
@@ -67,6 +68,48 @@ describe("T022 native scratch task permissions", () => {
       } else {
         expect(registered[role].scratch_task).toBeUndefined();
       }
+    }
+  });
+});
+
+describe("plan premise recovery permissions", () => {
+  it("serializes effective native allow/deny rules for exactly the authorized roles", () => {
+    const authorizedRoles = new Set<RoleName>(PLAN_PREMISE_RECOVERY_ROLES);
+    expect(PLAN_PREMISE_RECOVERY_ROLES).toEqual([
+      "explorer",
+      "visualizer",
+      "implementer",
+      "reviewer",
+      "researcher",
+      "archivist",
+      "writer",
+      "scientist",
+    ]);
+    expect(ROLES.filter((role) => !authorizedRoles.has(role))).toEqual(["coder", "planner", "architect"]);
+
+    const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
+    for (const role of ROLES) {
+      const expected = authorizedRoles.has(role) ? "allow" : "deny";
+      const rule = getPermissionsForRole(role).find(({ action }) => action === PLAN_PREMISE_RECOVERY_TOOL_NAME);
+      expect(rule, `${role} has an explicit recovery rule`).toEqual({
+        action: PLAN_PREMISE_RECOVERY_TOOL_NAME,
+        resource: "*",
+        effect: expected,
+      });
+
+      const serializedRules = [
+        ...generated[role].matchAll(
+          /- action: "plan_premise_recovery"\n\s+resource: "\*"\n\s+effect: (allow|deny)/g,
+        ),
+      ];
+      expect(serializedRules, `${role} managed definition serializes one recovery rule`).toHaveLength(1);
+      expect(serializedRules[0]?.[1], `${role} serialized effect`).toBe(expected);
+
+      // OpenCode merges generated rules after its permissive builtin rules;
+      // the explicit rule must win without changing the default ask policy.
+      const merged = [...Agent.Info.default(Agent.ID.make(role)).permissions, ...getPermissionsForRole(role)];
+      expect(evaluatePermission(merged, PLAN_PREMISE_RECOVERY_TOOL_NAME, "*")).toBe(expected);
+      expect(evaluatePermission(merged, "future_tool", "*")).toBe("ask");
     }
   });
 });
@@ -445,6 +488,7 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
   it("evaluates scoped read/edit/external allows with python allowlist ordering", () => {
     process.env.WIKI_DIR = "/tmp/aria-wiki";
     const rules = getArchivistScopedPermissions("/repo");
+    expect(evaluatePermission(rules, PLAN_PREMISE_RECOVERY_TOOL_NAME, "*")).toBe("allow");
     // V2 path semantics: external wiki scopes as canonical absolute paths
     // (repro `/tmp/aria-wiki/page.md` denied under worktree-relative scope).
     expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "ask" });
