@@ -562,7 +562,7 @@ describe("R002 ARIA-only upgrade carries no dependency preflight (upgrade + migr
     expect(result.detail.toLowerCase()).toContain("manually");
   });
 
-  it("migrate success proceeds through transition and continuation after the dry-run", async () => {
+  it("migrate success proceeds through the target handoff after the dry-run", async () => {
     const { calls, executor } = upgradeWorld({ dryRun: "ok", engram: "homebrew", ariaSpec: "github:mscipio/ARIA#v1.0.7" });
     let migrateCalls = 0;
     const result = await runMigrateUpgrade(executor, {
@@ -574,19 +574,6 @@ describe("R002 ARIA-only upgrade carries no dependency preflight (upgrade + migr
         expect(fromSpec).toBe("github:mscipio/ARIA#v1.0.7");
         expect(target.spec).toBe("github:mscipio/ARIA#v1.0.10");
         return { ok: true, detail: "transitioned", handoffNote: "continued" };
-      },
-      continuation: {
-        components: {
-          engram: async () => ({ component: "engram", status: "skipped", detail: "stubbed", mutated: false }),
-          context7: async () => ({ component: "context7", status: "skipped", detail: "stubbed", mutated: false }),
-          codegraph: async () => ({ component: "codegraph", status: "skipped", detail: "stubbed", mutated: false }),
-          zotpilot: async () => ({ component: "zotpilot", status: "skipped", detail: "stubbed", mutated: false }),
-          quota: async () => ({ component: "quota", status: "skipped", detail: "stubbed", mutated: false }),
-        },
-        normalizeFn: async () => ({ ok: true, detail: "normalized", mutated: false }),
-        regenFn: async () => ({ ok: true, detail: "no regen required", mutated: false }),
-        depsSyncFn: async () => ({ ok: true, detail: "synced", mutated: false }),
-        doctorFn: async () => ({ ok: true, detail: "healthy", mutated: false }),
       },
     });
     expect(result.stage).toBe("complete");

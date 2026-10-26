@@ -45,6 +45,14 @@ afterEach(async () => {
 
 const TARGET_106: AriaAvailableTarget = { tag: "v1.0.6", version: "1.0.6", spec: "github:mscipio/ARIA#v1.0.6" };
 const TARGET_107: AriaAvailableTarget = { tag: "v1.0.7", version: "1.0.7", spec: "github:mscipio/ARIA#v1.0.7" };
+const RC5_SPEC = "github:mscipio/ARIA#v1.3.4-rc.5";
+const RC6_TAG_OBJECT = "bba467c2c97eb99a416cf7e4fac1949c4d549a90";
+const RC6_COMMIT = "72459c95783201f222c2f56052d3c9ded3934cc2";
+const RC6_TARGET: AriaAvailableTarget = {
+  tag: "v1.3.4-rc.6",
+  version: "1.3.4-rc.6",
+  spec: `github:mscipio/ARIA#${RC6_COMMIT}`,
+};
 
 function pluginTable(rows: Array<[string, string, string]>): string {
   return ["ID  VERSION  SOURCE", ...rows.map(([id, version, source]) => `${id}  ${version}  ${source}`)].join("\n");
@@ -361,6 +369,68 @@ describe("T011 rollback (original restored or exact unresolved state)", () => {
       expect(call.options?.env?.["NPM_CONFIG_ALLOW_GIT"]).toBe("all");
     }
     expect(world.calls.some((call) => call.args[1] === "update")).toBe(false);
+  });
+
+  it("verifies an explicit rc tag/commit binding before replacing, and restores rc5 if rc6 add fails", async () => {
+    const initial: Array<[string, string, string]> = [ariaRow(RC5_SPEC), ...UNRELATED_ROWS];
+    const world = makeFakePluginWorld(initial);
+    const baseExecutor = world.executor;
+    world.executor = async (command, args, options) => {
+      if (command === "git") {
+        return {
+          stdout: `${RC6_TAG_OBJECT}\trefs/tags/v1.3.4-rc.6\n${RC6_COMMIT}\trefs/tags/v1.3.4-rc.6^{}\n`,
+          stderr: "",
+        };
+      }
+      if (command === "npm" && args[0] === "install" && args[2] === RC6_TARGET.spec) {
+        world.cliVersion = RC6_TARGET.version;
+      }
+      return baseExecutor(command, args, options);
+    };
+    world.cliVersion = "1.3.4-rc.5";
+    world.failAdd.add(RC6_TARGET.spec);
+
+    const outcome = await selfUpgradeAria(RC6_TARGET, handoffFor(RC6_TARGET), {
+      executor: world.executor,
+      readPersistedPlugins: persistedReaderFor(world),
+      delay: noDelay,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.registration).toContain(`original registration restored (${RC5_SPEC})`);
+    expect(world.rows.filter((row) => row[0] === "aria").map((row) => [row[0], row[2]])).toEqual([["aria", RC5_SPEC]]);
+    expect(world.rows.filter((row) => row[0] !== "aria")).toEqual(UNRELATED_ROWS);
+    expect([...world.persistedSpecs].sort()).toEqual(initial.map((row) => row[2]).sort());
+    expect(world.calls.some((call) => call.command === "opencode" && call.args[1] === "remove" && call.args[2] === RC5_SPEC)).toBe(true);
+    expect(world.calls.some((call) => call.command === "opencode" && call.args[1] === "add" && call.args[2] === RC5_SPEC)).toBe(true);
+  });
+
+  it("blocks when an annotated rc tag's peeled commit mismatches before registration mutation", async () => {
+    const initial = [ariaRow(RC5_SPEC, "1.3.4-rc.5"), ...UNRELATED_ROWS];
+    const world = makeFakePluginWorld(initial);
+    const baseExecutor = world.executor;
+    world.executor = async (command, args, options) => {
+      if (command === "git") {
+        return {
+          stdout: `${RC6_TAG_OBJECT}\trefs/tags/v1.3.4-rc.6\n${"d".repeat(40)}\trefs/tags/v1.3.4-rc.6^{}\n`,
+          stderr: "",
+        };
+      }
+      return baseExecutor(command, args, options);
+    };
+    const forged: AriaAvailableTarget = RC6_TARGET;
+
+    const outcome = await selfUpgradeAria(forged, handoffFor(forged), {
+      executor: world.executor,
+      readPersistedPlugins: persistedReaderFor(world),
+      delay: noDelay,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.detail).toContain("tag/commit mismatch");
+    expect(world.rows).toEqual(initial);
+    expect(world.persistedSpecs).toEqual(initial.map((row) => row[2]));
+    expect(world.calls.some((call) => call.command === "opencode" && (call.args[1] === "remove" || call.args[1] === "add"))).toBe(false);
   });
 
   it("reports the exact unresolved state when rollback also fails", async () => {

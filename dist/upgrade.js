@@ -261,17 +261,27 @@ async function detectInstalledAriaIdentity(executor) {
         };
     }
     const spec = approved[0];
-    const tag = spec.slice(spec.lastIndexOf("#") + 1);
-    if (!isExactReleaseTag(tag)) {
+    const ref = spec.slice(spec.lastIndexOf("#") + 1);
+    if (isExactAriaReleaseTag(ref)) {
+        return { version: ref.slice(1), spec, note: `installed ${ref.slice(1)} (${spec}) via opencode plugin list` };
+    }
+    if (isExactCommitRef(ref)) {
+        const resolved = await discoverAriaTargetByExactSpec(spec, executor);
+        if (resolved.kind === "known") {
+            return { version: resolved.target.version, spec, note: `installed ${resolved.target.version} (${spec}; ${resolved.target.tag}) via opencode plugin list and git ls-remote` };
+        }
+    }
+    {
         return {
             version: null,
             spec: null,
             note: `installed ARIA ref is not an exact release identity (${spec}); refusing to guess`,
         };
     }
-    return { version: tag.slice(1), spec, note: `installed ${tag.slice(1)} (${spec}) via opencode plugin list` };
 }
 const EXACT_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/;
+const EXACT_PRERELEASE_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)-rc\.(0|[1-9]\d*)$/;
+const EXACT_COMMIT_RE = /^[0-9a-f]{40}$/i;
 /**
  * Exact `vX.Y.Z` release-tag predicate. Single source of truth shared by
  * release discovery/validation (T010) and the self-upgrade adapter (T011);
@@ -280,20 +290,143 @@ const EXACT_TAG_RE = /^v(\d+)\.(\d+)\.(\d+)$/;
 export function isExactReleaseTag(tag) {
     return EXACT_TAG_RE.test(tag);
 }
-function compareSemver(a, b) {
-    const parts = (version) => version
-        .split("+")[0]
-        .split("-")[0]
-        .split(".")
-        .map((chunk) => Number.parseInt(chunk, 10));
-    const left = parts(a);
-    const right = parts(b);
+/** Exact ARIA prerelease tag supported for explicit immutable migration targets. */
+export function isExactPrereleaseTag(tag) {
+    return EXACT_PRERELEASE_TAG_RE.test(tag);
+}
+/** Exact stable or supported rc release tag; stable discovery remains stable-only. */
+export function isExactAriaReleaseTag(tag) {
+    return isExactReleaseTag(tag) || isExactPrereleaseTag(tag);
+}
+/** Full commit IDs only; branches, tag aliases, and abbreviated hashes are not immutable targets. */
+export function isExactCommitRef(ref) {
+    return EXACT_COMMIT_RE.test(ref);
+}
+export function compareAriaVersions(a, b) {
+    const [leftCore, leftPrerelease] = a.split("-", 2);
+    const [rightCore, rightPrerelease] = b.split("-", 2);
+    const left = (leftCore ?? "").split(".").map((chunk) => Number.parseInt(chunk, 10));
+    const right = (rightCore ?? "").split(".").map((chunk) => Number.parseInt(chunk, 10));
     for (let index = 0; index < Math.max(left.length, right.length); index++) {
         const diff = (left[index] ?? 0) - (right[index] ?? 0);
         if (diff !== 0)
             return diff;
     }
-    return 0;
+    if (leftPrerelease === undefined)
+        return rightPrerelease === undefined ? 0 : 1;
+    if (rightPrerelease === undefined)
+        return -1;
+    const leftNumber = Number.parseInt(leftPrerelease.replace(/^rc\./, ""), 10);
+    const rightNumber = Number.parseInt(rightPrerelease.replace(/^rc\./, ""), 10);
+    const labelDiff = leftPrerelease.startsWith("rc.") === rightPrerelease.startsWith("rc.") ? 0 : leftPrerelease.startsWith("rc.") ? 1 : -1;
+    if (labelDiff !== 0)
+        return labelDiff;
+    if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber))
+        return leftNumber - rightNumber;
+    return leftPrerelease.localeCompare(rightPrerelease);
+}
+function exactReleaseTagsFromRemote(lsRemoteOutput) {
+    const refs = new Map();
+    for (const line of lsRemoteOutput.split("\n")) {
+        const [hash, ref] = line.trim().split(/\s+/, 2);
+        if (!hash || !ref || !ref.startsWith("refs/tags/"))
+            continue;
+        const peeled = ref.endsWith("^{}");
+        const tag = ref.slice("refs/tags/".length).replace(/\^\{\}$/, "");
+        if (!isExactAriaReleaseTag(tag))
+            continue;
+        const current = refs.get(tag) ?? { object: null, peeled: null, invalid: false };
+        if (!isExactCommitRef(hash))
+            current.invalid = true;
+        else if (peeled) {
+            if (current.peeled !== null && current.peeled !== hash.toLowerCase())
+                current.invalid = true;
+            current.peeled = hash.toLowerCase();
+        }
+        else {
+            if (current.object !== null && current.object !== hash.toLowerCase())
+                current.invalid = true;
+            current.object = hash.toLowerCase();
+        }
+        refs.set(tag, current);
+    }
+    const tags = [];
+    for (const [tag, record] of refs) {
+        const commit = record.peeled ?? record.object;
+        if (!record.invalid && commit !== null)
+            tags.push({ tag, commit });
+    }
+    return tags;
+}
+/** Resolve an exact immutable ARIA commit spec to its unique exact release tag. */
+export async function discoverAriaTargetByExactSpec(spec, executor = defaultExecutor, prereleaseOnly = false) {
+    if (!spec.startsWith(ARIA_GIT_SPEC_PREFIX) || !isExactCommitRef(spec.slice(ARIA_GIT_SPEC_PREFIX.length))) {
+        return { kind: "unknown", reason: `target ${spec} is not an exact immutable ARIA commit spec` };
+    }
+    if (spec.slice(ARIA_GIT_SPEC_PREFIX.length) !== spec.slice(ARIA_GIT_SPEC_PREFIX.length).toLowerCase()) {
+        return { kind: "unknown", reason: `target ${spec} is not a canonical lowercase immutable ARIA commit spec` };
+    }
+    let stdout;
+    try {
+        stdout = (await executor("git", ["ls-remote", "--tags", ARIA_GIT_REMOTE])).stdout;
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { kind: "unknown", reason: `cannot verify exact ARIA commit target (${reason})` };
+    }
+    const commit = spec.slice(ARIA_GIT_SPEC_PREFIX.length).toLowerCase();
+    const matches = exactReleaseTagsFromRemote(stdout).filter((entry) => entry.commit === commit);
+    if (matches.length !== 1) {
+        return {
+            kind: "unknown",
+            reason: matches.length === 0
+                ? `exact ARIA commit ${commit} does not match a current exact release tag`
+                : `exact ARIA commit ${commit} matches multiple release tags; refusing ambiguous target`,
+        };
+    }
+    const match = matches[0];
+    if (prereleaseOnly && !isExactPrereleaseTag(match.tag)) {
+        return { kind: "unknown", reason: `explicit target ${spec} is not an exact ARIA rc prerelease tag` };
+    }
+    return { kind: "known", target: { tag: match.tag, version: match.tag.slice(1), spec } };
+}
+/** Resolve a version tag to the immutable commit spec used for npm installation. */
+export async function discoverAriaTargetByExactTag(tag, executor = defaultExecutor) {
+    if (!isExactAriaReleaseTag(tag)) {
+        return { kind: "unknown", reason: `${tag} is not an exact ARIA stable or rc release tag` };
+    }
+    let stdout;
+    try {
+        const ref = `refs/tags/${tag}`;
+        stdout = (await executor("git", ["ls-remote", "--tags", ARIA_GIT_REMOTE, ref, ref.concat("^{}")])).stdout;
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { kind: "unknown", reason: `cannot verify ARIA release tag ${tag} (${reason})` };
+    }
+    const matches = exactReleaseTagsFromRemote(stdout).filter((entry) => entry.tag === tag);
+    if (matches.length !== 1) {
+        return { kind: "unknown", reason: `ARIA release tag ${tag} did not resolve to one exact commit` };
+    }
+    const match = matches[0];
+    return { kind: "known", target: { tag, version: tag.slice(1), spec: `${ARIA_GIT_SPEC_PREFIX}${match.commit}` } };
+}
+/** Re-checks the tag/commit binding for immutable target specs immediately before mutation. */
+export async function verifyAriaTargetIdentity(target, executor = defaultExecutor) {
+    const structural = validateAriaTargetForRemoval(target);
+    if (!structural.ok)
+        return structural;
+    const ref = target.spec.slice(ARIA_GIT_SPEC_PREFIX.length);
+    if (!isExactCommitRef(ref))
+        return { ok: true };
+    const resolved = await discoverAriaTargetByExactTag(target.tag, executor);
+    if (resolved.kind !== "known" || resolved.target.version !== target.version || resolved.target.spec !== target.spec) {
+        return { ok: false, reason: `target tag/commit mismatch for ${target.tag} and ${target.spec}; refusing to mutate` };
+    }
+    return { ok: true };
+}
+function compareSemver(a, b) {
+    return compareAriaVersions(a, b);
 }
 /**
  * Parse read-only `git ls-remote` output into the newest exact `vX.Y.Z`
@@ -347,7 +480,11 @@ export function validateAriaTargetForRemoval(target) {
     if (!target) {
         return { ok: false, reason: "ARIA available target is unknown; self-upgrade blocked with zero mutation" };
     }
-    if (!isExactReleaseTag(target.tag) || target.version !== target.tag.slice(1) || target.spec !== `${ARIA_GIT_SPEC_PREFIX}${target.tag}`) {
+    const ref = target.spec.startsWith(ARIA_GIT_SPEC_PREFIX) ? target.spec.slice(ARIA_GIT_SPEC_PREFIX.length) : "";
+    const exactIdentity = isExactAriaReleaseTag(target.tag) &&
+        target.version === target.tag.slice(1) &&
+        (ref === target.tag || isExactCommitRef(ref));
+    if (!exactIdentity) {
         return { ok: false, reason: `ARIA target is not an exact release identity (${target.spec}); refusing to remove the current registration` };
     }
     return { ok: true };
@@ -1242,7 +1379,7 @@ export function describeSyncVsUpgrade() {
 // remove→add→persisted-verify→bounded-list-converge transition runs under
 // the CURRENT (newer) code paths only (the old release's mutation logic is
 // never invoked: no spawn of the from-release), and the normal post-handoff
-// pipeline continues in-process in the new release.
+// continuation is dispatched through the exact target package.
 // ---------------------------------------------------------------------------
 /**
  * Validate an explicit `--migrate-from` spec (pure, no mutation): exactly
@@ -1252,11 +1389,11 @@ export function describeSyncVsUpgrade() {
  */
 export function parseMigrateFromSpec(spec) {
     if (!spec.startsWith(ARIA_GIT_SPEC_PREFIX)) {
-        return { ok: false, reason: `--migrate-from ${spec} is not an exact ARIA Git spec (expected ${ARIA_GIT_SPEC_PREFIX}vX.Y.Z)` };
+        return { ok: false, reason: `--migrate-from ${spec} is not an exact ARIA Git spec (expected ${ARIA_GIT_SPEC_PREFIX}vX.Y.Z[-rc.N] or a full commit SHA)` };
     }
     const ref = spec.slice(ARIA_GIT_SPEC_PREFIX.length);
-    if (!isExactReleaseTag(ref)) {
-        return { ok: false, reason: `--migrate-from ref ${ref} is not an exact vX.Y.Z release tag` };
+    if (!isExactAriaReleaseTag(ref) && !isExactCommitRef(ref)) {
+        return { ok: false, reason: `--migrate-from ref ${ref} is not an exact release tag or full commit SHA` };
     }
     return { ok: true };
 }
@@ -1270,29 +1407,34 @@ export function ownReleaseTarget(ownVersion) {
     if (ownVersion === null) {
         return { ok: false, reason: "this release's packaged version is not positively identified (package.json unreadable); migrate blocked with zero mutation" };
     }
-    if (!/^\d+\.\d+\.\d+$/.test(ownVersion)) {
+    const ownTag = `v${ownVersion}`;
+    if (!isExactAriaReleaseTag(ownTag)) {
         return { ok: false, reason: `this release's packaged version (${ownVersion}) is not an exact release identity; migrate blocked with zero mutation` };
     }
-    const target = { tag: `v${ownVersion}`, version: ownVersion, spec: `${ARIA_GIT_SPEC_PREFIX}v${ownVersion}` };
+    const target = { tag: ownTag, version: ownVersion, spec: `${ARIA_GIT_SPEC_PREFIX}${ownTag}` };
     const validated = validateAriaTargetForRemoval(target);
     if (!validated.ok)
         return { ok: false, reason: validated.reason };
     return { ok: true, target };
 }
 /**
- * Pure npm argv for an approved migrate run: the NEWER (to) release is
+ * Pure npm argv for an approved migrate run: the newer bootstrap CLI is
  * selected via `--package`, the installed (from) registration via
- * `--migrate-from`. The caller prefixes `npm` (or `npx`) and the approved
+ * `--migrate-from`, and an optional immutable prerelease destination via
+ * `--target-spec`. The caller prefixes `npm` (or `npx`) and the approved
  * per-invocation `NPM_CONFIG_ALLOW_GIT=all` env (process-local, never
  * global/`.npmrc`); the `--` boundary keeps the `aria ...` argv from being
  * parsed as npm options.
  */
-export function buildMigrateApprovalArgv(fromSpec, toSpec) {
-    return ["exec", "--yes", "--package", toSpec, "--", "aria", "upgrade", "--migrate-from", fromSpec, "--yes"];
+export function buildMigrateApprovalArgv(fromSpec, toSpec, targetSpec) {
+    return [
+        "exec", "--yes", "--package", toSpec, "--", "aria", "upgrade", "--migrate-from", fromSpec,
+        ...(targetSpec === undefined ? [] : ["--target-spec", targetSpec]), "--yes",
+    ];
 }
 /** Display form of the exact newer-CLI migrate invocation (pure). */
-export function formatMigrateApprovalCommand(fromSpec, toSpec) {
-    return `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package ${toSpec} -- aria upgrade --migrate-from ${fromSpec} --yes`;
+export function formatMigrateApprovalCommand(fromSpec, toSpec, targetSpec) {
+    return `NPM_CONFIG_ALLOW_GIT=all npm exec --yes --package ${toSpec} -- aria upgrade --migrate-from ${fromSpec}${targetSpec === undefined ? "" : ` --target-spec ${targetSpec}`} --yes`;
 }
 /**
  * Blocked-approval detail for `runMigrateUpgrade` when `--yes` was not
@@ -1300,11 +1442,11 @@ export function formatMigrateApprovalCommand(fromSpec, toSpec) {
  * (to) target is positively identified; otherwise fails closed with no
  * invocation offered.
  */
-export function formatMigrateBlockedDetail(fromSpec, toSpec) {
+export function formatMigrateBlockedDetail(fromSpec, toSpec, targetSpec) {
     if (toSpec === null) {
         return "Explicit approval is required before any mutation, and this release is not positively identified as an exact ARIA release, so no migrate invocation can be offered. Establish identity, then re-run with fresh approval. No changes were made.";
     }
-    return `Explicit approval is required before any mutation. Re-run with \`${formatMigrateApprovalCommand(fromSpec, toSpec)}\` to approve the migrate-from transition (${fromSpec} → ${toSpec}). No changes were made.`;
+    return `Explicit approval is required before any mutation. Re-run with \`${formatMigrateApprovalCommand(fromSpec, toSpec, targetSpec)}\` to approve the migrate-from transition (${fromSpec} → ${targetSpec ?? toSpec}). No changes were made.`;
 }
 /** Default migrate seam: fail closed (the adapter owns the transition). */
 export async function defaultMigrate() {
@@ -1315,39 +1457,85 @@ export async function defaultMigrate() {
 }
 /**
  * Newer-CLI migrate pipeline: read-only inventory → explicit approval →
- * validate `--migrate-from` plus the own (to) target from package.json →
+ * validate `--migrate-from` plus the own package target (or an explicitly
+ * selected immutable rc commit) →
  * require the installed registration to exactly equal `--migrate-from` →
  * newer-CLI-owned remove→add→persisted-verify→bounded-list-converge
  * transition (never the old release's mutation logic: no from-release
- * spawn) → in-process post-handoff continuation in the new release.
+ * spawn) → verified exact-target package continuation via npm exec.
  */
 export async function runMigrateUpgrade(executor = defaultExecutor, options) {
-    const check = await checkUpgradeInventory(executor, options);
+    const explicitTarget = options.targetSpec === undefined
+        ? undefined
+        : await discoverAriaTargetByExactSpec(options.targetSpec, executor, true);
+    const check = await checkUpgradeInventory(executor, options.targetSpec === undefined
+        ? options
+        : { ...options, availableOverride: explicitTarget?.kind === "known" ? explicitTarget.target : null });
     const ownVersion = options.ownVersion !== undefined ? options.ownVersion : readCurrentAriaVersion();
     const own = ownReleaseTarget(ownVersion);
     const from = parseMigrateFromSpec(options.migrateFrom);
-    if (!options.approval.yes) {
-        return {
-            stage: "blocked-approval",
-            ok: false,
-            check,
-            detail: formatMigrateBlockedDetail(options.migrateFrom, own.ok ? own.target.spec : null),
-            report: "",
-        };
-    }
-    if (!from.ok) {
-        return { stage: "blocked-migrate", ok: false, check, detail: `${from.reason}; migrate blocked with zero mutation. No changes were made.`, report: "" };
-    }
-    if (!own.ok) {
-        return { stage: "blocked-migrate", ok: false, check, detail: `${own.reason} No changes were made.`, report: "" };
-    }
-    if (options.migrateFrom === own.target.spec) {
+    const target = explicitTarget?.kind === "known" ? explicitTarget.target : own.ok ? own.target : null;
+    if (explicitTarget?.kind === "unknown") {
         return {
             stage: "blocked-migrate",
             ok: false,
             check,
-            ownTarget: own.target,
-            detail: `--migrate-from ${options.migrateFrom} equals this release (${own.target.spec}); nothing to migrate. Use the normal exact-package upgrade path. No changes were made.`,
+            detail: `${explicitTarget.reason}; explicit target blocked with zero mutation. No changes were made.`,
+            report: "",
+        };
+    }
+    if (!own.ok) {
+        return { stage: "blocked-migrate", ok: false, check, detail: `${own.reason} No changes were made.`, report: "" };
+    }
+    if (!target) {
+        return { stage: "blocked-migrate", ok: false, check, detail: "No exact migrate target was positively identified. No changes were made.", report: "" };
+    }
+    if (!from.ok) {
+        return { stage: "blocked-migrate", ok: false, check, detail: `${from.reason}; migrate blocked with zero mutation. No changes were made.`, report: "" };
+    }
+    if (explicitTarget?.kind === "known") {
+        if (compareAriaVersions(target.version, own.target.version) >= 0) {
+            return {
+                stage: "blocked-migrate",
+                ok: false,
+                check,
+                ownTarget: target,
+                detail: `explicit target ${target.tag} must be older than the bootstrap release ${own.target.tag}; refusing a mismatched target version. No changes were made.`,
+                report: "",
+            };
+        }
+        if (check.currentVersion !== null && compareAriaVersions(target.version, check.currentVersion) <= 0) {
+            return {
+                stage: "blocked-migrate",
+                ok: false,
+                check,
+                ownTarget: target,
+                detail: `explicit target ${target.tag} does not supersede installed ${check.currentVersion}; refusing a downgrade or same-version migration. No changes were made.`,
+                report: "",
+            };
+        }
+    }
+    if (!options.approval.yes) {
+        let approvalPackageSpec = own.target.spec;
+        if (options.targetSpec !== undefined) {
+            const bootstrap = await discoverAriaTargetByExactTag(own.target.tag, executor);
+            approvalPackageSpec = bootstrap.kind === "known" ? bootstrap.target.spec : "";
+        }
+        return {
+            stage: "blocked-approval",
+            ok: false,
+            check,
+            detail: formatMigrateBlockedDetail(options.migrateFrom, approvalPackageSpec || null, options.targetSpec),
+            report: "",
+        };
+    }
+    if (options.migrateFrom === target.spec || check.currentVersion === target.version) {
+        return {
+            stage: "blocked-migrate",
+            ok: false,
+            check,
+            ownTarget: target,
+            detail: `--migrate-from ${options.migrateFrom} equals the target release (${target.spec}); nothing to migrate. Use the normal exact-package upgrade path. No changes were made.`,
             report: "",
         };
     }
@@ -1357,14 +1545,14 @@ export async function runMigrateUpgrade(executor = defaultExecutor, options) {
             stage: "blocked-migrate",
             ok: false,
             check,
-            ownTarget: own.target,
+            ownTarget: target,
             detail: `migrate-from mismatch: approved ${options.migrateFrom} but the installed registration is ${observed}; refusing to mutate. No changes were made.`,
             report: "",
         };
     }
     // v1.0.11 hotfix: formula-scoped Engram prerequisite preflight — after the
     // approved migrate entry passes every identity gate, before any ARIA
-    // registration mutation or in-process continuation. Failure/indeterminate
+    // registration mutation or target-package continuation. Failure/indeterminate
     // stops here with zero mutation.
     const migratePreflight = await checkEngramHomebrewPreflight(executor, check);
     if (!migratePreflight.ok) {
@@ -1372,42 +1560,35 @@ export async function runMigrateUpgrade(executor = defaultExecutor, options) {
             stage: "preflight-failed",
             ok: false,
             check,
-            ownTarget: own.target,
+            ownTarget: target,
             detail: migratePreflight.reason,
             report: "",
         };
     }
-    const handoff = buildUpgradeHandoff(own.target, check);
+    const handoff = buildUpgradeHandoff(target, check);
     const migrateFn = options.migrateFn ?? defaultMigrate;
-    const selfUpgrade = await migrateFn(options.migrateFrom, own.target, handoff);
+    const selfUpgrade = await migrateFn(options.migrateFrom, target, handoff);
     if (!selfUpgrade.ok) {
         return {
             stage: "migrate-failed",
             ok: false,
             check,
-            ownTarget: own.target,
+            ownTarget: target,
             handoff,
             selfUpgrade,
-            detail: `ARIA migrate failed before continuation: ${selfUpgrade.detail}${selfUpgrade.registration ? ` Registration: ${selfUpgrade.registration}` : ""} No component upgrades, normalization, regen, sync, doctor, or reporting ran.`,
-            report: "",
+            detail: `ARIA migrate transition or target-release handoff failed: ${selfUpgrade.detail}${selfUpgrade.registration ? ` Registration: ${selfUpgrade.registration}` : ""}`,
+            report: selfUpgrade.handoffOutput ?? "",
         };
     }
-    const continuation = await continueUpgradeInNewRelease(handoff, own.target, UPGRADE_COMPONENTS, {
-        ...options.continuation,
-        executor,
-        configDir: options.continuation?.configDir ?? options.configDir,
-    });
-    const stage = continuation.stage;
     return {
-        stage,
-        ok: continuation.ok,
+        stage: "complete",
+        ok: true,
         check,
-        ownTarget: own.target,
+        ownTarget: target,
         handoff,
         selfUpgrade,
-        continuation,
-        report: continuation.report,
-        detail: `Migrate ${options.migrateFrom} → ${own.target.spec}: ${selfUpgrade.handoffNote ?? selfUpgrade.detail} ${continuation.detail}`,
+        report: selfUpgrade.handoffOutput ?? "",
+        detail: `Migrate ${options.migrateFrom} → ${target.spec}: ${selfUpgrade.handoffNote ?? selfUpgrade.detail}`,
     };
 }
 export function formatMigrateResult(result) {

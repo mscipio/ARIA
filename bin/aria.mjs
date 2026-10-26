@@ -354,7 +354,10 @@ async function main() {
     // or sync.
     // T003: --migrate-from <spec> (with --yes, never with --check or
     // --handoff-json) selects the newer-CLI-owned escape: this release
-    // replaces the exact installed spec and continues in-process.
+    // replaces the exact installed spec, then dispatches continuation to the
+    // verified target package. The
+    // optional --target-spec is a full ARIA commit SHA matching one exact rc
+    // release tag; stable auto-discovery remains the default elsewhere.
     //
     // T011: --handoff-json <payload> receives an approved upgrade handoff in
     // the new release (the old release's one-shot spawn invokes it; it is not
@@ -365,6 +368,7 @@ async function main() {
     let yes = false;
     let handoffJson;
     let migrateFrom;
+    let targetSpec;
     for (let index = 0; index < rest.length; index++) {
       const arg = rest[index];
       if (arg === "--check") {
@@ -394,6 +398,35 @@ async function main() {
           return 1;
         }
         migrateFrom = value;
+        continue;
+      }
+      if (arg === "--target-spec") {
+        const value = rest[index + 1];
+        if (value === undefined || value.startsWith("--")) {
+          console.error("Missing value for --target-spec (expected github:mscipio/ARIA#<full-commit-sha> for an exact rc release)");
+          console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> [--target-spec <exact-commit-spec>] --yes]");
+          return 1;
+        }
+        if (targetSpec !== undefined) {
+          console.error("Option --target-spec may be specified only once");
+          return 1;
+        }
+        targetSpec = value;
+        index++;
+        continue;
+      }
+      if (arg.startsWith("--target-spec=")) {
+        const value = arg.slice("--target-spec=".length);
+        if (value.length === 0) {
+          console.error("Missing value for --target-spec (expected github:mscipio/ARIA#<full-commit-sha> for an exact rc release)");
+          console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> [--target-spec <exact-commit-spec>] --yes]");
+          return 1;
+        }
+        if (targetSpec !== undefined) {
+          console.error("Option --target-spec may be specified only once");
+          return 1;
+        }
+        targetSpec = value;
         continue;
       }
       if (arg === "--handoff-json") {
@@ -439,6 +472,11 @@ async function main() {
     if (migrateFrom !== undefined && handoffJson !== undefined) {
       console.error("Option --migrate-from cannot be combined with --handoff-json (migrate carries its own from-gate)");
       console.error("Usage: aria upgrade [--check] [--yes] [--migrate-from <spec> --yes]");
+      return 1;
+    }
+    if (targetSpec !== undefined && migrateFrom === undefined) {
+      console.error("Option --target-spec requires --migrate-from (explicit prerelease targets are migrate-only)");
+      console.error("Usage: aria upgrade --migrate-from <spec> --target-spec <exact-commit-spec> --yes");
       return 1;
     }
 
@@ -493,25 +531,13 @@ async function main() {
     // re-run guidance and zero mutation.
     if (migrateFrom !== undefined) {
       try {
-        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode, runAriaSkillsRefreshPhase, runManagedAgentRegenPhase } = await import("../dist/upgrade.js");
+        const { runMigrateUpgrade, formatMigrateResult, migrateExitCode } = await import("../dist/upgrade.js");
         const { migrateAriaFromExact } = await import("../dist/aria-upgrade.js");
         const result = await runMigrateUpgrade(undefined, {
           migrateFrom,
+          targetSpec,
           approval: { yes },
           migrateFn: (fromSpec, target, handoff) => migrateAriaFromExact(fromSpec, target, handoff),
-          // T007: in-process post-handoff continuation refreshes a single
-          // stale owned packaged skills path to the current release location
-          // with the strict fail-closed phase (normalize, before regen).
-          // T002: in-process post-handoff continuation reconciles managed
-          // agents with the strict fail-closed phase (after normalization,
-          // before doctor); conflicts stop as a failed phase. Third-party
-          // components and sync stay skipped (ARIA-only).
-          continuation: {
-            components: ariaOnlyComponents,
-            normalizeFn: (ctx) => runAriaSkillsRefreshPhase(ctx),
-            regenFn: (ctx) => runManagedAgentRegenPhase(ctx),
-            depsSyncFn: ariaOnlyDepsSync,
-          },
         });
         console.log(formatMigrateResult(result));
         return migrateExitCode(result);

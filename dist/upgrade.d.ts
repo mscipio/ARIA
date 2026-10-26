@@ -165,6 +165,24 @@ export interface InstalledAriaIdentity {
  * never duplicated.
  */
 export declare function isExactReleaseTag(tag: string): boolean;
+/** Exact ARIA prerelease tag supported for explicit immutable migration targets. */
+export declare function isExactPrereleaseTag(tag: string): boolean;
+/** Exact stable or supported rc release tag; stable discovery remains stable-only. */
+export declare function isExactAriaReleaseTag(tag: string): boolean;
+/** Full commit IDs only; branches, tag aliases, and abbreviated hashes are not immutable targets. */
+export declare function isExactCommitRef(ref: string): boolean;
+export declare function compareAriaVersions(a: string, b: string): number;
+/** Resolve an exact immutable ARIA commit spec to its unique exact release tag. */
+export declare function discoverAriaTargetByExactSpec(spec: string, executor?: Executor, prereleaseOnly?: boolean): Promise<AriaTargetDiscovery>;
+/** Resolve a version tag to the immutable commit spec used for npm installation. */
+export declare function discoverAriaTargetByExactTag(tag: string, executor?: Executor): Promise<AriaTargetDiscovery>;
+/** Re-checks the tag/commit binding for immutable target specs immediately before mutation. */
+export declare function verifyAriaTargetIdentity(target: AriaAvailableTarget, executor?: Executor): Promise<{
+    ok: true;
+} | {
+    ok: false;
+    reason: string;
+}>;
 /**
  * Parse read-only `git ls-remote` output into the newest exact `vX.Y.Z`
  * release tag. Dereferenced `^{[1]}` lines, non-tag refs, and non-exact
@@ -237,6 +255,8 @@ export interface SelfUpgradeOutcome {
     detail: string;
     /** New-release entry note for reporting (set on success). */
     handoffNote?: string;
+    /** Output from the verified target-release continuation. */
+    handoffOutput?: string;
     /** Registration restoration state on failure (reported, T011-owned). */
     registration?: string;
 }
@@ -468,29 +488,30 @@ export declare function ownReleaseTarget(ownVersion: string | null): {
     reason: string;
 };
 /**
- * Pure npm argv for an approved migrate run: the NEWER (to) release is
+ * Pure npm argv for an approved migrate run: the newer bootstrap CLI is
  * selected via `--package`, the installed (from) registration via
- * `--migrate-from`. The caller prefixes `npm` (or `npx`) and the approved
+ * `--migrate-from`, and an optional immutable prerelease destination via
+ * `--target-spec`. The caller prefixes `npm` (or `npx`) and the approved
  * per-invocation `NPM_CONFIG_ALLOW_GIT=all` env (process-local, never
  * global/`.npmrc`); the `--` boundary keeps the `aria ...` argv from being
  * parsed as npm options.
  */
-export declare function buildMigrateApprovalArgv(fromSpec: string, toSpec: string): string[];
+export declare function buildMigrateApprovalArgv(fromSpec: string, toSpec: string, targetSpec?: string): string[];
 /** Display form of the exact newer-CLI migrate invocation (pure). */
-export declare function formatMigrateApprovalCommand(fromSpec: string, toSpec: string): string;
+export declare function formatMigrateApprovalCommand(fromSpec: string, toSpec: string, targetSpec?: string): string;
 /**
  * Blocked-approval detail for `runMigrateUpgrade` when `--yes` was not
  * given (pure, no mutation). Names the exact newer-CLI invocation when the
  * (to) target is positively identified; otherwise fails closed with no
  * invocation offered.
  */
-export declare function formatMigrateBlockedDetail(fromSpec: string, toSpec: string | null): string;
+export declare function formatMigrateBlockedDetail(fromSpec: string, toSpec: string | null, targetSpec?: string): string;
 export type MigrateRunStage = "blocked-approval" | "blocked-migrate" | "preflight-failed" | "migrate-failed" | "drift-blocked" | "component-stopped" | "phase-stopped" | "complete";
 export interface MigrateRunResult {
     stage: MigrateRunStage;
     ok: boolean;
     check: UpgradeCheckResult;
-    /** The newer release's own (to) target (absent when it was never positively identified). */
+    /** The selected destination (newer CLI's own release by default; explicit rc commit when provided). */
     ownTarget?: AriaAvailableTarget;
     handoff?: UpgradeHandoff;
     selfUpgrade?: SelfUpgradeOutcome;
@@ -506,6 +527,8 @@ export declare function defaultMigrate(): Promise<SelfUpgradeOutcome>;
 export interface MigrateRunOptions extends UpgradeCheckOptions {
     /** Exact installed spec the newer release must replace (operator-approved `--migrate-from`). */
     migrateFrom: string;
+    /** Optional immutable exact-rc destination (`github:mscipio/ARIA#<full-sha>`), resolved back to its unique tag. */
+    targetSpec?: string;
     approval: UpgradeApproval;
     /**
      * Pin the running release's packaged version (test/operator override;
@@ -515,16 +538,15 @@ export interface MigrateRunOptions extends UpgradeCheckOptions {
     ownVersion?: string | null;
     /** Newer-CLI-owned transition (default: fail closed). */
     migrateFn?: MigrateFn;
-    /** Post-handoff pipeline seams (defaults: the real shared lifecycle). */
-    continuation?: UpgradeContinuationOptions;
 }
 /**
  * Newer-CLI migrate pipeline: read-only inventory → explicit approval →
- * validate `--migrate-from` plus the own (to) target from package.json →
+ * validate `--migrate-from` plus the own package target (or an explicitly
+ * selected immutable rc commit) →
  * require the installed registration to exactly equal `--migrate-from` →
  * newer-CLI-owned remove→add→persisted-verify→bounded-list-converge
  * transition (never the old release's mutation logic: no from-release
- * spawn) → in-process post-handoff continuation in the new release.
+ * spawn) → verified exact-target package continuation via npm exec.
  */
 export declare function runMigrateUpgrade(executor: Executor | undefined, options: MigrateRunOptions): Promise<MigrateRunResult>;
 export declare function formatMigrateResult(result: MigrateRunResult): string;

@@ -53,6 +53,10 @@ export interface HandoffSpawnResult {
     ok: boolean;
     detail: string;
     stdout: string;
+    /** Set when target-owned continuation began, even if it stopped or threw. */
+    continuationStarted?: boolean;
+    /** Exact result when target-owned continuation returned normally. */
+    continuationResult?: UpgradeContinuationResult;
 }
 /**
  * One-shot handoff spawn: invoke the exact installed release (addressed by
@@ -115,6 +119,8 @@ export interface AriaSelfUpgradeOptions {
      * consistent; persisted verification has no retry/sleep.
      */
     listConvergence?: ListConvergenceBound;
+    /** Isolated config/read-only doctor options for an installed-target continuation. */
+    continuationOptions?: Pick<UpgradeContinuationOptions, "configDir" | "doctorFn">;
     /**
      * T003 explicit-from gate for the newer-CLI migrate path
      * (`migrateAriaFromExact` sets this to the operator-approved
