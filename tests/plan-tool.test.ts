@@ -1,3 +1,4 @@
+import { isFilesystemRoot } from "../src/paths.js";
 import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, parse, resolve } from "node:path";
@@ -8,7 +9,6 @@ import aria from "../src/index";
 import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import {
   createPlanTool,
-  isFilesystemRoot,
   PLAN_TOOL_ACTIONS,
   planToolInputSchema,
   resolvePlanRootFromLocation,

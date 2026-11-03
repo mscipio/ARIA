@@ -63,16 +63,18 @@ function effectiveDecision(permission: Record<string, unknown>, action: string, 
 }
 
 describe("T022 native scratch task permissions", () => {
-  it("allows edits under scratch for every role without widening ordinary edits", () => {
+  it("grants scratch edits only to artifact-producing roles without widening ordinary edits", () => {
     const roles: RoleName[] = [
       "coder", "explorer", "visualizer", "planner", "implementer",
       "reviewer", "researcher", "archivist", "writer", "scientist",
     ];
+    const scratchWriters = new Set<RoleName>(["coder", "visualizer", "implementer", "reviewer", "archivist"]);
 
     for (const role of roles) {
       const rules = getPermissionsForRole(role);
-      expect(evaluatePermission(rules, "edit", ".aria/scratch")).toBe("allow");
-      expect(evaluatePermission(rules, "edit", ".aria/scratch/tests/results/run.json")).toBe("allow");
+      const scratch = scratchWriters.has(role) ? "allow" : "deny";
+      expect(evaluatePermission(rules, "edit", ".aria/scratch")).toBe(scratch);
+      expect(evaluatePermission(rules, "edit", ".aria/scratch/tests/results/run.json")).toBe(scratch);
       expect(evaluatePermission(rules, "edit", "other/scratch/tests/results/run.json")).toBe(
         role === "implementer" || role === "visualizer" ? "allow" : "deny",
       );
@@ -120,9 +122,10 @@ describe("T022 native scratch task permissions", () => {
     const registered = effectiveRolePermissions();
     for (const role of ROLES) {
       const permission = registered[role] as unknown as Record<string, unknown>;
-      expect(effectiveDecision(permission, "edit", ".aria/scratch")).toBe("allow");
-      expect(effectiveDecision(permission, "edit", ".aria/scratch/tests/result.json")).toBe("allow");
-      expect(effectiveDecision(permission, "edit", ".aria/scratch/.env")).toBe("ask");
+      const scratchWriter = role === "coder" || role === "visualizer" || role === "implementer" || role === "reviewer" || role === "archivist";
+      expect(effectiveDecision(permission, "edit", ".aria/scratch")).toBe(scratchWriter ? "allow" : "deny");
+      expect(effectiveDecision(permission, "edit", ".aria/scratch/tests/result.json")).toBe(scratchWriter ? "allow" : "deny");
+      if (scratchWriter) expect(effectiveDecision(permission, "edit", ".aria/scratch/.env")).toBe("ask");
       expect(effectiveDecision(permission, "edit", "src/app.ts")).toBe(
         role === "implementer" || role === "visualizer" ? "allow" : "deny",
       );

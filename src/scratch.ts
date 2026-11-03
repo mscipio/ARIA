@@ -12,7 +12,7 @@ import {
   verifySafeParent,
   withFileLock,
 } from "./paths.js";
-import { isFilesystemRoot } from "./plan-tool.js";
+import { isFilesystemRoot } from "./paths.js";
 
 const execFileAsync = promisify(execFile);
 

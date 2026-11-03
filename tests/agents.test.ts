@@ -234,8 +234,8 @@ describe("T003 agent installation", () => {
     const implementer = files.implementer.toLowerCase().replace(/\s+/g, " ");
 
     expect(planner).toContain("you are the only aria agent authorized to create or modify markdown plan files under `.aria/plans/`");
-    expect(planner).toContain("generate a uuidv4 with version nibble");
-    expect(planner).toContain("randomness source: planner has no shell");
+    expect(planner).toContain("`plan_id_new` tool");
+    expect(planner).toContain("randomness source: only the `plan_id_new` tool output");
     expect(planner).toContain("read the exact proposed path immediately before writing");
     expect(planner).toContain("never overwrite an existing plan");
     expect(planner).toContain("never select by recency, directory order, title similarity, or an assumed active plan");

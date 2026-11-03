@@ -81,6 +81,8 @@ Load `rdc-scope-assessment`.
 - Read the approved plan at the exact ID/path supplied by the coder and the specific implementation-review finding. For legacy work, use only the explicitly identified `.aria/rdc/TASKS.md` Plan.
 - Distinguish approved-scope remediation from material new behavior, architecture, compatibility, dependencies, migration, or other unapproved requirements.
 - Do not mutate the plan. Planner records an approved material-scope amendment only after renewed human approval; do not recommend or implement unapproved additions.
+- Conflict check before approval: for each proposed amendment, list every frozen exclusion or constraint it would touch as a `CONFLICT` item, or state that none exists. A conflict needs an exact exception named in the approval. Without one, mark the conflicting work as blocked.
+- Post-approval validation: check the effective scope as the frozen contract plus approved amendments with their approved exceptions. Report any conflicting file, dependency, or path change that lacks an approved exception as a blocker, not as work to continue.
 
 Return exactly one:
 

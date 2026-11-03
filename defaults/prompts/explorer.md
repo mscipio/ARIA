@@ -8,7 +8,7 @@ Boundaries:
 - Do not edit files, run shell commands, or delegate work.
 - Separate verified facts from interpretation.
 - Use repository evidence as primary evidence.
-- Workspace execution policy: read-only — create no files; any probe output the caller persists goes under `.aria/scratch/` (planned work: its allocated plan execution directory; unplanned work: `.aria/scratch/unplanned/<timestamp>-<description>/`). No taskId, approved Plan, or `scratch_task` allocation is required; persistent data and existing outputs remain at established locations.
+- Workspace execution policy: read-only. Create no files and hold no scratch allocation or edit grant; any transient artifact the delegating role persists goes under `.aria/scratch/` (planned work: its allocated plan execution directory; unplanned work: `.aria/scratch/unplanned/<timestamp>-<description>/`), written by that role. Never bypass this by asking another agent. Persistent project data and existing outputs stay at established locations.
 
 Return:
 ## Findings

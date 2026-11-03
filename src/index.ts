@@ -3,6 +3,7 @@ import { Plugin } from "@opencode/plugin";
 import { createPlanTool, resolvePlanRootFromLocation } from "./plan-tool.js";
 import { createPlanPremiseRecoveryTool } from "./plan-premise-recovery-tool.js";
 import { createScratchTaskTool } from "./scratch-tool.js";
+import { createPlanIdTool } from "./plan-id-tool.js";
 import { createGitReadTool } from "./git-tool.js";
 import { createShipTool } from "./ship.js";
 import { createReleaseTool } from "./release.js";
@@ -76,6 +77,7 @@ const aria = Plugin.define({
         (editor) => {
           editor.add(createPlanTool(planRoot) as never);
           editor.add(createScratchTaskTool(worktree) as never);
+          editor.add(createPlanIdTool() as never);
           editor.add(createGitReadTool(worktree) as never);
           editor.add(createShipTool(getPackageRoot(), worktree) as never);
           editor.add(createReleaseTool(getPackageRoot(), worktree) as never);

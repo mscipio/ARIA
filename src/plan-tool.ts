@@ -1,3 +1,4 @@
+import { isFilesystemRoot } from "./paths.js";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 
@@ -96,22 +97,6 @@ export function authorizePlan(context: unknown, action: string): string | null {
   return null;
 }
 
-/**
- * V1 `isFilesystemRoot` preserved verbatim: lexical root sentinel plus an
- * existing symlink whose canonical realpath resolves to the filesystem root.
- */
-export function isFilesystemRoot(dir: string): boolean {
-  const resolved = path.resolve(dir);
-  const parsed = path.parse(resolved);
-  if (resolved === parsed.root) return true;
-  try {
-    const real = realpathSync(resolved);
-    const realParsed = path.parse(real);
-    return real === realParsed.root;
-  } catch {
-    return false;
-  }
-}
 
 function meaningfulDirectory(value: unknown, key: string): string | undefined {
   const dir = stringField(value, key);

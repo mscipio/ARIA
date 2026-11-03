@@ -177,6 +177,12 @@ const SCRATCH_EDIT: Record<string, PermissionAction> = {
   ".aria/scratch/**/*.env.example": "allow",
 };
 
+/** Genuinely read-only roles: no file creation at all (scratch is granted only to artifact-producing roles). */
+const READ_ONLY_EDIT: Record<string, PermissionAction> = {
+  "*": "deny",
+  "/**": "deny",
+};
+
 const IMPLEMENTER_SCRATCH_EDIT: Record<string, PermissionAction> = {
   ".aria/scratch": "allow",
   ".aria/scratch/**": "allow",
@@ -261,7 +267,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   explorer: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
-    edit: SCRATCH_EDIT,
+    edit: READ_ONLY_EDIT,
     ...planPremiseRecoveryPermission("explorer"),
     skill: skillAccess("rdc-code-exploration"),
   },
@@ -278,7 +284,8 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   planner: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
-    edit: SCRATCH_EDIT,
+    edit: READ_ONLY_EDIT,
+    plan_id_new: "allow",
     webfetch: "allow",
     websearch: "allow",
     skill: skillAccess("rdc-implementation-planning", "rdc-testing-discipline"),
@@ -327,7 +334,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   researcher: {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("researcher"),
-    edit: SCRATCH_EDIT,
+    edit: READ_ONLY_EDIT,
     read: PROTECTED_READ,
     glob: "allow",
     grep: "allow",
@@ -377,7 +384,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   writer: {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("writer"),
-    edit: SCRATCH_EDIT,
+    edit: READ_ONLY_EDIT,
     read: PROTECTED_READ,
     skill: skillAccess(
       "aria-academic-writing",
@@ -396,7 +403,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   scientist: {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("scientist"),
-    edit: SCRATCH_EDIT,
+    edit: READ_ONLY_EDIT,
     read: PROTECTED_READ,
     glob: "allow",
     grep: "allow",

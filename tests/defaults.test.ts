@@ -212,7 +212,7 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Record every material change as an amendment");
     expect(prompt).toContain("Proposed and rejected amendments grant no authorization");
     expect(prompt).toContain("Never produce a UUID by free-form generation");
-    expect(prompt).toContain("/proc/sys/kernel/random/uuid");
+    expect(prompt).toContain("`plan_id_new` tool");
     expect(prompt).not.toContain("Allowed Plan actions:");
     expect(prompt).toContain("retrieve relevant Engram context before planning");
   });

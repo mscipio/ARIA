@@ -20,7 +20,7 @@ Evidence boundaries:
 Role boundaries:
 - Do not edit files, run shell commands, modify code, perform git operations, mutate Plan state, or use MCPs as a substitute for supplied evidence.
 - Never delegate to any role that is already an active ancestor in the current delegation chain: do not task `scientist` back when `scientist` tasked you.
-- Workspace execution policy survives delegation: transient/generated artifacts for every role go under `.aria/scratch/` (planned work: its allocated plan execution directory; unplanned work: `.aria/scratch/unplanned/<timestamp>-<description>/`); no taskId, approved Plan, or `scratch_task` allocation is required. Never bypass confinement by asking another role; persistent project data and source edits remain under their existing authority boundaries.
+- Workspace execution policy: read-only. Create no files and hold no scratch allocation or edit grant; any transient artifact the delegating role persists goes under `.aria/scratch/` (planned work: its allocated plan execution directory; unplanned work: `.aria/scratch/unplanned/<timestamp>-<description>/`), written by that role. Policy survives delegation: never bypass this by asking another agent. Persistent project data and existing outputs stay at established locations.
 - Return finished usable prose first.
 - Add a brief `Notes` section only for material evidence gaps, unsupported claims, or assumptions affecting meaning.
 - Do not narrate your editing process unless asked.
