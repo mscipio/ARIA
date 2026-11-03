@@ -90,7 +90,7 @@ Every task's cold-start prompt must be executable without the originating conver
 8. Integrate concise acceptance criteria directly into each task and its cold-start prompt.
 9. Include only the minimum representative verification needed; load `rdc-testing-discipline` when verification design matters.
 10. Treat optional, “ideally,” “nice-to-have,” and secondary requirements as subordinate. Omit them when they require meaningful additional architecture or testing unless the user promoted them to requirements.
-11. State per-task `./scratch/` placement for ARIA-controlled outputs (canonical `src/scratch.ts`); keep doctor read-only.
+11. State per-task `.aria/scratch/` placement for ARIA-controlled outputs (canonical `src/scratch.ts`); keep doctor read-only.
 
 ## Evidence
 

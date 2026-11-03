@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import type { Executor } from "../src/deps.js";
 import { buildHandoffSpawnArgv, migrateAriaFromExact, selfUpgradeAria } from "../src/aria-upgrade.js";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import {
   ARIA_GIT_REMOTE,
   ARIA_GIT_SPEC_PREFIX,
@@ -82,7 +82,7 @@ async function targetHandoffFixture(): Promise<string> {
   const allocated = process.env.RDC_TEST_FIXTURE_DIR;
   const directory = allocated
     ? await mkdtemp(join(allocated, "target-owned-rc6-"))
-    : await createUniqueScratchDir(REPO_ROOT, "tests/fixtures", "target-owned-rc6-handoff");
+    : await allocateUnplannedExecutionDir(REPO_ROOT, "target-owned-rc6-handoff");
   scratchFixtures.push(directory);
   return directory;
 }

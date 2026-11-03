@@ -53,7 +53,7 @@ import type { ResolvedAriaConfig } from "./types.js";
  *
  * Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`):
  * setup writes only global config/agent files; project outputs stay under
- * `<worktree>/scratch/` via the canonical helper. HOME/XDG/global preserved.
+ * `<worktree>/.aria/scratch/` via the canonical helper. HOME/XDG/global preserved.
  */
 
 // ---------------------------------------------------------------------------

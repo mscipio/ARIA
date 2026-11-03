@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { Executor } from "../src/deps.js";
 import { runDoctor } from "../src/doctor.js";
 import { ROLES } from "../src/routes.js";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import { defaultGlobalConfigPath, ensureAriaSetupConfigFile, ensureAriaSkillsRefreshFile } from "../src/setup-config.js";
 import { isEphemeralNpxInstallRoot, resolveDurableAriaSkillsRoot, resolveGlobalAriaSkillsRoot } from "../src/skills.js";
 
@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<string> {
-  const path = await createUniqueScratchDir(resolve(process.cwd()), "T001-durable-skills", "case");
+  const path = await allocateUnplannedExecutionDir(resolve(process.cwd()), "case");
   fixtures.push(path);
   return path;
 }

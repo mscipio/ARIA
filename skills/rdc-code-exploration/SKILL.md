@@ -37,4 +37,4 @@ Prioritize:
 - call/data/dependency flow,
 - unresolved unknowns.
 
-Create no files; any probe output the caller persists goes under `<worktree>/scratch/` via the canonical helper (`src/scratch.ts`).
+Create no files; any probe output the caller persists goes under `<worktree>/.aria/scratch/` via the canonical helper (`src/scratch.ts`).

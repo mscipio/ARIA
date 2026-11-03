@@ -17,3 +17,11 @@ __pycache__/
 *.py[cod]
 
 /scratch/
+
+# ARIA-controlled runtime state under .aria/: everything ignored except
+# Markdown plans, which stay versionable. Plan-scoped and fast-path scratch
+# live under .aria/scratch/ and are never versioned.
+/.aria/*
+!/.aria/
+!/.aria/plans/
+/.aria/scratch/

@@ -47,7 +47,7 @@ import { PLAYWRIGHT_MCP_VERSION } from "./playwright.js";
  * status, mismatches) — it never installs, upgrades, or syncs.
  *
  * Workspace execution policy (canonical `src/scratch.ts`): doctor writes
- * nothing, including under `scratch/` — read-only in every mode.
+ * nothing, including under `.aria/scratch/` — read-only in every mode.
  */
 
 export type DoctorFindingSeverity = "PASS" | "WARN" | "FAIL" | "SKIP";

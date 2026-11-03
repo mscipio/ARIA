@@ -1,10 +1,11 @@
-import { lstat, readFile, rm } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { readFile, rm } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import aria from "../src/index";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir, resolveScratchRoot } from "../src/scratch.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const managed: string[] = [];
@@ -14,7 +15,7 @@ afterEach(async () => {
 });
 
 async function fixtureWorktree(name: string): Promise<string> {
-  const dir = await createUniqueScratchDir(REPO_ROOT, "tests/fixtures", name);
+  const dir = await allocateUnplannedExecutionDir(REPO_ROOT, `vitest-${name}`);
   managed.push(dir);
   return dir;
 }
@@ -43,93 +44,84 @@ async function registerTools(location?: unknown): Promise<Map<string, NativeTool
   return added;
 }
 
-describe("native task scratch tool", () => {
-  it("registers through ctx.tool.transform and returns canonical task paths beneath the project", async () => {
-    const root = await fixtureWorktree("scratch-tool-paths");
-    const tools = await registerTools({ project: { directory: root } });
-    const tool = tools.get("scratch_task");
+describe("scratch_task native tool", () => {
+  it("allocates an unplanned execution and returns only namespace and executionDir", async () => {
+    const root = await fixtureWorktree("scratch-tool-unplanned");
+    const tool = (await registerTools({ project: { directory: root } })).get("scratch_task");
+    expect(tool?.input).toMatchObject({ type: "object", required: ["taskName"] });
 
-    expect([...tools.keys()]).toEqual(expect.arrayContaining(["plan", "scratch_task"]));
-    expect(tool?.input).toMatchObject({
-      type: "object",
-      required: ["taskName"],
-    });
-    expect(tool).toBeDefined();
-    const result = await tool!.execute({ taskId: "T021", taskName: "Native Scratch Tool" });
+    const result = await tool!.execute({ taskName: "Native Scratch Tool" });
     expect(result.metadata.title).toBe("Allocate scratch · Native Scratch Tool");
-    const payload = JSON.parse(result.content) as {
-      scratch: string;
-      taskDir: string;
-      dirs: Record<string, string>;
-    };
-    const now = new Date();
-    const pad = (value: number): string => String(value).padStart(2, "0");
-    const expectedDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-    expect(relative(payload.scratch, payload.taskDir)).toMatch(new RegExp(`^${expectedDate}/\\d{6}-native-scratch-tool(?:-[a-f0-9]{6})?$`));
-    expect(payload.scratch).toBe(join(root, "scratch"));
-    expect(payload.dirs.tmp).toBe(join(payload.taskDir, "tmp"));
-    expect(payload.dirs.testFixtures).toBe(join(payload.taskDir, "tests", "fixtures"));
-    expect(payload.dirs.logs).toBe(join(payload.taskDir, "logs"));
-    for (const path of Object.values(payload.dirs)) {
-      const relativePath = relative(payload.scratch, path);
-      expect(relativePath.length).toBeGreaterThan(0);
-      expect(relativePath).not.toBe("..");
-      expect(relativePath.startsWith(`..${sep}`)).toBe(false);
-      await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-
-    const sanitizedName = await tool!.execute({ taskId: "T022", taskName: "../../safe task" });
-    const sanitizedPayload = JSON.parse(sanitizedName.content) as { taskDir: string; scratch: string };
-    expect(relative(sanitizedPayload.scratch, sanitizedPayload.taskDir)).toMatch(new RegExp(`^${expectedDate}/\\d{6}-safe-task(?:-\\d+)?$`));
-    expect(relative(sanitizedPayload.scratch, sanitizedPayload.taskDir).startsWith(`..${sep}`)).toBe(false);
+    const payload = JSON.parse(result.content) as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual(["executionDir", "namespace"]);
+    expect(payload.namespace).toBe("unplanned");
+    const { scratch } = await resolveScratchRoot(root);
+    expect(relative(scratch, payload.executionDir as string)).toMatch(/^unplanned\/\d{8}-\d{6}-native-scratch-tool(?:-[a-f0-9]{6})?$/);
   });
 
-  it("fails closed for missing project location and invalid task identity", async () => {
-    const withoutLocation = await registerTools();
-    const missingLocationResult = await withoutLocation.get("scratch_task")!.execute({
-      taskId: "T021",
-      taskName: "No project location",
-    });
-    expect(missingLocationResult.metadata.title).toBe("Error");
-    expect(missingLocationResult.content).toContain("no cwd fallback");
-
-    const root = await fixtureWorktree("scratch-tool-invalid-input");
+  it("allocates a planned execution for an exact planId and taskId, one new directory per call", async () => {
+    const root = await fixtureWorktree("scratch-tool-planned");
     const tool = (await registerTools({ project: { directory: root } })).get("scratch_task")!;
-    const ignoredTaskId = await tool.execute({ taskId: "../escape", taskName: "Task-independent" });
-    expect(ignoredTaskId.metadata.title).toContain("Task-independent");
-    const unsafeName = await tool.execute({ taskId: "T021", taskName: "Bad\u0000Name" });
-    expect(unsafeName.metadata.title).toBe("Error");
-    expect(unsafeName.content).toContain("without control characters");
+    const planId = randomUUID();
+    const { scratch } = await resolveScratchRoot(root);
+
+    const first = JSON.parse((await tool.execute({ taskName: "Plan run", planId, taskId: "T021" })).content) as { namespace: string; executionDir: string };
+    const second = JSON.parse((await tool.execute({ taskName: "Plan run", planId, taskId: "T021" })).content) as { executionDir: string };
+    expect(first.namespace).toBe("plan");
+    expect(relative(scratch, first.executionDir)).toMatch(new RegExp(`^${planId}/T021/\\d{8}-\\d{6}(?:-[a-f0-9]{6})?$`));
+    expect(second.executionDir).not.toBe(first.executionDir);
   });
 
-  it("rejects every C0 and DEL control code while accepting Unicode task descriptions", async () => {
-    const root = await fixtureWorktree("scratch-tool-control-characters");
+  it("returns an error for half-specified identity instead of falling back to unplanned", async () => {
+    const root = await fixtureWorktree("scratch-tool-half");
     const tool = (await registerTools({ project: { directory: root } })).get("scratch_task")!;
+    const onlyPlan = await tool.execute({ taskName: "x", planId: randomUUID() });
+    expect(onlyPlan.metadata.title).toBe("Error");
+    expect(onlyPlan.content).toContain("supplied together");
+    const onlyTask = await tool.execute({ taskName: "x", taskId: "T001" });
+    expect(onlyTask.content).toContain("supplied together");
+  });
 
+  it("rejects malformed identifiers and traversal without creating anything", async () => {
+    const root = await fixtureWorktree("scratch-tool-bad-ids");
+    const tool = (await registerTools({ project: { directory: root } })).get("scratch_task")!;
+    const badPlan = await tool.execute({ taskName: "x", planId: "../escape", taskId: "T001" });
+    expect(badPlan.metadata.title).toBe("Error");
+    expect(badPlan.content).toMatch(/lowercase UUIDv4/);
+    const badTask = await tool.execute({ taskName: "x", planId: randomUUID(), taskId: "T1/../x" });
+    expect(badTask.content).toMatch(/plan task path component/);
+  });
+
+  it("fails closed without a project location", async () => {
+    const withoutLocation = (await registerTools()).get("scratch_task")!;
+    const missing = await withoutLocation.execute({ taskName: "No project location" });
+    expect(missing.metadata.title).toBe("Error");
+    expect(missing.content).toContain("no cwd fallback");
+  });
+
+  it("rejects every C0 and DEL control code while accepting Unicode descriptions", async () => {
+    const root = await fixtureWorktree("scratch-tool-control");
+    const tool = (await registerTools({ project: { directory: root } })).get("scratch_task")!;
     for (const codeUnit of [...Array.from({ length: 0x20 }, (_, index) => index), 0x7f]) {
-      const result = await tool.execute({
-        taskId: "T021",
-        taskName: `Bad${String.fromCharCode(codeUnit)}Name`,
-      });
+      const result = await tool.execute({ taskName: `Bad${String.fromCharCode(codeUnit)}Name` });
       expect(result.metadata.title).toBe("Error");
       expect(result.content).toContain("without control characters");
     }
-
     const unicodeName = "Préparation 東京 🚀";
-    const unicodeResult = await tool.execute({ taskId: "T022", taskName: unicodeName });
+    const unicodeResult = await tool.execute({ taskName: unicodeName });
     expect(unicodeResult.metadata.title).toBe(`Allocate scratch · ${unicodeName}`);
-    expect(JSON.parse(unicodeResult.content)).toMatchObject({ scratch: join(root, "scratch") });
   });
 
-  it("keeps prompts on the current worktree-local scratch policy", async () => {
-    const prompts = await Promise.all(
-      ["coder", "implementer", "visualizer", "reviewer"].map((role) =>
-        readFile(join(REPO_ROOT, "defaults", "prompts", `${role}.md`), "utf8"),
-      ),
-    );
-    expect(prompts[0]?.toLowerCase()).toContain("no taskid, approved plan, or `scratch_task` allocation is required");
-    expect(prompts[1]?.toLowerCase()).toContain("no taskid, approved plan, or `scratch_task` allocation is required");
-    expect(prompts[2]).toContain("./scratch/YYYY-MM-DD/HHMMSS-title/");
-    expect(prompts[3]?.toLowerCase()).toContain("no taskid, approved plan, or `scratch_task` allocation is required");
+  it("keeps prompts on the two-category .aria/scratch policy", async () => {
+    const visualizer = await readFile(join(REPO_ROOT, "defaults", "prompts", "visualizer.md"), "utf8");
+    expect(visualizer).toContain(".aria/scratch/unplanned/<timestamp>-<description>/");
+    expect(visualizer).not.toMatch(/\.aria\/scratch\/(fast-path|runtime)\b|exec-[A-Za-z0-9]{6}/);
+    const coder = await readFile(join(REPO_ROOT, "defaults", "prompts", "coder.md"), "utf8");
+    expect(coder).toContain(".aria/scratch/<plan-id>/<task-id>/<timestamp>/");
+    expect(coder).toContain("independent tool output, including Playwright MCP, goes under");
+    const implementer = await readFile(join(REPO_ROOT, "defaults", "prompts", "implementer.md"), "utf8");
+    expect(implementer).toContain("write only to the execution directory named in your cold-start prompt");
+    const reviewer = await readFile(join(REPO_ROOT, "defaults", "prompts", "reviewer.md"), "utf8");
+    expect(reviewer).toContain("The Reviewer is read-only and creates no files");
   });
 });

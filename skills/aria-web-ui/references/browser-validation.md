@@ -1,13 +1,13 @@
 # Browser Validation: Capture, Inspect, Refine, Verify
 
-Visual validation is evidence gathered from the actual application, not an inference from source or a generated mockup. Capture only when the delegated task requires visual evidence, and keep outputs under a unique project-local `./scratch/YYYY-MM-DD/HHMMSS-title/` activity directory, using local calendar date/time and a descriptive title. No task ID, approved Plan, or `scratch_task` allocation is required.
+Visual validation is evidence gathered from the actual application, not an inference from source or a generated mockup. Capture only when the delegated task requires visual evidence, and keep outputs under a unique project-local `.aria/scratch/unplanned/<timestamp>-<description>/` activity directory, using local calendar date/time and a descriptive title. No task ID, approved Plan, or `scratch_task` allocation is required.
 
 ## 1. Establish a safe target
 
 - Identify the project's documented or already-used start command, target route, representative state, and relevant viewport(s). Reuse the current project path and existing dependencies.
 - Start or open the actual app only when the path and command are safe, feasible, and in scope. Do not invent seed data, bypass authentication, or access unrelated systems.
 - Prefer ARIA's managed Playwright MCP when available and authorized to the Visualizer. Otherwise use another suitable browser route only if it is already available and authorized. Never install browser tooling or configure global MCP as part of validation, and do not imply a browser tool exists when it does not.
-- The managed Playwright launcher routes automatic MCP output beneath the canonical workspace's allocated activity directory under `scratch/YYYY-MM-DD/HHMMSS-title`; server startup does not inspect Plan approval or task counts. No task-specific allocation is required. Automatic output is not task evidence. Upstream browser internals may still use OS temporary paths; isolated mode avoids persistent profiles but is not filesystem confinement. Report that limit rather than claiming scratch containment. No manual environment or global configuration is a fallback.
+- The managed Playwright launcher routes automatic MCP output beneath the canonical workspace's allocated activity directory under `.aria/scratch/unplanned/<timestamp>-playwright-mcp`; server startup does not inspect Plan approval or task counts. No task-specific allocation is required. Automatic output is not task evidence. Upstream browser internals may still use OS temporary paths; isolated mode avoids persistent profiles but is not filesystem confinement. Report that limit rather than claiming scratch containment. No manual environment or global configuration is a fallback.
 - If the app cannot be launched safely or no suitable authorized browser route is available, state that limitation and mark browser validation blocked before substituting narrower functional checks. Do not claim browser validation.
 
 ## 2. Capture an explicit claim

@@ -8,7 +8,7 @@ Boundaries:
 - Do not edit files, run shell commands, or delegate work.
 - Separate verified facts from interpretation.
 - Use repository evidence as primary evidence.
-- Workspace execution policy: read-only — create no files; any probe output the caller persists goes under a unique worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` directory. No taskId, approved Plan, or `scratch_task` allocation is required; persistent data and existing outputs remain at established locations.
+- Workspace execution policy: read-only — create no files; any probe output the caller persists goes under `.aria/scratch/` (planned work: its allocated plan execution directory; unplanned work: `.aria/scratch/unplanned/<timestamp>-<description>/`). No taskId, approved Plan, or `scratch_task` allocation is required; persistent data and existing outputs remain at established locations.
 
 Return:
 ## Findings

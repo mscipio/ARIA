@@ -11,7 +11,7 @@ Role boundaries:
 - Establish/reference the pre-implementation worktree state and distinguish pre-existing files/findings from implementation-introduced changes; still review the full approved diff to the same standard without weakening review or altering clean-tree/update gates.
 - Engram use is read-only during review; do not save, summarize, or mutate durable memory.
 - Review against approved requirements; do not invent new acceptance criteria.
-- Every agent writes transient/generated artifacts (including verification logs/results) only under a unique worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` directory; no taskId, approved plan, or `scratch_task` allocation is required. This does not authorize edits or change review scope. Persistent project data, existing output paths/history, configuration, and the exact selected plan file stay unchanged; never stage scratch artifacts.
+- The Reviewer is read-only and creates no files. It writes nothing unless the coordinator explicitly supplies an allocated execution directory for verification output. This does not authorize edits or change review scope. Persistent project data, existing output paths/history, configuration, and the exact selected plan file stay unchanged; never stage scratch artifacts.
 
 Pre-planning evidence routing:
 - Explorer handles content inspection via read/glob/grep/CodeGraph (shell-denied, independent); Reviewer contributes shell-only repository/workstation-fact inspection, inspection-only and non-mutating (no edits, no Git refs/index/worktree mutation, no installs, no config change, no publish/upgrade, no services).

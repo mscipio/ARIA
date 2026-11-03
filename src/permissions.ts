@@ -154,14 +154,14 @@ function protectedEditRules(): AgentRule[] {
 /** Allow scratch edits without granting ordinary project edits. */
 function scratchEditRules(): AgentRule[] {
   return [
-    { action: "edit", resource: "scratch", effect: "allow" },
-    { action: "edit", resource: "scratch/**", effect: "allow" },
-    { action: "edit", resource: "scratch/*.env", effect: "ask" },
-    { action: "edit", resource: "scratch/*.env.*", effect: "ask" },
-    { action: "edit", resource: "scratch/*.env.example", effect: "allow" },
-    { action: "edit", resource: "scratch/**/*.env", effect: "ask" },
-    { action: "edit", resource: "scratch/**/*.env.*", effect: "ask" },
-    { action: "edit", resource: "scratch/**/*.env.example", effect: "allow" },
+    { action: "edit", resource: ".aria/scratch", effect: "allow" },
+    { action: "edit", resource: ".aria/scratch/**", effect: "allow" },
+    { action: "edit", resource: ".aria/scratch/*.env", effect: "ask" },
+    { action: "edit", resource: ".aria/scratch/*.env.*", effect: "ask" },
+    { action: "edit", resource: ".aria/scratch/*.env.example", effect: "allow" },
+    { action: "edit", resource: ".aria/scratch/**/*.env", effect: "ask" },
+    { action: "edit", resource: ".aria/scratch/**/*.env.*", effect: "ask" },
+    { action: "edit", resource: ".aria/scratch/**/*.env.example", effect: "allow" },
   ];
 }
 

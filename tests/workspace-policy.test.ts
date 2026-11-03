@@ -6,13 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { generateAgentFiles } from "../src/agents.js";
 import { resolveAriaConfig } from "../src/overrides.js";
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions.js";
-import { createUniqueScratchDir, scratchTaskScope } from "../src/scratch.js";
+import { randomUUID } from "node:crypto";
+import { allocatePlanExecutionDir, allocateUnplannedExecutionDir, resolveScratchRoot } from "../src/scratch.js";
 
 // T004 — workspace execution policy integration.
 //
 // Canonical source is `src/scratch.ts` (via `src/paths.ts` guards); every
 // reference below is a concise pointer, never a duplicated path check. All
-// artifacts this suite creates live under the repo ./scratch/ tree.
+// artifacts this suite creates live under the repo .aria/scratch/ tree.
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const managed: string[] = [];
@@ -22,7 +23,7 @@ afterEach(async () => {
 });
 
 async function scratchWorktree(name: string): Promise<string> {
-  const dir = await createUniqueScratchDir(REPO_ROOT, "tests/fixtures", name);
+  const dir = await allocateUnplannedExecutionDir(REPO_ROOT, name);
   managed.push(dir);
   return dir;
 }
@@ -74,24 +75,16 @@ describe("T004 workspace execution policy integration", () => {
     );
     expect(evaluatePermission(getPermissionsForRole("visualizer"), "shell", "rm -rf /tmp/x")).toBe("deny");
     expect(evaluatePermission(getPermissionsForRole("implementer"), "shell", "rm -rf /tmp/x")).toBe("deny");
-    // Canonical helper still fails closed through the single source (no
-    // duplicated checks here): task env carries no HOME/XDG/global steering.
     const worktree = await scratchWorktree("policy-modes");
-    const scope = await scratchTaskScope(worktree, "task-p4");
-    for (const key of Object.keys(scope.env)) {
-      expect(["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "ENGRAM_DATA_DIR", "TMPDIR"]).not.toContain(
-        key,
-      );
-    }
-    await expect(scratchTaskScope(worktree, "../escape")).rejects.toThrow();
+    await expect(allocatePlanExecutionDir(worktree, "../escape", "T004")).rejects.toThrow();
+    const dir = await allocatePlanExecutionDir(worktree, randomUUID(), "T004");
+    expect(dir.startsWith(resolve((await resolveScratchRoot(worktree)).scratch))).toBe(true);
   });
 
-  it("leaves no artifacts outside ./scratch/", async () => {
+  it("leaves no artifacts outside .aria/scratch/ and creates no subdirectories on allocation", async () => {
     const worktree = await scratchWorktree("policy-placed");
-    const scope = await scratchTaskScope(worktree, "task-p4");
-    const entries = await readdir(scope.scratch);
-    expect(entries.length).toBeGreaterThan(0);
-    expect(resolve(scope.scratch).startsWith(resolve(worktree, "scratch"))).toBe(true);
-    expect(join(worktree, "sentinel-outside.txt")).not.toContain("\0");
+    const dir = await allocatePlanExecutionDir(worktree, randomUUID(), "T004");
+    expect(await readdir(dir)).toEqual([]);
+    expect(resolve(dir).startsWith(resolve(worktree, ".aria", "scratch"))).toBe(true);
   });
 });

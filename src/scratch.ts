@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -17,114 +17,65 @@ import { isFilesystemRoot } from "./plan-tool.js";
 const execFileAsync = promisify(execFile);
 
 /**
- * T002 — Canonical workspace/scratch policy.
+ * ARIA-controlled generated output lives under `<canonical-worktree>/.aria/scratch/`
+ * in exactly two categories:
  *
- * All ARIA-controlled generated output (task working state, test fixtures
- * and results, logs, captures, caches, builds, environments, runtime state,
- * experiments) lives under `<canonical-worktree>/scratch/`, never under the
- * ambient temp dir, never under `/home/scratch` staging, and never under a
- * caller-global location. The scratch root is derived from the verified
- * canonical project worktree and every path below it is fail-closed through
- * the `src/paths.ts` guards (`canonicalWorktree`, `ensureSafeDirectory`,
- * `safeProjectFile`, `assertContained`, `verifySafeParent`) plus the
- * filesystem-root sentinel shared with the plan tool (`isFilesystemRoot`):
- * `..` traversal, symlink escapes, filesystem roots, and ambiguous
- * (empty/whitespace) roots are rejected before anything is created.
+ * - `<plan-id>/<task-id>/<timestamp>/` — planned work. The plan ID is a lowercase
+ *   UUIDv4 and the task ID is `T` plus three digits, both validated by format only;
+ *   the plan file is never read.
+ * - `unplanned/<timestamp>-<description>/` — unplanned work and independent tool
+ *   output (for example Playwright MCP, described as `playwright-mcp`).
  *
- * What this module never does:
- * - No process-wide `HOME`/`XDG_*`/`TMPDIR`/`ENGRAM_DATA_DIR` mutation. The
- *   task scope below returns a per-call `env` record only, merged by the
- *   caller into a single `ExecutorOptions.env` (the T011 precedent). Global
- *   config resolution (`~/.config/opencode`, Engram data) is preserved
- *   byte-identical.
- * - No `TMPDIR`-via-executor-env steering. `node:os.tmpdir()` and
- *   `mkdtemp()` read the ambient process environment at call time, so a
- *   per-call env merge does not steer them (TMPDIR-via-executor-env is NOT
- *   proven safe). Callers route temp output through the explicit `tmp`
- *   directory returned here instead.
- * - No migration or deletion of historical artifacts outside `scratch/`.
- *   Pre-existing repo clutter stays untouched; only needed `scratch/`
- *   subdirectories are created.
-  * - Scratch confinement applies only to transient/generated artifacts (logs,
-  *   fixtures, temporary outputs, verification evidence, etc.), not intentional
-  *   edits to authorized repository code, tests, configuration, or documentation.
-  *   Scratch artifacts are never staged. `ensureScratchGitignore` never runs
-  *   `git add`/`git rm` and never deletes already-tracked `scratch/` paths;
-  *   tracked content and the index are left byte-identical. Staging explicitly
-  *   approved source changes is permitted only during human-authorized Git
-  *   operations; editing files does not itself authorize staging.
+ * Timestamps are local `YYYYMMDD-HHMMSS`. Each allocation is created with an atomic
+ * non-recursive `mkdir`; a collision appends a random hex suffix and retries, so an
+ * existing execution directory is never reused or overwritten. Only the execution
+ * directory is created. Subdirectories and files are created on demand by
+ * `writeExecutionFileAtomically`, which creates parents only for the file it writes.
  *
- * Explicit exceptions (not promised): tools that do not accept explicit
- * output paths or per-call env — hardcoded `~/.cache` writers, absolute
- * `/tmp` writers, and call sites that resolve `os.tmpdir()` ambiently at
- * call time (e.g. the Engram download path in `src/deps.ts`, which cleans up
- * with `finally rm -rf`) — remain ambient until those call sites accept
- * explicit directories. This module provides no OS sandbox (no chroot,
- * mount, or user namespace); containment is path-level fail-closed checks
- * plus explicit-path routing for cooperative operations.
+ * Guarantees (enforced by the `src/paths.ts` guards): traversal, absolute paths, and
+ * symlinks anywhere in the path are rejected; filesystem-root and empty worktrees are
+ * rejected; identifiers are validated before any directory is created; a path is
+ * accepted as an execution directory only if it has exactly one of the two shapes,
+ * so namespace roots and parent directories are rejected. Historical `./scratch/`
+ * content is never moved, deleted, or staged, and no `git add` or `git rm` runs here.
  *
- * Approvals/workflow note: workspace/scratch instructions and RDC approvals
- * remain required but are not OS-sandbox enforcement (the Unix account can
- * still write outside those locations). Increased Visualizer authority under
- * T003 edit/shell parity changes nothing here.
+ * Not an OS sandbox: the Unix account can still write outside the project, and
+ * cooperative tools must use the directories returned here.
  */
 
-export const SCRATCH_DIR_NAME = "scratch";
+/** Scratch location relative to the canonical worktree. */
+export const SCRATCH_DIR_NAME = ".aria/scratch";
 
-export const SCRATCH_GITIGNORE_RULE = "/scratch/";
+/** The single managed ignore rule for scratch. */
+export const SCRATCH_GITIGNORE_RULE = "/.aria/scratch/";
 
-export const SCRATCH_SUBDIRS = [
-  "tmp",
-  "tests/fixtures",
-  "tests/results",
-  "logs",
-  "captures/screenshots",
-  "captures/videos",
-  "caches/npm",
-  "caches/pip",
-  "caches/python",
-  "builds",
-  "environments",
-  "runtime",
-  "experiments",
-] as const;
+/** Namespace for unplanned work and independent tool output. */
+export const UNPLANNED_NAMESPACE = "unplanned";
 
-function localDateTime(date: Date): { date: string; time: string } {
-  const pad = (value: number): string => String(value).padStart(2, "0");
-  return {
-    date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
-    time: `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`,
-  };
-}
+/** Lowercase RFC 4122 UUIDv4, the immutable Markdown plan identity. */
+export const PLAN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-export type ScratchSubdir = (typeof SCRATCH_SUBDIRS)[number];
+/** Plan task identifier as written in Markdown plans (`T001`). */
+export const PLAN_TASK_ID_PATTERN = /^T[0-9]{3}$/;
 
-export type ScratchTaskScope = {
+const PLAN_EXECUTION_NAME = /^[0-9]{8}-[0-9]{6}(?:-[a-f0-9]{6})?$/;
+const UNPLANNED_EXECUTION_NAME = /^[0-9]{8}-[0-9]{6}-[a-z0-9]+(?:-[a-z0-9]+)*(?:-[a-f0-9]{6})?$/;
+
+export type ScratchExecutionKind = "plan" | "unplanned";
+
+export type ScratchExecution = {
+  kind: ScratchExecutionKind;
   root: string;
   scratch: string;
-  taskDir: string;
-  dirs: {
-    tmp: string;
-    testFixtures: string;
-    testResults: string;
-    logs: string;
-    screenshots: string;
-    videos: string;
-    npmCache: string;
-    pipCache: string;
-    pythonCache: string;
-    builds: string;
-    environments: string;
-    runtime: string;
-    experiments: string;
-  };
-  /**
-   * Per-call environment additions only. Merge into a single
-   * `ExecutorOptions.env`; never assign to `process.env`. Deliberately
-   * carries no `HOME`, `XDG_*`, `ENGRAM_*`, or `TMPDIR` entries.
-   */
-  env: Record<string, string>;
+  executionDir: string;
 };
+
+/** Local timestamp `YYYYMMDD-HHMMSS` for execution directory names. */
+export function formatScratchTimestamp(date: Date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  const day = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
+  return `${day}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
+}
 
 /** Resolve and verify the canonical scratch root for a worktree (fail closed). */
 export async function resolveScratchRoot(worktree: string): Promise<{ root: string; scratch: string }> {
@@ -143,284 +94,133 @@ export async function resolveScratchRoot(worktree: string): Promise<{ root: stri
   return { root, scratch };
 }
 
-function validateScopeSegments(scope: string): string[] {
-  if (typeof scope !== "string" || scope.trim().length === 0) {
-    throw new Error("Scratch scope cannot be empty");
+/** Validate a plan ID (lowercase UUIDv4) before it becomes a path component. */
+export function validatePlanId(planId: string): string {
+  if (typeof planId !== "string" || !PLAN_ID_PATTERN.test(planId)) {
+    throw new Error(`Scratch plan id is not a lowercase UUIDv4 path component: ${String(planId)}`);
   }
-  const trimmed = scope.trim();
-  if (isAbsolute(trimmed)) {
-    throw new Error(`Scratch scope escapes the workspace: ${scope}`);
-  }
-  const segments = trimmed.split("/").filter((segment) => segment.length > 0);
-  if (segments.length === 0) {
-    throw new Error("Scratch scope cannot be empty");
-  }
-  for (const segment of segments) {
-    if (segment === "." || segment === "..") {
-      throw new Error(`Scratch scope escapes the workspace: ${scope}`);
-    }
-    if (segment.includes("\\") || segment.includes("\0")) {
-      throw new Error(`Scratch scope is not a portable path component: ${scope}`);
-    }
-  }
-  return segments;
+  return planId;
 }
 
-async function resolveScratchDir(
-  root: string,
-  scratch: string,
-  scope: string,
-  create: boolean,
-): Promise<string> {
-  const segments = validateScopeSegments(scope);
-  const candidate = resolve(scratch, ...segments);
-  assertContained(scratch, candidate, "Scratch scope");
-  assertContained(root, candidate, "Scratch scope");
-  return ensureSafeDirectory(root, candidate, create);
-}
-
-/** Create the scratch root plus the requested subdirectories (defaults to the full layout). */
-export async function ensureScratchDirs(
-  worktree: string,
-  subdirs: readonly string[] = SCRATCH_SUBDIRS,
-): Promise<{ root: string; scratch: string }> {
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  await ensureSafeDirectory(root, scratch, true);
-  for (const subdir of subdirs) {
-    await resolveScratchDir(root, scratch, subdir, true);
+/** Validate a plan task ID (`T001`) before it becomes a path component. */
+export function validatePlanTaskId(taskId: string): string {
+  if (typeof taskId !== "string" || !PLAN_TASK_ID_PATTERN.test(taskId)) {
+    throw new Error(`Scratch task id is not a plan task path component (expected T000 form): ${String(taskId)}`);
   }
-  return { root, scratch };
+  return taskId;
 }
 
-function sanitizePrefix(prefix: string): string {
-  const cleaned = (prefix ?? "").trim().replaceAll(/[^A-Za-z0-9._-]+/g, "-").replaceAll(/-+/g, "-").replace(/^-|-$/g, "");
-  const sliced = cleaned.slice(0, 32);
-  return sliced.length > 0 ? sliced : "run";
+function slugify(description: string): string {
+  const slug = (typeof description === "string" ? description : "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  if (slug.length === 0) {
+    throw new Error("Unplanned scratch description must contain at least one letter or digit");
+  }
+  return slug;
 }
 
 /**
- * Create a concurrent-safe unique directory under `scratch/<scope>/` via
- * `mkdtemp` (atomic unique naming; sibling `mkdir` races resolve through
- * the `ensureSafeDirectory` EEXIST path). The scope parent stays inside the
- * verified scratch root; symlink escapes fail closed.
+ * Atomically create one execution directory under `parentSegments`. The parent is
+ * verified (and created) as a safe directory; the candidate is created with a
+ * non-recursive `mkdir`, so a concurrent or repeated allocation can never reuse one.
  */
-export async function createUniqueScratchDir(
-  worktree: string,
-  scope: string,
-  prefix: string,
-): Promise<string> {
+async function allocateExecution(worktree: string, parentSegments: readonly string[], name: string): Promise<string> {
   const { root, scratch } = await resolveScratchRoot(worktree);
-  const scopeDir = await resolveScratchDir(root, scratch, scope, true);
-  const created = await mkdtemp(join(scopeDir, `${sanitizePrefix(prefix)}-`));
-  assertContained(scratch, created, "Scratch directory");
-  assertContained(root, created, "Scratch directory");
-  return created;
-}
-
-/** Create a timestamped, human-readable scratch directory for one output run. */
-export async function createScratchRunDir(worktree: string, title: string): Promise<string> {
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  const { date, time } = localDateTime(new Date());
-  const dateDir = await resolveScratchDir(root, scratch, date, true);
-  const slug = taskSlug("run", title);
-  const base = `${time}-${slug}`;
-  const runDir = await withFileLock(dateDir, async () => {
-    for (let suffix = 0; suffix < 1000; suffix += 1) {
-      const candidate = join(dateDir, suffix === 0 ? base : `${base}-${suffix}`);
-      try {
-        await mkdir(candidate);
-        return candidate;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      await ensureSafeDirectory(root, candidate, false);
+  const parent = await ensureSafeDirectory(root, resolve(scratch, ...parentSegments), true);
+  assertContained(scratch, parent, "Scratch parent");
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    const candidate = join(parent, attempt === 0 ? name : `${name}-${randomBytes(3).toString("hex")}`);
+    try {
+      await mkdir(candidate);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+      throw error;
     }
-    throw new Error("Unable to allocate a unique scratch run directory");
-  });
-  assertContained(scratch, runDir, "Scratch run directory");
-  return runDir;
-}
-
-function validateTaskId(taskId: string): string {
-  if (typeof taskId !== "string" || taskId.trim().length === 0) {
-    throw new Error("Scratch task id cannot be empty");
+    const dir = await ensureSafeDirectory(root, candidate, false);
+    assertContained(scratch, dir, "Scratch execution directory");
+    return dir;
   }
-  const id = taskId.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
-    throw new Error(`Scratch task id is not a safe path component: ${taskId}`);
-  }
-  return id;
+  throw new Error("Unable to allocate a unique scratch execution directory");
 }
 
-function taskSlug(taskId: string, taskName?: string): string {
-  const source = taskName?.trim() || taskId.replace(/([a-z])([A-Z0-9])/g, "$1 $2");
-  const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56).replace(/-+$/g, "");
-  return slug || "task";
+/** Allocate `.aria/scratch/<plan-id>/<task-id>/<timestamp>/` for planned work. */
+export async function allocatePlanExecutionDir(worktree: string, planId: string, taskId: string): Promise<string> {
+  validatePlanId(planId);
+  validatePlanTaskId(taskId);
+  return allocateExecution(worktree, [planId, taskId], formatScratchTimestamp());
 }
 
-/** Date-scoped task directory. Repeated task IDs resolve to the same path only within the same local calendar day. */
-async function resolveTaskDir(
-  worktree: string,
-  id: string,
-  taskName?: string,
-): Promise<{ root: string; scratch: string; taskDir: string }> {
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  const { date } = localDateTime(new Date());
-  const dateDir = await resolveScratchDir(root, scratch, date, true);
-  const slug = taskSlug(id, taskName);
-  const marker = ".aria-task-id";
-  const identity = `${id}\n${taskName?.trim() ?? ""}\n`;
-  const idSuffix = createHash("sha256").update(id).digest("hex").slice(0, 6);
-
-  // Serialize allocation so parallel processes cannot split the same task
-  // between the unsuffixed and collision paths.
-  const taskDir = await withFileLock(dateDir, async () => {
-    const unsuffixed = join(dateDir, slug);
-    for (const candidate of [unsuffixed, join(dateDir, `${slug}-${idSuffix}`)]) {
-      try {
-        await mkdir(candidate);
-        await writeFile(join(candidate, marker), identity, { flag: "wx" });
-        return candidate;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      await ensureSafeDirectory(root, candidate, false);
-      try {
-        if ((await readFile(join(candidate, marker), "utf8")) === identity) return candidate;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    throw new Error(`Unable to allocate a unique scratch directory for task ${id}`);
-  });
-  assertContained(scratch, taskDir, "Scratch task directory");
-  return { root, scratch, taskDir };
-}
-
-/** Per-day deterministic directory: `<scratch>/<local date>/<task name>/`; a new local day intentionally gets a new path. */
-export async function createTaskScratch(worktree: string, taskId: string, taskName?: string): Promise<string> {
-  const id = validateTaskId(taskId);
-  return (await resolveTaskDir(worktree, id, taskName)).taskDir;
-}
-
-/** Concurrent-safe unique run directory under the per-task directory. */
-export async function createTaskRunDir(worktree: string, taskId: string, prefix = "run", taskName?: string): Promise<string> {
-  const id = validateTaskId(taskId);
-  const { root, scratch, taskDir } = await resolveTaskDir(worktree, id, taskName);
-  return createUniqueScratchDir(root, relative(scratch, taskDir), prefix);
+/** Allocate `.aria/scratch/unplanned/<timestamp>-<description>/` for unplanned work and tool output. */
+export async function allocateUnplannedExecutionDir(worktree: string, description: string): Promise<string> {
+  const slug = slugify(description);
+  return allocateExecution(worktree, [UNPLANNED_NAMESPACE], `${formatScratchTimestamp()}-${slug}`);
 }
 
 /**
- * Task-scoped directories plus per-call env for ARIA-controlled operations.
- * Route caches, logs, captures, builds, and test outputs through `dirs`
- * (or explicit CLI flags pointed at them); merge `env` per call via
- * `ExecutorOptions.env`. Nothing here touches `process.env`, `HOME`,
- * `XDG_*`, or global config, and atomic sibling-temp + `withFileLock`
- * semantics are preserved by `writeScratchFileAtomically` for file writes.
- *
- * Non-collision layout: every task-owned output (`tmp`, `tests/fixtures`,
- * `tests/results`, `logs`, `captures/*`, `builds`, `environments`,
- * `runtime`, `experiments`) lives beneath the per-task directory
- * (`<scratch>/<taskId>/`), so two distinct task scopes return disjoint
- * task-owned paths and cooperative callers following `ARIA_LOG_DIR`/
- * `ARIA_CAPTURE_DIR`/`ARIA_BUILD_DIR` (and the other `ARIA_*` task env
- * values, which all point beneath `taskDir`) cannot overwrite another
- * task's same-named output. Deliberately shared across tasks (content-
- * addressed caches safe for reuse): `caches/npm`, `caches/pip`,
- * `caches/python` under the scratch root, surfaced as `NPM_CONFIG_CACHE`,
- * `PIP_CACHE_DIR`, and `PYTHONPYCACHEPREFIX`.
+ * Verify that `executionDir` is an existing execution directory: exactly
+ * `<plan-id>/<task-id>/<timestamp>` or `unplanned/<timestamp>-<description>`
+ * under the scratch root, with no symlinks on the path. Namespace roots, parent
+ * directories, and anything outside `.aria/scratch/` are rejected.
  */
-export async function scratchTaskScope(worktree: string, taskId: string, taskName?: string): Promise<ScratchTaskScope> {
-  const id = validateTaskId(taskId);
-  const { root, scratch, taskDir } = await resolveTaskDir(worktree, id, taskName);
-  await ensureSafeDirectory(root, scratch, true);
-  const taskScope = relative(scratch, taskDir);
-  const [tmp, testFixtures, testResults, logs, screenshots, videos, capturesDir, npmCache, pipCache, pythonCache, builds, environments, runtime, experiments] =
-    await Promise.all([
-      resolveScratchDir(root, scratch, `${taskScope}/tmp`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/tests/fixtures`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/tests/results`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/logs`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/captures/screenshots`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/captures/videos`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/captures`, true),
-      resolveScratchDir(root, scratch, "caches/npm", true),
-      resolveScratchDir(root, scratch, "caches/pip", true),
-      resolveScratchDir(root, scratch, "caches/python", true),
-      resolveScratchDir(root, scratch, `${taskScope}/builds`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/environments`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/runtime`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/experiments`, true),
-    ]);
-  return {
-    root,
-    scratch,
-    taskDir,
-    dirs: {
-      tmp,
-      testFixtures,
-      testResults,
-      logs,
-      screenshots,
-      videos,
-      npmCache,
-      pipCache,
-      pythonCache,
-      builds,
-      environments,
-      runtime,
-      experiments,
-    },
-    env: {
-      ARIA_SCRATCH_ROOT: scratch,
-      ARIA_SCRATCH_TASK_DIR: taskDir,
-      ARIA_SCRATCH_TMP: tmp,
-      NPM_CONFIG_CACHE: npmCache,
-      PIP_CACHE_DIR: pipCache,
-      PYTHONPYCACHEPREFIX: pythonCache,
-      ARIA_TEST_RESULTS_DIR: testResults,
-      ARIA_TEST_FIXTURES_DIR: testFixtures,
-      ARIA_LOG_DIR: logs,
-      ARIA_CAPTURE_DIR: capturesDir,
-      ARIA_BUILD_DIR: builds,
-    },
-  };
+export async function resolveExecutionDir(worktree: string, executionDir: string): Promise<ScratchExecution> {
+  if (typeof executionDir !== "string" || executionDir.trim().length === 0) {
+    throw new Error("Scratch execution directory cannot be empty");
+  }
+  const { root, scratch } = await resolveScratchRoot(worktree);
+  const target = isAbsolute(executionDir) ? resolve(executionDir) : resolve(root, executionDir);
+  assertContained(scratch, target, "Scratch execution directory");
+  const segments = relative(scratch, target).split(sep).filter((segment) => segment.length > 0);
+  let kind: ScratchExecutionKind;
+  if (segments.length === 3 && PLAN_ID_PATTERN.test(segments[0]!) && PLAN_TASK_ID_PATTERN.test(segments[1]!) && PLAN_EXECUTION_NAME.test(segments[2]!)) {
+    kind = "plan";
+  } else if (segments.length === 2 && segments[0] === UNPLANNED_NAMESPACE && UNPLANNED_EXECUTION_NAME.test(segments[1]!)) {
+    kind = "unplanned";
+  } else {
+    throw new Error(
+      `Not a scratch execution directory (expected <plan-id>/<task-id>/<timestamp> or unplanned/<timestamp>-<description>): ${executionDir}`,
+    );
+  }
+  const dir = await ensureSafeDirectory(root, target, false);
+  assertContained(scratch, dir, "Scratch execution directory");
+  return { kind, root, scratch, executionDir: dir };
 }
 
 /**
- * Atomically write a file under `scratch/` (path relative to the scratch
- * root, e.g. `logs/run.log`): sibling-temp + `verifySafeParent` + rename,
- * serialized with `withFileLock` like the plan persistence. Paths escaping
- * `scratch/` (absolute, `..`) fail closed; the sibling temp is contained
- * iff the target is contained. Historical files outside `scratch/` are
- * never touched.
+ * Atomically write one file inside an existing execution directory. Parents are
+ * created on demand, only for this file; the write is sibling-temp + rename under
+ * `withFileLock`. The file path must stay strictly inside the execution directory.
  */
-export async function writeScratchFileAtomically(
+export async function writeExecutionFileAtomically(
   worktree: string,
-  scratchRelativePath: string,
+  executionDir: string,
+  relativeFile: string,
   content: string | Uint8Array,
   options: { signal?: AbortSignal } = {},
 ): Promise<string> {
-  if (typeof scratchRelativePath !== "string" || scratchRelativePath.trim().length === 0) {
-    throw new Error("Scratch file path cannot be empty");
+  if (typeof relativeFile !== "string" || relativeFile.trim().length === 0 || isAbsolute(relativeFile)) {
+    throw new Error(`Execution file path must be a non-empty relative path: ${String(relativeFile)}`);
   }
-  if (isAbsolute(scratchRelativePath)) {
-    throw new Error(`Scratch file path escapes the workspace: ${scratchRelativePath}`);
+  const execution = await resolveExecutionDir(worktree, executionDir);
+  const candidate = resolve(execution.executionDir, relativeFile);
+  assertContained(execution.executionDir, candidate, "Execution file path");
+  if (candidate === execution.executionDir) {
+    throw new Error("Execution file path must name a file inside the execution directory");
   }
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  const candidate = resolve(scratch, scratchRelativePath);
-  assertContained(scratch, candidate, "Scratch file path");
-  assertContained(root, candidate, "Scratch file path");
-  const file = await safeProjectFile(root, relative(root, candidate), { createParent: true });
-  assertContained(scratch, file.path, "Scratch file path");
+  const file = await safeProjectFile(execution.root, relative(execution.root, candidate), { createParent: true });
+  assertContained(execution.executionDir, file.path, "Execution file path");
   await withFileLock(
     file.path,
     async () => {
-      await verifySafeParent(root, file.path);
+      await verifySafeParent(execution.root, file.path);
       const temporaryPath = `${file.path}.${process.pid}.${randomUUID()}.tmp`;
       try {
         await writeFile(temporaryPath, content, { flag: "wx" });
-        await verifySafeParent(root, temporaryPath);
+        await verifySafeParent(execution.root, temporaryPath);
         if (options.signal?.aborted) {
           throw options.signal.reason instanceof Error ? options.signal.reason : new Error("Operation aborted");
         }

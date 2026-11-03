@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { resolvePlaywrightRuntimeOutput } from "../src/playwright-launch.js";
 import { evaluatePermission, getArchivistScopedPermissions, getPermissionsForRole } from "../src/permissions.js";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const fixtures: string[] = [];
@@ -17,7 +17,7 @@ afterEach(async () => {
 
 async function fixtureWorktree(name: string): Promise<string> {
   const fixtureRoot = process.env.ARIA_TEST_FIXTURE_ROOT ?? tmpdir();
-  const path = await createUniqueScratchDir(fixtureRoot, "worktrees", name);
+  const path = await allocateUnplannedExecutionDir(fixtureRoot, name);
   fixtures.push(path);
   return path;
 }
@@ -41,7 +41,7 @@ describe("accepted Playwright integration boundaries", () => {
 
       const output = await resolvePlaywrightRuntimeOutput(worktree);
       const outputRelative = relative(worktree, output);
-      expect(outputRelative).toMatch(/^scratch\/\d{4}-\d{2}-\d{2}\/\d{6}-playwright-mcp(?:-\d+)?$/);
+      expect(outputRelative).toMatch(/^\.aria\/scratch\/unplanned\/\d{8}-\d{6}-playwright-mcp(?:-[a-f0-9]{6})?$/);
       if (context.plan !== undefined) expect(await readFile(planPath, "utf8")).toBe(context.plan);
     }
   });

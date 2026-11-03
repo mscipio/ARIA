@@ -71,8 +71,8 @@ describe("T022 native scratch task permissions", () => {
 
     for (const role of roles) {
       const rules = getPermissionsForRole(role);
-      expect(evaluatePermission(rules, "edit", "scratch")).toBe("allow");
-      expect(evaluatePermission(rules, "edit", "scratch/tests/results/run.json")).toBe("allow");
+      expect(evaluatePermission(rules, "edit", ".aria/scratch")).toBe("allow");
+      expect(evaluatePermission(rules, "edit", ".aria/scratch/tests/results/run.json")).toBe("allow");
       expect(evaluatePermission(rules, "edit", "other/scratch/tests/results/run.json")).toBe(
         role === "implementer" || role === "visualizer" ? "allow" : "deny",
       );
@@ -120,9 +120,9 @@ describe("T022 native scratch task permissions", () => {
     const registered = effectiveRolePermissions();
     for (const role of ROLES) {
       const permission = registered[role] as unknown as Record<string, unknown>;
-      expect(effectiveDecision(permission, "edit", "scratch")).toBe("allow");
-      expect(effectiveDecision(permission, "edit", "scratch/tests/result.json")).toBe("allow");
-      expect(effectiveDecision(permission, "edit", "scratch/.env")).toBe("ask");
+      expect(effectiveDecision(permission, "edit", ".aria/scratch")).toBe("allow");
+      expect(effectiveDecision(permission, "edit", ".aria/scratch/tests/result.json")).toBe("allow");
+      expect(effectiveDecision(permission, "edit", ".aria/scratch/.env")).toBe("ask");
       expect(effectiveDecision(permission, "edit", "src/app.ts")).toBe(
         role === "implementer" || role === "visualizer" ? "allow" : "deny",
       );
@@ -166,8 +166,8 @@ describe("T022 native scratch task permissions", () => {
       expect(generated[role]).toContain("exact `.aria/plans/` identity");
       expect(generated[role]).toContain("legacy `.aria/rdc/TASKS.md`");
       if (role === "visualizer") {
-        expect(generated[role]).toContain("worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` path");
-        expect(generated[role]).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
+        expect(generated[role]).toContain("under `.aria/scratch/`: planned work in its allocated plan execution directory");
+        expect(generated[role]).toContain("`scratch_task`");
       }
       if (permitted) {
         expect(registered[role].scratch_task).toBe("allow");

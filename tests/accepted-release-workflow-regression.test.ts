@@ -5,7 +5,8 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { scratchTaskScope } from "../src/scratch.js";
+import { allocatePlanExecutionDir } from "../src/scratch.js";
+import { randomUUID } from "node:crypto";
 import { runReleaseCli } from "../src/release.js";
 import { runShipCli } from "../src/ship.js";
 
@@ -37,8 +38,8 @@ function writeGhState(state: Record<string, unknown>): Promise<void> {
 }
 
 beforeAll(async () => {
-  const scope = await scratchTaskScope(repoRoot, "T007", "accepted release workflow focused regressions");
-  testRoot = await mkdtemp(join(scope.dirs.testFixtures, "accepted-release-"));
+  const scope = await allocatePlanExecutionDir(repoRoot, randomUUID(), "T007");
+  testRoot = await mkdtemp(join(scope, "accepted-release-"));
   fixtureRoot = join(testRoot, "release-project");
   workRoot = join(fixtureRoot, "work");
   bareRoot = join(fixtureRoot, "remote.git");

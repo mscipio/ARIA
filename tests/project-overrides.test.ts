@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { generateAgentFiles } from "../src/agents";
 import aria from "../src/index";
 import { resolveAriaConfig, ROLES } from "../src/overrides";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import {
   applyArchivistRuntimeTransform,
   applyProjectModelOverlay,
@@ -188,7 +188,7 @@ describe("T005 project overrides", () => {
     const savedHome = process.env.HOME;
     const savedXdg = process.env.XDG_CONFIG_HOME;
     const savedWikiDir = process.env.WIKI_DIR;
-    const testRoot = await createUniqueScratchDir(REPO_ROOT, "tests/fixtures", "project-route-setup");
+    const testRoot = await allocateUnplannedExecutionDir(REPO_ROOT, "project-route-setup");
     tempDirs.push(testRoot);
     process.env.XDG_CONFIG_HOME = join(testRoot, "xdg");
     delete process.env.WIKI_DIR;

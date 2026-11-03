@@ -166,27 +166,27 @@ const PROTECTED_EDIT: Record<string, PermissionAction> = {
 
 const SCRATCH_EDIT: Record<string, PermissionAction> = {
   "*": "deny",
-  "scratch": "allow",
-  "scratch/**": "allow",
+  ".aria/scratch": "allow",
+  ".aria/scratch/**": "allow",
   "/**": "deny",
-  "scratch/*.env": "ask",
-  "scratch/*.env.*": "ask",
-  "scratch/*.env.example": "allow",
-  "scratch/**/*.env": "ask",
-  "scratch/**/*.env.*": "ask",
-  "scratch/**/*.env.example": "allow",
+  ".aria/scratch/*.env": "ask",
+  ".aria/scratch/*.env.*": "ask",
+  ".aria/scratch/*.env.example": "allow",
+  ".aria/scratch/**/*.env": "ask",
+  ".aria/scratch/**/*.env.*": "ask",
+  ".aria/scratch/**/*.env.example": "allow",
 };
 
 const IMPLEMENTER_SCRATCH_EDIT: Record<string, PermissionAction> = {
-  "scratch": "allow",
-  "scratch/**": "allow",
+  ".aria/scratch": "allow",
+  ".aria/scratch/**": "allow",
   "/**": "deny",
-  "scratch/*.env": "ask",
-  "scratch/*.env.*": "ask",
-  "scratch/*.env.example": "allow",
-  "scratch/**/*.env": "ask",
-  "scratch/**/*.env.*": "ask",
-  "scratch/**/*.env.example": "allow",
+  ".aria/scratch/*.env": "ask",
+  ".aria/scratch/*.env.*": "ask",
+  ".aria/scratch/*.env.example": "allow",
+  ".aria/scratch/**/*.env": "ask",
+  ".aria/scratch/**/*.env.*": "ask",
+  ".aria/scratch/**/*.env.example": "allow",
 };
 
 const CODE_READ: AgentPermission = {

@@ -3,13 +3,13 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { defaultCommandsDir, generateCommandFiles, installCommandFiles, isAriaManaged, parseManagedHeader, reconcileManagedCommands, verifyManagedContent } from "../src/commands.js";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import { setup } from "../src/lifecycle.js";
 import { runDoctor } from "../src/doctor.js";
 import type { Executor } from "../src/deps.js";
 
 const dirs: string[] = [];
-async function temp(): Promise<string> { const dir = await createUniqueScratchDir(process.cwd(), "tests/fixtures", "commands"); dirs.push(dir); return dir; }
+async function temp(): Promise<string> { const dir = await allocateUnplannedExecutionDir(process.cwd(), "commands"); dirs.push(dir); return dir; }
 afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
 describe("managed commands", () => {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import aria from "../src/index";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import {
   createPlanTool,
   isFilesystemRoot,
@@ -30,7 +30,7 @@ async function project(): Promise<string> {
 
 async function scratchProject(task: string): Promise<string> {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const root = await createUniqueScratchDir(repoRoot, "tests/fixtures", task);
+  const root = await allocateUnplannedExecutionDir(repoRoot, task);
   tempDirs.push(root);
   return root;
 }

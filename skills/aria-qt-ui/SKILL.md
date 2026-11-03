@@ -59,4 +59,4 @@ upstream is vendored.
 - QML prototypes are design-only and disposable; production UI is Qt
   Widgets — the transfer gap is explicit in `references/qml-notes.md`,
   with no migration, embedding, or conversion tooling.
-- Keep captures, builds, logs, and other transient/generated artifacts under a unique project-local `./scratch/YYYY-MM-DD/HHMMSS-title/` activity directory, using local calendar date/time and a descriptive title. No task ID, approved Plan, or `scratch_task` allocation is required. Preserve existing/historical evidence paths; offline only, no OS-sandbox promise.
+- Keep captures, builds, logs, and other transient/generated artifacts under a unique project-local `.aria/scratch/unplanned/<timestamp>-<description>/` activity directory, using local calendar date/time and a descriptive title. No task ID, approved Plan, or `scratch_task` allocation is required. Preserve existing/historical evidence paths; offline only, no OS-sandbox promise.

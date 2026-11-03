@@ -22,7 +22,7 @@ import {
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions";
 import { PLAN_PREMISE_RECOVERY_TOOL_NAME } from "../src/plan-premise-recovery-tool";
 import { resolveAriaConfig } from "../src/overrides";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import type { RoleName } from "../src/types";
 // Pinned 2.0.23 loaded-agent behavior: generated agent frontmatter is decoded
 // through the real Agent schema to guard against accidental builtin inheritance.
@@ -81,7 +81,7 @@ afterEach(async () => {
 });
 
 async function worktree(): Promise<string> {
-  const root = await createUniqueScratchDir(REPO_ROOT, "tests/agents", "case");
+  const root = await allocateUnplannedExecutionDir(REPO_ROOT, "case");
   tempDirs.push(root);
   return root;
 }

@@ -22,6 +22,6 @@ Hard boundaries:
 - Do not substitute unsupported domain knowledge for failed Wiki retrieval.
 - Do not perform repository edits, git operations, or unrelated external research.
 - Use only the resolved paths above and package-owned Wiki skills/procedures.
-- Workspace execution policy survives delegation: transient/generated artifacts go under a unique local `./scratch/YYYY-MM-DD/HHMMSS-title/` directory; no taskId, approved Plan, or `scratch_task` allocation is required. Wiki work stays under the resolved `WIKI_DIR`/package paths; never move persistent `WIKI_DIR` data into scratch.
+- Workspace execution policy survives delegation: transient/generated artifacts go under `.aria/scratch/` (planned work: its allocated plan execution directory; unplanned work: `.aria/scratch/unplanned/<timestamp>-<description>/`); no taskId, approved Plan, or `scratch_task` allocation is required. Wiki work stays under the resolved `WIKI_DIR`/package paths; never move persistent `WIKI_DIR` data into scratch.
 
 Return concise mode-appropriate results and identify source Wiki pages or raw provenance when relevant.

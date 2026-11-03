@@ -1,292 +1,243 @@
-import { execFile as nodeExecFile } from "node:child_process";
-import { lstat, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   SCRATCH_GITIGNORE_RULE,
-  SCRATCH_SUBDIRS,
-  createTaskRunDir,
-  createTaskScratch,
-  createUniqueScratchDir,
-  ensureScratchDirs,
+  allocatePlanExecutionDir,
+  allocateUnplannedExecutionDir,
   ensureScratchGitignore,
+  formatScratchTimestamp,
+  resolveExecutionDir,
   resolveScratchRoot,
-  scratchTaskScope,
-  writeScratchFileAtomically,
+  writeExecutionFileAtomically,
 } from "../src/scratch.js";
 
-const execFileAsync = promisify(nodeExecFile);
-
-// T002: every artifact this suite creates lives under the repo ./scratch/
-// tree (which the new /scratch/ gitignore rule keeps untracked). No /tmp,
-// no /home/scratch, no HOME/XDG staging: worktrees are unique scratch
-// subdirectories, and nothing here mutates process.env.
+const execFileAsync = promisify(execFile);
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-
 const managed: string[] = [];
 
 afterEach(async () => {
   await Promise.all(managed.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
+/** Test worktrees are unplanned execution directories inside the repo's own scratch. */
 async function fixtureWorktree(name: string): Promise<string> {
-  const dir = await createUniqueScratchDir(REPO_ROOT, "tests/fixtures", name);
+  const dir = await allocateUnplannedExecutionDir(REPO_ROOT, `vitest-${name}`);
   managed.push(dir);
   return dir;
 }
 
-function containedUnder(scratch: string, candidate: string): boolean {
-  const child = relative(scratch, candidate);
-  return child.length > 0 && !child.startsWith(`..${sep}`) && child !== "..";
+async function gitCheckIgnore(root: string, path: string): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["check-ignore", "-q", "--no-index", "--", path], { cwd: root });
+    return true;
+  } catch (error) {
+    if ((error as { code?: number }).code === 1) return false;
+    throw error;
+  }
 }
 
-function localDate(date = new Date()): string {
-  const pad = (value: number): string => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
+const PLAN_EXECUTION = /^[0-9a-f-]{36}\/T\d{3}\/\d{8}-\d{6}(?:-[a-f0-9]{6})?$/;
+const UNPLANNED_EXECUTION = /^unplanned\/\d{8}-\d{6}-[a-z0-9-]+(?:-[a-f0-9]{6})?$/;
 
-describe("T002 workspace/scratch policy", () => {
-  it("creates the canonical layout under repo, subdir, and nested worktrees", async () => {
-    const repoLayout = await ensureScratchDirs(REPO_ROOT);
-    expect(repoLayout.scratch).toBe(resolve(repoLayout.root, "scratch"));
-    for (const subdir of SCRATCH_SUBDIRS) {
-      const info = await lstat(join(repoLayout.scratch, ...subdir.split("/")));
-      expect(info.isDirectory()).toBe(true);
-    }
-
-    const outer = await fixtureWorktree("layout");
-    const nested = join(outer, "proj", "nested");
-    await mkdir(nested, { recursive: true });
-    const nestedLayout = await ensureScratchDirs(nested);
-    expect(nestedLayout.scratch).toBe(resolve(nestedLayout.root, "scratch"));
-    const probe = await writeScratchFileAtomically(nested, "logs/run.log", "hello\n");
-    expect(probe).toBe(join(nestedLayout.scratch, "logs", "run.log"));
-    expect(await readFile(probe, "utf8")).toBe("hello\n");
+describe("scratch layout: exactly two allocation categories", () => {
+  it("allocates planned executions as <plan-id>/<task-id>/<timestamp>/ with no pre-created subdirectories", async () => {
+    const worktree = await fixtureWorktree("planned-layout");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const dir = await allocatePlanExecutionDir(worktree, randomUUID(), "T001");
+    expect(relative(scratch, dir)).toMatch(PLAN_EXECUTION);
+    expect(await readdir(dir)).toEqual([]);
   });
 
-  it("rejects traversal, symlink escapes, filesystem roots, and ambiguous roots", async () => {
-    await expect(resolveScratchRoot("")).rejects.toThrow(/meaningful project worktree/);
-    await expect(resolveScratchRoot("   ")).rejects.toThrow(/meaningful project worktree/);
+  it("serves two plan IDs, several tasks, and repeated allocations of one task without collisions", async () => {
+    const worktree = await fixtureWorktree("two-plans");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const planA = randomUUID();
+    const planB = randomUUID();
+    const dirs = [
+      await allocatePlanExecutionDir(worktree, planA, "T001"),
+      await allocatePlanExecutionDir(worktree, planA, "T001"),
+      await allocatePlanExecutionDir(worktree, planA, "T002"),
+      await allocatePlanExecutionDir(worktree, planB, "T001"),
+    ];
+    expect(new Set(dirs).size).toBe(dirs.length);
+    expect(relative(scratch, dirs[0]!).startsWith(`${planA}/T001/`)).toBe(true);
+    expect(relative(scratch, dirs[2]!).startsWith(`${planA}/T002/`)).toBe(true);
+    expect(relative(scratch, dirs[3]!).startsWith(`${planB}/T001/`)).toBe(true);
+    expect(await readdir(join(scratch, planA, "T001"))).toHaveLength(2);
+  });
+
+  it("allocates concurrent executions for the same task, including forced timestamp collisions", async () => {
+    const worktree = await fixtureWorktree("concurrent");
+    const planId = randomUUID();
+    const dirs = await Promise.all(Array.from({ length: 12 }, () => allocatePlanExecutionDir(worktree, planId, "T003")));
+    expect(new Set(dirs).size).toBe(12);
+    for (const dir of dirs) expect((await lstat(dir)).isDirectory()).toBe(true);
+  });
+
+  it("allocates unplanned executions as unplanned/<timestamp>-<description>/", async () => {
+    const worktree = await fixtureWorktree("unplanned-layout");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const dir = await allocateUnplannedExecutionDir(worktree, "Native Fast Path Check!");
+    expect(relative(scratch, dir)).toMatch(/^unplanned\/\d{8}-\d{6}-native-fast-path-check(?:-[a-f0-9]{6})?$/);
+    const again = await allocateUnplannedExecutionDir(worktree, "Native Fast Path Check!");
+    expect(again).not.toBe(dir);
+  });
+
+  it("allocates Playwright MCP output in unplanned/ with a playwright-mcp description", async () => {
+    const worktree = await fixtureWorktree("playwright-output");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const dir = await allocateUnplannedExecutionDir(worktree, "playwright-mcp");
+    expect(relative(scratch, dir)).toMatch(/^unplanned\/\d{8}-\d{6}-playwright-mcp(?:-[a-f0-9]{6})?$/);
+  });
+
+  it("uses a local YYYYMMDD-HHMMSS timestamp", () => {
+    expect(formatScratchTimestamp(new Date(2026, 10, 3, 14, 30, 25))).toBe("20261103-143025");
+  });
+});
+
+describe("execution directory acceptance and on-demand writes", () => {
+  it("accepts exactly the two execution shapes and rejects namespace roots, parents, and outside paths", async () => {
+    const worktree = await fixtureWorktree("shape-checks");
+    const planId = randomUUID();
+    const planDir = await allocatePlanExecutionDir(worktree, planId, "T004");
+    const unplanned = await allocateUnplannedExecutionDir(worktree, "shape");
+    expect((await resolveExecutionDir(worktree, planDir)).kind).toBe("plan");
+    expect((await resolveExecutionDir(worktree, unplanned)).kind).toBe("unplanned");
+
+    const { scratch } = await resolveScratchRoot(worktree);
+    await expect(resolveExecutionDir(worktree, join(scratch, planId, "T004"))).rejects.toThrow(/Not a scratch execution directory/);
+    await expect(resolveExecutionDir(worktree, join(scratch, planId))).rejects.toThrow(/Not a scratch execution directory/);
+    await expect(resolveExecutionDir(worktree, join(scratch, "unplanned"))).rejects.toThrow(/Not a scratch execution directory/);
+    await expect(resolveExecutionDir(worktree, scratch)).rejects.toThrow(/Not a scratch execution directory/);
+    await expect(resolveExecutionDir(worktree, join(scratch, "fast-path", "2026-11-03", "x"))).rejects.toThrow(/Not a scratch execution directory/);
+    await expect(resolveExecutionDir(worktree, join(scratch, planId, "T004", "missing-20261103-000000"))).rejects.toThrow();
+    await expect(resolveExecutionDir(worktree, join(worktree, "..", "elsewhere"))).rejects.toThrow(/escapes|Not a scratch/);
+  });
+
+  it("writes a file inside an execution directory, creating only that file's parents", async () => {
+    const worktree = await fixtureWorktree("on-demand");
+    const dir = await allocatePlanExecutionDir(worktree, randomUUID(), "T005");
+    expect(await readdir(dir)).toEqual([]);
+    const written = await writeExecutionFileAtomically(worktree, dir, "logs/nested/run.log", "hello\n");
+    expect(written).toBe(join(dir, "logs", "nested", "run.log"));
+    expect(await readFile(written, "utf8")).toBe("hello\n");
+    expect(await readdir(dir)).toEqual(["logs"]);
+    expect((await readdir(join(dir, "logs", "nested"))).filter((entry) => entry.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("rejects writes that escape the execution directory or name the directory itself", async () => {
+    const worktree = await fixtureWorktree("write-escape");
+    const dir = await allocatePlanExecutionDir(worktree, randomUUID(), "T006");
+    await expect(writeExecutionFileAtomically(worktree, dir, "../evil.txt", "x")).rejects.toThrow(/escapes/);
+    await expect(writeExecutionFileAtomically(worktree, dir, "/tmp/evil.txt", "x")).rejects.toThrow(/relative path/);
+    await expect(writeExecutionFileAtomically(worktree, dir, ".", "x")).rejects.toThrow();
+    await expect(writeExecutionFileAtomically(worktree, dir, "", "x")).rejects.toThrow(/relative path/);
+  });
+});
+
+describe("negative checks", () => {
+  it("rejects malformed plan and task identifiers before any directory is created", async () => {
+    const worktree = await fixtureWorktree("bad-identifiers");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const planId = randomUUID();
+    await expect(allocatePlanExecutionDir(worktree, "../x", "T001")).rejects.toThrow(/lowercase UUIDv4/);
+    await expect(allocatePlanExecutionDir(worktree, planId.toUpperCase(), "T001")).rejects.toThrow(/lowercase UUIDv4/);
+    await expect(allocatePlanExecutionDir(worktree, "00000000-0000-1000-8000-000000000000", "T001")).rejects.toThrow(/lowercase UUIDv4/);
+    await expect(allocatePlanExecutionDir(worktree, planId, "T1")).rejects.toThrow(/plan task path component/);
+    await expect(allocatePlanExecutionDir(worktree, planId, "T001/../../x")).rejects.toThrow(/plan task path component/);
+    await expect(lstat(join(scratch, planId))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an empty unplanned description and traversal in it", async () => {
+    const worktree = await fixtureWorktree("bad-description");
+    await expect(allocateUnplannedExecutionDir(worktree, "!!!")).rejects.toThrow(/at least one letter or digit/);
+    await expect(allocateUnplannedExecutionDir(worktree, "")).rejects.toThrow(/at least one letter or digit/);
+    const dir = await allocateUnplannedExecutionDir(worktree, "../../etc");
+    const { scratch } = await resolveScratchRoot(worktree);
+    expect(relative(scratch, dir).startsWith("unplanned/")).toBe(true);
+    expect(relative(scratch, dir).includes("..")).toBe(false);
+  });
+
+  it("rejects symlinked scratch components and a symlinked .aria, never following them", async () => {
+    const outside = await fixtureWorktree("symlink-target");
+    const planId = randomUUID();
+
+    const withLink = await fixtureWorktree("symlink-plan-component");
+    await mkdir(join(withLink, ".aria", "scratch", planId), { recursive: true });
+    await symlink(outside, join(withLink, ".aria", "scratch", planId, "T001"));
+    await expect(allocatePlanExecutionDir(withLink, planId, "T001")).rejects.toThrow(/safe directory/);
+
+    const ariaLink = await fixtureWorktree("symlink-aria-root");
+    await rm(join(ariaLink, ".aria"), { recursive: true, force: true }).catch(() => undefined);
+    await symlink(join(outside, ".."), join(ariaLink, ".aria"));
+    await expect(allocatePlanExecutionDir(ariaLink, planId, "T001")).rejects.toThrow();
+    await expect(allocateUnplannedExecutionDir(ariaLink, "symlink")).rejects.toThrow();
+  });
+
+  it("rejects filesystem-root and empty worktrees", async () => {
     await expect(resolveScratchRoot("/")).rejects.toThrow(/filesystem-root/);
-
-    const worktree = await fixtureWorktree("reject");
-    await expect(createUniqueScratchDir(worktree, "../escape", "x")).rejects.toThrow(/escapes the workspace/);
-    await expect(createUniqueScratchDir(worktree, "/absolute", "x")).rejects.toThrow(/escapes the workspace/);
-    await expect(writeScratchFileAtomically(worktree, "../evil.txt", "x")).rejects.toThrow(/escapes the (workspace|project worktree)/);
-    await expect(writeScratchFileAtomically(worktree, "/evil.txt", "x")).rejects.toThrow(/escapes the workspace/);
-    await expect(createTaskScratch(worktree, "../x")).rejects.toThrow(/safe path component/);
-    await expect(createTaskScratch(worktree, "a/b")).rejects.toThrow(/safe path component/);
-    await expect(scratchTaskScope(worktree, "")).rejects.toThrow();
-
-    // Symlink escape: a scratch scope that is a symlink to outside the
-    // worktree fails closed instead of writing through it.
-    const outside = await fixtureWorktree("outside");
-    const { scratch } = await ensureScratchDirs(worktree);
-    const link = join(scratch, "tmp");
-    await rm(link, { recursive: true, force: true });
-    try {
-      await symlink(outside, link, "junction");
-    } catch (error) {
-      if (["EPERM", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
-      throw error;
-    }
-    await expect(createUniqueScratchDir(worktree, "tmp", "run")).rejects.toThrow(/safe directory/);
-
-    // Symlink-to-root worktree is a filesystem root in disguise.
-    const rootLink = join(worktree, "rootlink");
-    await symlink("/", rootLink, "junction").catch(() => undefined);
-    const stat = await lstat(rootLink).catch(() => undefined);
-    if (stat?.isSymbolicLink()) {
-      await expect(resolveScratchRoot(rootLink)).rejects.toThrow(/filesystem-root/);
-    }
+    await expect(resolveScratchRoot("   ")).rejects.toThrow(/meaningful project worktree/);
+    await expect(allocatePlanExecutionDir("", randomUUID(), "T001")).rejects.toThrow(/meaningful project worktree/);
+    await expect(allocateUnplannedExecutionDir("/", "x")).rejects.toThrow(/filesystem-root/);
   });
 
-  it("creates concurrent-safe noncolliding directories per task", async () => {
-    const worktree = await fixtureWorktree("collide");
-    const taskDir = await createTaskScratch(worktree, "task-p2", "Create task scratch layout");
-    expect(taskDir).toBe(join((await resolveScratchRoot(worktree)).scratch, localDate(), "create-task-scratch-layout"));
-    const runs = await Promise.all(
-      Array.from({ length: 8 }, () => createTaskRunDir(worktree, "task-p2", "run", "Create task scratch layout")),
-    );
-    expect(new Set(runs).size).toBe(8);
-    for (const run of runs) {
-      expect(containedUnder(taskDir, run)).toBe(true);
-      expect((await lstat(run)).isDirectory()).toBe(true);
-    }
+  it("never moves, deletes, or touches historical ./scratch/ content", async () => {
+    const worktree = await fixtureWorktree("historical-untouched");
+    const legacy = join(worktree, "scratch", "history");
+    await mkdir(legacy, { recursive: true });
+    await writeFile(join(legacy, "old-output.txt"), "keep me\n");
+    await allocatePlanExecutionDir(worktree, randomUUID(), "T007");
+    await allocateUnplannedExecutionDir(worktree, "history check");
+    expect(await readFile(join(legacy, "old-output.txt"), "utf8")).toBe("keep me\n");
+    expect(await readdir(join(worktree, "scratch"))).toEqual(["history"]);
   });
+});
 
-  it("creates a task directory lazily without materializing the output layout", async () => {
-    const worktree = await fixtureWorktree("lazy-task");
-    const { scratch } = await resolveScratchRoot(worktree);
-    const taskDir = await createTaskScratch(worktree, "lazy-task-id", "Lazy Task Outputs");
-
-    expect(taskDir).toBe(join(scratch, localDate(), "lazy-task-outputs"));
-    expect(await readdir(taskDir)).toEqual([".aria-task-id"]);
-    expect(await readdir(join(scratch, localDate()))).toEqual(["lazy-task-outputs"]);
-  });
-
-  it("reuses a task directory and suffixes only same-name collisions without touching history", async () => {
-    const worktree = await fixtureWorktree("task-names");
-    const { scratch } = await resolveScratchRoot(worktree);
-    const date = localDate();
-    const historic = join(scratch, date, "human-readable-task");
-    await mkdir(historic, { recursive: true });
-    const historicalFile = join(historic, "keep.txt");
-    await writeFile(historicalFile, "historic");
-
-    const first = await createTaskScratch(worktree, "opaque-id-one", "Human readable task");
-    const repeated = await createTaskScratch(worktree, "opaque-id-one", "Human readable task");
-    const collision = await createTaskScratch(worktree, "opaque-id-two", "Human readable task");
-    expect(first).toBe(repeated);
-    expect(first).not.toBe(historic);
-    expect(collision).toMatch(/human-readable-task-[a-f0-9]{6}$/);
-    expect(await readFile(historicalFile, "utf8")).toBe("historic");
-  });
-
-  it("keeps task-owned outputs disjoint across task scopes while caches stay shared", async () => {
-    const worktree = await fixtureWorktree("disjoint");
-    const scopeA = await scratchTaskScope(worktree, "task-a");
-    const scopeB = await scratchTaskScope(worktree, "task-b");
-    expect(scopeA.taskDir).not.toBe(scopeB.taskDir);
-    const ownedA = [
-      scopeA.dirs.tmp,
-      scopeA.dirs.testFixtures,
-      scopeA.dirs.testResults,
-      scopeA.dirs.logs,
-      scopeA.dirs.screenshots,
-      scopeA.dirs.videos,
-      scopeA.dirs.builds,
-      scopeA.dirs.environments,
-      scopeA.dirs.runtime,
-      scopeA.dirs.experiments,
-    ];
-    const ownedB = [
-      scopeB.dirs.tmp,
-      scopeB.dirs.testFixtures,
-      scopeB.dirs.testResults,
-      scopeB.dirs.logs,
-      scopeB.dirs.screenshots,
-      scopeB.dirs.videos,
-      scopeB.dirs.builds,
-      scopeB.dirs.environments,
-      scopeB.dirs.runtime,
-      scopeB.dirs.experiments,
-    ];
-    for (const dir of ownedA) {
-      expect(containedUnder(scopeA.taskDir, dir)).toBe(true);
-      expect((await lstat(dir)).isDirectory()).toBe(true);
-    }
-    for (const dir of ownedB) {
-      expect(containedUnder(scopeB.taskDir, dir)).toBe(true);
-      expect((await lstat(dir)).isDirectory()).toBe(true);
-    }
-    // No task-owned path is shared between the two scopes.
-    expect(new Set([...ownedA.map((p) => resolve(p)), ...ownedB.map((p) => resolve(p))]).size).toBe(
-      ownedA.length + ownedB.length,
-    );
-    // Task-facing env outputs are task-owned too: disjoint and under taskDir.
-    const taskEnvKeys = [
-      "ARIA_SCRATCH_TMP",
-      "ARIA_TEST_RESULTS_DIR",
-      "ARIA_TEST_FIXTURES_DIR",
-      "ARIA_LOG_DIR",
-      "ARIA_CAPTURE_DIR",
-      "ARIA_BUILD_DIR",
-    ] as const;
-    for (const key of taskEnvKeys) {
-      expect(resolve(scopeA.env[key]!)).not.toBe(resolve(scopeB.env[key]!));
-      expect(containedUnder(scopeA.taskDir, scopeA.env[key]!)).toBe(true);
-      expect(containedUnder(scopeB.taskDir, scopeB.env[key]!)).toBe(true);
-    }
-    expect(resolve(scopeA.env.ARIA_SCRATCH_TASK_DIR!)).not.toBe(resolve(scopeB.env.ARIA_SCRATCH_TASK_DIR!));
-    // Deliberately shared content-addressed caches stay shared.
-    expect(resolve(scopeA.dirs.npmCache)).toBe(resolve(scopeB.dirs.npmCache));
-    expect(resolve(scopeA.dirs.pipCache)).toBe(resolve(scopeB.dirs.pipCache));
-    expect(resolve(scopeA.dirs.pythonCache)).toBe(resolve(scopeB.dirs.pythonCache));
-  });
-
-  it("keeps every scratch path and task env under ./scratch/, leaving outside files alone", async () => {
-    const worktree = await fixtureWorktree("placed");
-    const sentinel = join(worktree, "sentinel-outside.txt");
-    await writeFile(sentinel, "do not touch\n");
-    const scope = await scratchTaskScope(worktree, "task-p2");
-    const paths = [
-      scope.scratch,
-      scope.taskDir,
-      ...Object.values(scope.dirs),
-      ...Object.values(scope.env),
-    ];
-    for (const candidate of paths) {
-      expect(containedUnder(scope.scratch, candidate) || resolve(candidate) === resolve(scope.scratch)).toBe(true);
-      expect(resolve(candidate).startsWith(`${scope.root}${sep}`)).toBe(true);
-    }
-    // No HOME/XDG/global-config steering in the per-call env.
-    for (const key of Object.keys(scope.env)) {
-      expect(["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "ENGRAM_DATA_DIR", "TMPDIR"]).not.toContain(
-        key,
-      );
-    }
-    const written = await writeScratchFileAtomically(worktree, "tests/results/out.json", "{}\n");
-    expect(containedUnder(scope.scratch, written)).toBe(true);
-    expect(await readdir(join(scope.scratch, "tests", "results"))).toContain("out.json");
-    expect(await readFile(sentinel, "utf8")).toBe("do not touch\n");
-  });
-
-  it("keeps exactly one /scratch/ rule while preserving existing rules", async () => {
-    const missing = await fixtureWorktree("ignore-missing");
-    const created = await ensureScratchGitignore(missing);
-    expect(created.added).toBe(true);
-    expect(await readFile(created.gitignorePath, "utf8")).toBe(`${SCRATCH_GITIGNORE_RULE}\n`);
-
-    const existing = await fixtureWorktree("ignore-existing");
-    const original = "node_modules/\n*.log";
-    await writeFile(join(existing, ".gitignore"), original);
+describe("Git ignore behavior", () => {
+  it("keeps exactly one managed /.aria/scratch/ rule and preserves existing rules byte-identical", async () => {
+    const existing = await fixtureWorktree("gitignore-existing");
+    await writeFile(join(existing, ".gitignore"), "node_modules/\n*.log\n");
     const first = await ensureScratchGitignore(existing);
     expect(first.added).toBe(true);
-    const afterFirst = await readFile(join(existing, ".gitignore"), "utf8");
-    expect(afterFirst.startsWith(original)).toBe(true);
-    expect(afterFirst.match(new RegExp(`^${SCRATCH_GITIGNORE_RULE}$`, "gm"))).toHaveLength(1);
-
+    const afterFirst = await readFile(first.gitignorePath, "utf8");
+    expect(afterFirst).toBe(`node_modules/\n*.log\n${SCRATCH_GITIGNORE_RULE}\n`);
     const second = await ensureScratchGitignore(existing);
     expect(second.added).toBe(false);
-    expect(second.deduped).toBe(false);
-    expect(await readFile(join(existing, ".gitignore"), "utf8")).toBe(afterFirst);
-
-    const dupes = await fixtureWorktree("ignore-dupes");
-    await writeFile(join(dupes, ".gitignore"), `a\n${SCRATCH_GITIGNORE_RULE}\nb\n${SCRATCH_GITIGNORE_RULE}\n`);
-    const deduped = await ensureScratchGitignore(dupes);
-    expect(deduped.deduped).toBe(true);
-    expect(await readFile(join(dupes, ".gitignore"), "utf8")).toBe(`a\n${SCRATCH_GITIGNORE_RULE}\nb\n`);
+    expect(await readFile(second.gitignorePath, "utf8")).toBe(afterFirst);
   });
 
-  it("keeps the repo .gitignore to a single /scratch/ rule (read-only)", async () => {
-    const content = await readFile(join(REPO_ROOT, ".gitignore"), "utf8");
-    expect(content.match(new RegExp(`^${SCRATCH_GITIGNORE_RULE}$`, "gm"))).toHaveLength(1);
+  it("ignores real nested scratch paths while keeping plan files versionable (repo .gitignore)", async () => {
+    const gitignore = await readFile(join(REPO_ROOT, ".gitignore"), "utf8");
+    expect(gitignore.split("\n").filter((line) => line === "/.aria/scratch/")).toHaveLength(1);
+    expect(gitignore.split("\n")).toContain("/scratch/");
+    expect(gitignore).toContain("!/.aria/plans/");
+
+    const planId = randomUUID();
+    expect(await gitCheckIgnore(REPO_ROOT, `.aria/scratch/${planId}/T001/20261103-143025/logs/run.log`)).toBe(true);
+    expect(await gitCheckIgnore(REPO_ROOT, `.aria/scratch/unplanned/20261103-143025-x/out.txt`)).toBe(true);
+    expect(await gitCheckIgnore(REPO_ROOT, `scratch/historical.txt`)).toBe(true);
+    expect(await gitCheckIgnore(REPO_ROOT, `.aria/rdc/TASKS.md`)).toBe(true);
+    expect(await gitCheckIgnore(REPO_ROOT, `.aria/plans/${planId}.md`)).toBe(false);
+    expect(await gitCheckIgnore(REPO_ROOT, `.aria/plans/nested/${planId}.md`)).toBe(false);
   });
 
-  it("preserves already-tracked scratch paths with an unchanged index and no staging", async () => {
-    const worktree = await fixtureWorktree("tracked");
+  it("reports tracked scratch paths without staging or changing the index", async () => {
+    const worktree = await fixtureWorktree("gitignore-tracked");
     await execFileAsync("git", ["init", "-q"], { cwd: worktree });
-    await execFileAsync("git", ["config", "user.email", "aria-test@example.com"], { cwd: worktree });
-    await execFileAsync("git", ["config", "user.name", "aria-test"], { cwd: worktree });
-    await execFileAsync("git", ["config", "commit.gpgsign", "false"], { cwd: worktree });
-    await writeFile(join(worktree, ".gitignore"), "node_modules/\n");
-    const keepDir = join(worktree, "scratch", "logs");
-    await mkdir(keepDir, { recursive: true });
-    await writeFile(join(keepDir, "keep.txt"), "v1\n");
-    await execFileAsync("git", ["add", "scratch/logs/keep.txt"], { cwd: worktree });
-    await execFileAsync("git", ["commit", "-qm", "track scratch file"], { cwd: worktree });
-
-    const statusBefore = (await execFileAsync("git", ["status", "--porcelain=v1"], { cwd: worktree })).stdout;
-    const indexBefore = (await execFileAsync("git", ["ls-files", "-s"], { cwd: worktree })).stdout;
-
+    const dir = await allocatePlanExecutionDir(worktree, randomUUID(), "T008");
+    await writeExecutionFileAtomically(worktree, dir, "tracked.txt", "tracked\n");
+    const tracked = join(dir, "tracked.txt");
+    await execFileAsync("git", ["add", "-f", "--", tracked], { cwd: worktree });
+    const before = (await execFileAsync("git", ["diff", "--cached", "--name-only"], { cwd: worktree })).stdout;
     const result = await ensureScratchGitignore(worktree);
-    expect(result.tracked).toContain(join("scratch", "logs", "keep.txt"));
-    expect(await readFile(join(keepDir, "keep.txt"), "utf8")).toBe("v1\n");
-    expect((await execFileAsync("git", ["status", "--porcelain=v1"], { cwd: worktree })).stdout).toBe(statusBefore);
-    expect((await execFileAsync("git", ["ls-files", "-s"], { cwd: worktree })).stdout).toBe(indexBefore);
+    const after = (await execFileAsync("git", ["diff", "--cached", "--name-only"], { cwd: worktree })).stdout;
+    expect(result.tracked.some((entry) => entry.endsWith("tracked.txt"))).toBe(true);
+    expect(after).toBe(before);
   });
 });

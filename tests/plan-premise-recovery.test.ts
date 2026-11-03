@@ -11,7 +11,7 @@ import {
   type PlanPremiseRecoverySessionApi,
 } from "../src/plan-premise-recovery-tool.js";
 import { addPlanTasks, approvePlan, createPlan, readActivePlan, updatePlanTask, type SharedPlan } from "../src/plans.js";
-import { createUniqueScratchDir } from "../src/scratch.js";
+import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import { effectiveRolePermissions } from "../src/register.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function fixtureRoot(name: string): Promise<string> {
-  const root = await createUniqueScratchDir(REPO_ROOT, "tests/plan-premise-recovery", name);
+  const root = await allocateUnplannedExecutionDir(REPO_ROOT, name);
   managed.push(root);
   return root;
 }

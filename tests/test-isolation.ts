@@ -16,7 +16,7 @@ import type { AriaCallerPaths } from "./setup.js";
 //
 // Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`):
 // this harness is the test backstop; per-test outputs route via the canonical
-// helper under `./scratch/`, never by duplicating path checks.
+// helper under `.aria/scratch/`, never by duplicating path checks.
 // ---------------------------------------------------------------------------
 
 function capturedCaller(): AriaCallerPaths | undefined {

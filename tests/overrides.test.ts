@@ -169,8 +169,8 @@ describe("ARIA overrides", () => {
       const config = resolveAriaConfig(tmpdir());
       for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
         const prompt = config.roles[role].promptText;
-        expect(prompt).toContain("./scratch/YYYY-MM-DD/HHMMSS-title/");
-        expect(prompt).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
+        expect(prompt).toContain(".aria/scratch/unplanned/<timestamp>-<description>/");
+        expect(prompt).toContain("Unplanned work needs no plan or task ID.");
         expect(prompt).toContain("Scratch artifacts are never staged");
       }
     });
