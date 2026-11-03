@@ -4,7 +4,7 @@ import aria from "../src/index";
 
 /**
  * T002 native V2 plugin foundation: identity, setup, and cleanup only.
- * Agent, permission, skill, and plan-tool wiring is owned by T003+.
+ * Agent, permission, skill, and plan-id wiring is owned by T003+.
  */
 describe("aria V2 plugin foundation", () => {
   it("exposes the native V2 shape with no V1 server shim", () => {

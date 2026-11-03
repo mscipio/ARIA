@@ -222,7 +222,6 @@ describe("Git ignore behavior", () => {
     expect(await gitCheckIgnore(REPO_ROOT, `.aria/scratch/${planId}/T001/20261103-143025/logs/run.log`)).toBe(true);
     expect(await gitCheckIgnore(REPO_ROOT, `.aria/scratch/unplanned/20261103-143025-x/out.txt`)).toBe(true);
     expect(await gitCheckIgnore(REPO_ROOT, `scratch/historical.txt`)).toBe(true);
-    expect(await gitCheckIgnore(REPO_ROOT, `.aria/rdc/TASKS.md`)).toBe(true);
     expect(await gitCheckIgnore(REPO_ROOT, `.aria/plans/${planId}.md`)).toBe(false);
     expect(await gitCheckIgnore(REPO_ROOT, `.aria/plans/nested/${planId}.md`)).toBe(false);
   });

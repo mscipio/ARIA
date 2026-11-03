@@ -1,10 +1,6 @@
 import { isAbsolute, join, relative } from "node:path";
 
 import { getPackageRoot } from "./defaults.js";
-import {
-  PLAN_PREMISE_RECOVERY_ROLES,
-  PLAN_PREMISE_RECOVERY_TOOL_NAME,
-} from "./plan-premise-recovery-tool.js";
 import type { RoleName } from "./types.js";
 
 export interface AgentRule {
@@ -89,16 +85,6 @@ const ZOTPILOT_MUTATION: readonly string[] = [
  */
 function fallbackAskRule(): AgentRule {
   return { action: "*", resource: "*", effect: "ask" };
-}
-
-const PLAN_PREMISE_RECOVERY_ROLE_SET = new Set<string>(PLAN_PREMISE_RECOVERY_ROLES);
-
-function planPremiseRecoveryRule(role: RoleName): AgentRule {
-  return {
-    action: PLAN_PREMISE_RECOVERY_TOOL_NAME,
-    resource: "*",
-    effect: PLAN_PREMISE_RECOVERY_ROLE_SET.has(role) ? "allow" : "deny",
-  };
 }
 
 /**
@@ -295,7 +281,6 @@ function archivistBaseRules(): AgentRule[] {
     allowRule("external_directory"),
     ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
     ...subagentRules(),
-    planPremiseRecoveryRule("archivist"),
   ];
 }
 
@@ -367,7 +352,6 @@ export function getArchivistScopedPermissions(worktree: string): AgentRule[] {
     { action: "external_directory", resource: "*", effect: "allow" },
     ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
     ...subagentRules(),
-    planPremiseRecoveryRule("archivist"),
   ];
 }
 
@@ -423,7 +407,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         // the deny prevails (preserves V1 default-allow + explicit deny).
         { action: "skill", resource: "*", effect: "allow" },
         { action: "skill", resource: "rdc-adversarial-review", effect: "deny" },
-        planPremiseRecoveryRule("coder"),
       ];
     case "explorer":
       return [
@@ -445,7 +428,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("shell"),
         ...subagentRules(),
         ...skillRules("rdc-code-exploration"),
-        planPremiseRecoveryRule("explorer"),
       ];
     case "visualizer":
       // T003 exact edit/shell parity with the implementer: same
@@ -467,15 +449,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
       // registration so per-tool permissions remain effective.
       // everything else (webfetch/websearch/question/subagent) stays denied;
       // external-directory approval is allowed for read-only file access.
-      //
-      // Plan-tool access is denied at execution by `authorizePlan`
-      // (`PLAN_ACTIONS_BY_ROLE` in `src/plan-tool.ts` excludes visualizer),
-      // not by a Rule[]: `plan` stays a legacy-banned V2 action (header
-      // convention, `LEGACY_ACTIONS`, doctor `LEGACY_AGENT_ACTIONS`) and
-      // `mcp_plan` matches no registered tool (`PLAN_TOOL_NAME` is "plan";
-      // verified zero references), so no Rule[] is emitted for either (no
-      // action keys outside the supported set). Unmatched `plan` therefore
-      // falls back to `ask`, with `authorizePlan` as the denial backstop.
       //
       // Coder-mediated approval is a prompt-level RDC workflow convention,
       // NOT host-enforced plan-state containment: a directly invoked
@@ -506,7 +479,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...implementerShellRules(),
         ...subagentRules(),
         ...skillRules("aria-qt-ui", "aria-web-ui"),
-        planPremiseRecoveryRule("visualizer"),
       ];
     case "planner":
       return [
@@ -529,7 +501,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("shell"),
         ...subagentRules(),
         ...skillRules("rdc-implementation-planning", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("planner"),
       ];
     case "implementer":
       return [
@@ -554,7 +525,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...implementerShellRules(),
         ...subagentRules(),
         ...skillRules("rdc-code-implementation", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("implementer"),
       ];
     case "reviewer":
       return [
@@ -585,7 +555,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
           "rdc-adversarial-review",
           "rdc-testing-discipline",
         ),
-        planPremiseRecoveryRule("reviewer"),
       ];
     case "researcher":
       return [
@@ -624,7 +593,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         // Delegation: scientist only (deny first, allow after).
         ...subagentRules("scientist"),
         ...skillRules("aria-research-evidence", "aria-zotero-tutor"),
-        planPremiseRecoveryRule("researcher"),
       ];
     case "archivist":
       return [...archivistBaseRules(), PLAYWRIGHT_DENY, denyRule("git_read"), denyRule("aria_ship"), denyRule("aria_release")];
@@ -654,7 +622,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
           "aria-paper-self-review",
           "aria-document-design",
         ),
-        planPremiseRecoveryRule("writer"),
       ];
     case "scientist":
       return [
@@ -676,7 +643,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         denyRule("shell"),
         ...subagentRules("researcher", "writer", "coder"),
         ...skillRules("aria-research-planning", "aria-results-analysis"),
-        planPremiseRecoveryRule("scientist"),
       ];
   }
 }

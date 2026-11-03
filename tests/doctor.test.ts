@@ -1,4 +1,18 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentRule } from "../src/permissions.js";
+import { evaluatePermission, getPermissionsForRole } from "../src/permissions.js";
+
+// Test-only override of the ZotPilot policy input so Doctor's own validation
+// path can be exercised against a modified researcher rule set. Undefined keeps
+// the canonical live rules.
+const zotPolicyOverride = vi.hoisted(() => ({ rules: undefined as AgentRule[] | undefined }));
+vi.mock("../src/role-requirements.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/role-requirements.js")>();
+  return {
+    ...actual,
+    validateZotPilotPolicy: (rules?: readonly AgentRule[]) => actual.validateZotPilotPolicy(rules ?? zotPolicyOverride.rules),
+  };
+});
 import { mkdir, mkdtemp, readdir, readFile, rm, stat as fsStat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, sep } from "node:path";
@@ -13,12 +27,11 @@ import {
 import type { Executor } from "../src/deps.js";
 import type { ModelDiscovery } from "../src/model-config.js";
 import {
-  CODING_ROLES,
-  effectiveRolePermissions,
-  PACKAGE_SKILL_NAMES,
+  codingRoles,
+  liveRoleRules,
   roleRequirementIssues,
   validateZotPilotPolicy,
-} from "../src/register.js";
+} from "../src/role-requirements.js";
 import { ROLES } from "../src/routes.js";
 import { ARIA_SKILL_NAMES } from "../src/skills.js";
 import type { RoleName } from "../src/types.js";
@@ -648,34 +661,9 @@ describe("runDoctor subagent depth findings", () => {
 // ---------------------------------------------------------------------------
 
 describe("package capability inventory (derived from canonical permission tables)", () => {
-  it("derives the exact 21 packaged skills from the canonical role permissions", () => {
-    expect([...PACKAGE_SKILL_NAMES]).toEqual([
-      "rdc-code-exploration",
-      "aria-qt-ui",
-      "rdc-implementation-planning",
-      "rdc-testing-discipline",
-      "rdc-code-implementation",
-      "rdc-plan-review",
-      "rdc-implementation-review",
-      "rdc-scope-assessment",
-      "rdc-adversarial-review",
-      "aria-research-evidence",
-      "aria-zotero-tutor",
-      "aria-wiki-lookup",
-      "aria-wiki-archive",
-      "aria-wiki-compile",
-      "aria-academic-writing",
-      "aria-writing-anti-ai",
-      "aria-review-response",
-      "aria-paper-self-review",
-      "aria-document-design",
-      "aria-research-planning",
-      "aria-results-analysis",
-    ]);
-  });
 
   it("derives the coding roles and accepts the canonical role requirements", () => {
-    expect([...CODING_ROLES]).toEqual([
+    expect(codingRoles()).toEqual([
       "coder", "explorer", "visualizer", "planner", "implementer", "reviewer",
     ]);
     expect(roleRequirementIssues()).toEqual([]);
@@ -697,14 +685,13 @@ describe("package capability inventory (derived from canonical permission tables
   });
 
   it("catches ZotPilot allow/ask wildcards and policy mismatches", () => {
-    const policy = validateZotPilotPolicy({
-      "zotpilot_*": "allow",
-      "zotpilot_any_*": "ask",
-      zotpilot_search_papers: "ask", // read must be allow
-      zotpilot_index_library: "allow", // mutation must be ask
-      zotpilot_extra_tool: "allow", // unexpected ID
-      // zotpilot_get_notes intentionally omitted
-    });
+    const policy = validateZotPilotPolicy([
+      { action: "zotpilot_*", resource: "*", effect: "allow" },
+      { action: "zotpilot_any_*", resource: "*", effect: "ask" },
+      { action: "zotpilot_search_papers", resource: "*", effect: "ask" },
+      { action: "zotpilot_index_library", resource: "*", effect: "allow" },
+      { action: "zotpilot_extra_tool", resource: "*", effect: "allow" },
+    ]);
     expect([...policy.wildcards].sort()).toEqual(["zotpilot_*", "zotpilot_any_*"]);
     expect(policy.unexpected).toEqual(["zotpilot_extra_tool"]);
     expect(policy.missing).toContain("zotpilot_get_notes");
@@ -715,11 +702,19 @@ describe("package capability inventory (derived from canonical permission tables
     expect(issues).toContain("zotpilot_any_*");
   });
 
+  it("fails the ZotPilot policy when a required mutation grant is removed, although the fallback decision is ask", () => {
+    const rules = getPermissionsForRole("researcher").filter((rule) => rule.action !== "zotpilot_index_library");
+    expect(evaluatePermission(rules, "zotpilot_index_library", "*")).toBe("ask");
+    const policy = validateZotPilotPolicy(rules);
+    expect(policy.missing).toContain("zotpilot_index_library");
+    expect(policy.issues).toContain("ZotPilot mutation zotpilot_index_library is missing its explicit ask grant");
+  });
+
   it("catches non-coding role requirement violations", () => {
-    const permissions = effectiveRolePermissions();
+    const rules = liveRoleRules();
     const issues = roleRequirementIssues({
-      ...permissions,
-      writer: { ...permissions.writer, "engram_*": "allow" },
+      ...rules,
+      writer: [...rules.writer, { action: "engram_*", resource: "*", effect: "allow" }],
     });
     expect(issues.join("; ")).toContain("writer unexpectedly grants engram_*");
   });
@@ -986,6 +981,18 @@ describe("runDoctor skills findings", () => {
     const policy = skillFinding(report, "ZotPilot policy");
     expect(policy?.severity).toBe("PASS");
     expect(policy?.detail).toContain("no wildcards");
+  });
+
+  it("Doctor reports the ZotPilot policy FAIL when a required mutation grant is removed (default ask)", async () => {
+    zotPolicyOverride.rules = getPermissionsForRole("researcher").filter((rule) => rule.action !== "zotpilot_index_library");
+    try {
+      const report = await runDoctor(await healthyOptions());
+      const policy = skillFinding(report, "ZotPilot policy");
+      expect(policy?.severity).toBe("FAIL");
+      expect(policy?.detail).toContain("zotpilot_index_library is missing its explicit ask grant");
+    } finally {
+      zotPolicyOverride.rules = undefined;
+    }
   });
 });
 

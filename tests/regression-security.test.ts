@@ -17,7 +17,7 @@ import { validateAriaSetupConfig, rollbackSetupConfigFile } from "../src/setup-c
  * T009 aggregate: smallest gap-closing representatives not already owned by
  * T002-T008 focused suites. Each `it` below covers one security boundary
  * that had no representative test; bullets already covered (permission
- * evaluation, plan-tool execute/CAS/root, skills applier, setup
+ * evaluation, skills applier, setup
  * backup/rollback) are referenced, not duplicated. Generation bytes are the
  * aggregate seam: focused suites evaluate the canonical source, here we prove
  * the shipped files preserve the same boundaries.

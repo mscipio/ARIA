@@ -2,15 +2,15 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultExecutor } from "./deps.js";
 import { PLAYWRIGHT_MCP_VERSION, playwrightState, runPinnedPlaywrightMcp } from "./playwright.js";
-import { createScratchRunDir } from "./scratch.js";
+import { allocateUnplannedExecutionDir } from "./scratch.js";
 export async function resolvePlaywrightRuntimeOutput(worktree) {
     if (!worktree.trim())
         throw new Error("Playwright MCP requires an explicit OpenCode project working directory");
-    return createScratchRunDir(worktree, "playwright-mcp");
+    return allocateUnplannedExecutionDir(worktree, "playwright-mcp");
 }
 /**
  * Direct stdio launcher for Playwright MCP. It does not inspect plan/task
- * state; automatic MCP output goes to a unique canonical scratch runtime
+ * state; automatic MCP output goes to a unique canonical scratch unplanned
  * directory. Persistent task captures are supplied explicit task-scratch
  * paths by the Visualizer workflow. This is a launcher, not a protocol proxy.
  */

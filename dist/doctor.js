@@ -6,8 +6,8 @@ import { defaultExecutor, doctor as dependencyDoctor, extractVersion, probeSubag
 import { discoverAvailableModels } from "./model-config.js";
 import { agentFileName, defaultAgentsDir, generateAgentFiles, parseManagedHeader, readPackageVersion, } from "./agents.js";
 import { defaultCommandsDir, generateCommandFiles, parseManagedHeader as parseCommandManagedHeader } from "./commands.js";
-import { PLAN_TOOL_NAME } from "./plan-tool.js";
-import { CODING_ROLES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
+import { PLAN_ID_TOOL_NAME } from "./plan-id-tool.js";
+import { codingRoles, roleRequirementIssues, validateZotPilotPolicy } from "./role-requirements.js";
 import { deriveRoutes, ROLES } from "./routes.js";
 import { defaultGlobalConfigPath, isSameLocalPluginIdentity, resolveSetupAriaConfig } from "./setup-config.js";
 import { classifyAriaRegistration, normalizeIdentityVersion, parsePluginList, pluginSpecTagVersion } from "./lifecycle.js";
@@ -263,7 +263,7 @@ function subagentDepthFinding(probe) {
  *   (id/name); used. `ctx.skill.transform` stays unused (T007 single
  *   source is config discovery).
  * - `tool: ToolDomain` — `list()` returns the effective post-transform
- *   tools (plugin-local); used for the plan-tool-once check. There is no
+ *   tools (plugin-local); used for runtime tool inventory checks. There is no
  *   `tool` HTTP client API, so this list is runtime-only.
  * - `session: SessionDomain extends SessionApi` — `list()` observes live
  *   sessions; informational only (sessions carry no ARIA registration
@@ -433,34 +433,6 @@ function skillsRuntimeFinding(skills) {
         detail: "24 of 24 packaged skills listed exactly once",
     };
 }
-function planToolRuntimeFinding(tools) {
-    if (tools === undefined) {
-        return { severity: "SKIP", area: "runtime", title: "plan tool", detail: RUNTIME_LIST_GAP };
-    }
-    const matches = tools.filter((tool) => tool.name === PLAN_TOOL_NAME || tool.id === PLAN_TOOL_NAME);
-    if (matches.length === 0) {
-        return {
-            severity: "FAIL",
-            area: "runtime",
-            title: "plan tool",
-            detail: `plan tool "${PLAN_TOOL_NAME}" is not in the V2 tool list`,
-        };
-    }
-    if (matches.length > 1) {
-        return {
-            severity: "FAIL",
-            area: "runtime",
-            title: "plan tool",
-            detail: `plan tool "${PLAN_TOOL_NAME}" is listed more than once (conflicting registration)`,
-        };
-    }
-    return {
-        severity: "PASS",
-        area: "runtime",
-        title: "plan tool",
-        detail: `plan tool "${PLAN_TOOL_NAME}" present exactly once`,
-    };
-}
 /**
  * Coexistence by generic rules only: duplicate IDs anywhere in the observed
  * lists are collisions regardless of owner (no ordering assumed, no owner
@@ -548,12 +520,45 @@ function sessionRuntimeFinding(sessionsObserved) {
         detail: `${sessionsObserved} live session(s) observed (informational; not setup truth)`,
     };
 }
+/**
+ * The native Markdown planning entry point must be registered exactly once.
+ * Absent live tool evidence is SKIP; a missing or duplicated `plan_id_new`
+ * registration is FAIL.
+ */
+function planIdToolRuntimeFinding(tools) {
+    if (tools === undefined) {
+        return { severity: "SKIP", area: "runtime", title: "plan id tool", detail: RUNTIME_LIST_GAP };
+    }
+    const matches = tools.filter((tool) => tool.name === PLAN_ID_TOOL_NAME || tool.id === PLAN_ID_TOOL_NAME);
+    if (matches.length === 0) {
+        return {
+            severity: "FAIL",
+            area: "runtime",
+            title: "plan id tool",
+            detail: `plan id tool "${PLAN_ID_TOOL_NAME}" is not in the V2 tool list`,
+        };
+    }
+    if (matches.length > 1) {
+        return {
+            severity: "FAIL",
+            area: "runtime",
+            title: "plan id tool",
+            detail: `plan id tool "${PLAN_ID_TOOL_NAME}" is listed more than once (conflicting registration)`,
+        };
+    }
+    return {
+        severity: "PASS",
+        area: "runtime",
+        title: "plan id tool",
+        detail: `plan id tool "${PLAN_ID_TOOL_NAME}" present exactly once`,
+    };
+}
 function collectRuntimeFindings(snapshot) {
     return [
         pluginRuntimeFinding(snapshot?.plugins),
         agentsRuntimeFinding(snapshot?.agents),
         skillsRuntimeFinding(snapshot?.skills),
-        planToolRuntimeFinding(snapshot?.tools),
+        planIdToolRuntimeFinding(snapshot?.tools),
         coexistenceFinding(snapshot ?? {}),
         sessionRuntimeFinding(snapshot?.sessionsObserved),
     ];
@@ -1343,7 +1348,7 @@ function rolePolicyFindings() {
             severity: "PASS",
             area: "skills",
             title: "role permission requirements",
-            detail: `coding roles (${CODING_ROLES.join(", ")}) have Engram/Context7/CodeGraph; researcher has Context7 + exact ZotPilot policy; writer/archivist are non-coding`,
+            detail: `coding roles (${codingRoles().join(", ")}) have Engram/Context7/CodeGraph; researcher has Context7 + exact ZotPilot policy; writer/archivist are non-coding`,
         }
         : {
             severity: "FAIL",
@@ -1682,7 +1687,7 @@ export async function runDoctor(options = {}) {
     // Optional ZotPilot CLI availability/version (separate from MCP connectivity).
     findings.push(zotPilotCliFinding(await probeZotPilotCli(executor)));
     // T008 V2 runtime truth (primary for setup verification): plugin, agents,
-    // skills, plan tool, coexistence, and session inventory from live lists.
+    // skills, coexistence, and session inventory from live lists.
     // Absent outside a live session (SKIP with documented gaps, never FAIL).
     findings.push(...collectRuntimeFindings(options.v2));
     // Packaged skills and canonical role/ZotPilot policy validation.

@@ -1,6 +1,5 @@
 import { isAbsolute, join, relative } from "node:path";
 import { getPackageRoot } from "./defaults.js";
-import { PLAN_PREMISE_RECOVERY_ROLES, PLAN_PREMISE_RECOVERY_TOOL_NAME, } from "./plan-premise-recovery-tool.js";
 /**
  * T004 — Canonical V2 permission/model/delegation parity source.
  *
@@ -75,14 +74,6 @@ const ZOTPILOT_MUTATION = [
 function fallbackAskRule() {
     return { action: "*", resource: "*", effect: "ask" };
 }
-const PLAN_PREMISE_RECOVERY_ROLE_SET = new Set(PLAN_PREMISE_RECOVERY_ROLES);
-function planPremiseRecoveryRule(role) {
-    return {
-        action: PLAN_PREMISE_RECOVERY_TOOL_NAME,
-        resource: "*",
-        effect: PLAN_PREMISE_RECOVERY_ROLE_SET.has(role) ? "allow" : "deny",
-    };
-}
 /**
  * V2 path semantics (opencode.ai/v2/docs/permissions Actions + Directories):
  * `read`/`edit` resources are Location-relative internal paths or canonical
@@ -135,15 +126,23 @@ function protectedEditRules() {
 /** Allow scratch edits without granting ordinary project edits. */
 function scratchEditRules() {
     return [
-        { action: "edit", resource: "scratch", effect: "allow" },
-        { action: "edit", resource: "scratch/**", effect: "allow" },
-        { action: "edit", resource: "scratch/*.env", effect: "ask" },
-        { action: "edit", resource: "scratch/*.env.*", effect: "ask" },
-        { action: "edit", resource: "scratch/*.env.example", effect: "allow" },
-        { action: "edit", resource: "scratch/**/*.env", effect: "ask" },
-        { action: "edit", resource: "scratch/**/*.env.*", effect: "ask" },
-        { action: "edit", resource: "scratch/**/*.env.example", effect: "allow" },
+        { action: "edit", resource: ".aria/scratch", effect: "allow" },
+        { action: "edit", resource: ".aria/scratch/**", effect: "allow" },
+        { action: "edit", resource: ".aria/scratch/*.env", effect: "ask" },
+        { action: "edit", resource: ".aria/scratch/*.env.*", effect: "ask" },
+        { action: "edit", resource: ".aria/scratch/*.env.example", effect: "allow" },
+        { action: "edit", resource: ".aria/scratch/**/*.env", effect: "ask" },
+        { action: "edit", resource: ".aria/scratch/**/*.env.*", effect: "ask" },
+        { action: "edit", resource: ".aria/scratch/**/*.env.example", effect: "allow" },
     ];
+}
+/** Planner-only edit scope for the new coexistable Markdown plan documents. */
+function markdownPlanEditRules(effect) {
+    return [".aria/plans", ".aria/plans/**"].map((resource) => ({
+        action: "edit",
+        resource,
+        effect,
+    }));
 }
 function denyRule(action) {
     return { action, resource: "*", effect: "deny" };
@@ -247,6 +246,7 @@ function archivistBaseRules() {
         { action: "read", resource: "*.env.example", effect: "allow" },
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         denyRule("glob"),
         denyRule("grep"),
         denyRule("shell"),
@@ -256,7 +256,6 @@ function archivistBaseRules() {
         allowRule("external_directory"),
         ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
         ...subagentRules(),
-        planPremiseRecoveryRule("archivist"),
     ];
 }
 /**
@@ -310,6 +309,7 @@ export function getArchivistScopedPermissions(worktree) {
             effect: "allow",
         })),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         denyRule("glob"),
         denyRule("grep"),
         // Shell: deny first, then exact python allowlist after (never wildcards).
@@ -327,7 +327,6 @@ export function getArchivistScopedPermissions(worktree) {
         { action: "external_directory", resource: "*", effect: "allow" },
         ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
         ...subagentRules(),
-        planPremiseRecoveryRule("archivist"),
     ];
 }
 /**
@@ -351,6 +350,7 @@ export function getPermissionsForRole(role) {
                 ...protectedReadRules(),
                 denyRule("edit"),
                 ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 allowRule("webfetch"),
@@ -372,7 +372,6 @@ export function getPermissionsForRole(role) {
                 // the deny prevails (preserves V1 default-allow + explicit deny).
                 { action: "skill", resource: "*", effect: "allow" },
                 { action: "skill", resource: "rdc-adversarial-review", effect: "deny" },
-                planPremiseRecoveryRule("coder"),
             ];
         case "explorer":
             return [
@@ -380,7 +379,7 @@ export function getPermissionsForRole(role) {
                 PLAYWRIGHT_DENY,
                 ...protectedReadRules(),
                 denyRule("edit"),
-                ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 denyRule("webfetch"),
@@ -394,7 +393,6 @@ export function getPermissionsForRole(role) {
                 denyRule("shell"),
                 ...subagentRules(),
                 ...skillRules("rdc-code-exploration"),
-                planPremiseRecoveryRule("explorer"),
             ];
         case "visualizer":
             // T003 exact edit/shell parity with the implementer: same
@@ -417,15 +415,6 @@ export function getPermissionsForRole(role) {
             // everything else (webfetch/websearch/question/subagent) stays denied;
             // external-directory approval is allowed for read-only file access.
             //
-            // Plan-tool access is denied at execution by `authorizePlan`
-            // (`PLAN_ACTIONS_BY_ROLE` in `src/plan-tool.ts` excludes visualizer),
-            // not by a Rule[]: `plan` stays a legacy-banned V2 action (header
-            // convention, `LEGACY_ACTIONS`, doctor `LEGACY_AGENT_ACTIONS`) and
-            // `mcp_plan` matches no registered tool (`PLAN_TOOL_NAME` is "plan";
-            // verified zero references), so no Rule[] is emitted for either (no
-            // action keys outside the supported set). Unmatched `plan` therefore
-            // falls back to `ask`, with `authorizePlan` as the denial backstop.
-            //
             // Coder-mediated approval is a prompt-level RDC workflow convention,
             // NOT host-enforced plan-state containment: a directly invoked
             // edit-capable visualizer subagent may not be plan-state constrained.
@@ -441,6 +430,7 @@ export function getPermissionsForRole(role) {
                 ...protectedEditRules(),
                 { action: "edit", resource: "/**", effect: "deny" },
                 ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 denyRule("webfetch"),
@@ -454,7 +444,6 @@ export function getPermissionsForRole(role) {
                 ...implementerShellRules(),
                 ...subagentRules(),
                 ...skillRules("aria-qt-ui", "aria-web-ui"),
-                planPremiseRecoveryRule("visualizer"),
             ];
         case "planner":
             return [
@@ -462,7 +451,8 @@ export function getPermissionsForRole(role) {
                 PLAYWRIGHT_DENY,
                 ...protectedReadRules(),
                 denyRule("edit"),
-                ...scratchEditRules(),
+                ...markdownPlanEditRules("allow"),
+                allowRule("plan_id_new"),
                 allowRule("glob"),
                 allowRule("grep"),
                 allowRule("webfetch"),
@@ -476,7 +466,6 @@ export function getPermissionsForRole(role) {
                 denyRule("shell"),
                 ...subagentRules(),
                 ...skillRules("rdc-implementation-planning", "rdc-testing-discipline"),
-                planPremiseRecoveryRule("planner"),
             ];
         case "implementer":
             return [
@@ -487,6 +476,7 @@ export function getPermissionsForRole(role) {
                 ...protectedEditRules(),
                 { action: "edit", resource: "/**", effect: "deny" },
                 ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 denyRule("webfetch"),
@@ -500,7 +490,6 @@ export function getPermissionsForRole(role) {
                 ...implementerShellRules(),
                 ...subagentRules(),
                 ...skillRules("rdc-code-implementation", "rdc-testing-discipline"),
-                planPremiseRecoveryRule("implementer"),
             ];
         case "reviewer":
             return [
@@ -509,6 +498,7 @@ export function getPermissionsForRole(role) {
                 ...protectedReadRules(),
                 denyRule("edit"),
                 ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 allowRule("webfetch"),
@@ -524,7 +514,6 @@ export function getPermissionsForRole(role) {
                 allowRule("shell"),
                 ...subagentRules(),
                 ...skillRules("rdc-plan-review", "rdc-implementation-review", "rdc-scope-assessment", "rdc-adversarial-review", "rdc-testing-discipline"),
-                planPremiseRecoveryRule("reviewer"),
             ];
         case "researcher":
             return [
@@ -532,7 +521,7 @@ export function getPermissionsForRole(role) {
                 PLAYWRIGHT_DENY,
                 ...protectedReadRules(),
                 denyRule("edit"),
-                ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 allowRule("webfetch"),
@@ -563,7 +552,6 @@ export function getPermissionsForRole(role) {
                 // Delegation: scientist only (deny first, allow after).
                 ...subagentRules("scientist"),
                 ...skillRules("aria-research-evidence", "aria-zotero-tutor"),
-                planPremiseRecoveryRule("researcher"),
             ];
         case "archivist":
             return [...archivistBaseRules(), PLAYWRIGHT_DENY, denyRule("git_read"), denyRule("aria_ship"), denyRule("aria_release")];
@@ -573,7 +561,7 @@ export function getPermissionsForRole(role) {
                 PLAYWRIGHT_DENY,
                 ...protectedReadRules(),
                 denyRule("edit"),
-                ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 denyRule("glob"),
                 denyRule("grep"),
                 denyRule("webfetch"),
@@ -587,7 +575,6 @@ export function getPermissionsForRole(role) {
                 denyRule("shell"),
                 ...subagentRules("archivist", "researcher", "scientist"),
                 ...skillRules("aria-academic-writing", "aria-writing-anti-ai", "aria-review-response", "aria-paper-self-review", "aria-document-design"),
-                planPremiseRecoveryRule("writer"),
             ];
         case "scientist":
             return [
@@ -595,7 +582,7 @@ export function getPermissionsForRole(role) {
                 PLAYWRIGHT_DENY,
                 ...protectedReadRules(),
                 denyRule("edit"),
-                ...scratchEditRules(),
+                ...markdownPlanEditRules("deny"),
                 allowRule("glob"),
                 allowRule("grep"),
                 denyRule("webfetch"),
@@ -609,7 +596,6 @@ export function getPermissionsForRole(role) {
                 denyRule("shell"),
                 ...subagentRules("researcher", "writer", "coder"),
                 ...skillRules("aria-research-planning", "aria-results-analysis"),
-                planPremiseRecoveryRule("scientist"),
             ];
     }
 }

@@ -1,21 +1,30 @@
-import { join } from "node:path";
-import { createScratchRunDir, resolveScratchRoot } from "./scratch.js";
+import { allocatePlanExecutionDir, allocateUnplannedExecutionDir, PLAN_ID_PATTERN, PLAN_TASK_ID_PATTERN } from "./scratch.js";
 export const SCRATCH_TASK_TOOL_NAME = "scratch_task";
+/**
+ * `scratch_task` allocates one execution directory and returns its namespace and
+ * path. Supplying both `planId` and `taskId` allocates
+ * `.aria/scratch/<plan-id>/<task-id>/<timestamp>/`. Omitting both allocates
+ * `.aria/scratch/unplanned/<timestamp>-<description>/`. Supplying only one is an
+ * error. Only identifier formats are checked; no plan file is read.
+ */
 export const scratchTaskToolInputSchema = {
     type: "object",
     properties: {
-        taskId: {
-            type: "string",
-            minLength: 1,
-            maxLength: 64,
-            pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-            description: "Optional workflow reference; scratch allocation does not inspect task or plan state",
-        },
         taskName: {
             type: "string",
             minLength: 1,
             maxLength: 200,
-            description: "Short descriptive task name used to form a safe scratch-directory slug",
+            description: "Short description. Used as the directory description for unplanned work and as the allocation title.",
+        },
+        planId: {
+            type: "string",
+            pattern: PLAN_ID_PATTERN.source,
+            description: "Exact lowercase UUIDv4 of the Markdown plan. Must be supplied together with taskId.",
+        },
+        taskId: {
+            type: "string",
+            pattern: PLAN_TASK_ID_PATTERN.source,
+            description: "Exact plan task identifier such as T001. Must be supplied together with planId.",
         },
     },
     required: ["taskName"],
@@ -24,11 +33,11 @@ export const scratchTaskToolInputSchema = {
 function toolError(message) {
     return { content: message, metadata: { title: "Error" } };
 }
-/** Build a native V2 tool for allocating a named output run under the startup project. */
+/** Build a native V2 tool that allocates one scratch execution directory under the startup project. */
 export function createScratchTaskTool(projectDirectory) {
     return {
         name: SCRATCH_TASK_TOOL_NAME,
-        description: "Allocate a canonical timestamped scratch directory for generated task output; no plan or task lookup is performed.",
+        description: "Allocate one scratch execution directory under .aria/scratch and return its namespace and executionDir. With planId and taskId: .aria/scratch/<plan-id>/<task-id>/<timestamp>/. Without them: .aria/scratch/unplanned/<timestamp>-<description>/. No plan file is read.",
         input: scratchTaskToolInputSchema,
         async execute(input) {
             if (!projectDirectory) {
@@ -49,17 +58,22 @@ export function createScratchTaskTool(projectDirectory) {
             if (taskName.length === 0 || taskName.length > 200 || hasControlCharacters) {
                 return toolError("taskName must be a non-empty descriptive string of at most 200 characters without control characters");
             }
+            const hasPlan = args.planId !== undefined;
+            const hasTask = args.taskId !== undefined;
+            if (hasPlan !== hasTask) {
+                return toolError("planId and taskId must be supplied together for planned scratch, or both omitted for unplanned scratch");
+            }
             try {
-                const { scratch } = await resolveScratchRoot(projectDirectory);
-                const taskDir = await createScratchRunDir(projectDirectory, taskName);
-                const subdirectories = [
-                    ["tmp", "tmp"], ["testFixtures", "tests/fixtures"], ["testResults", "tests/results"],
-                    ["logs", "logs"], ["screenshots", "captures/screenshots"], ["videos", "captures/videos"],
-                    ["builds", "builds"], ["environments", "environments"], ["runtime", "runtime"], ["experiments", "experiments"],
-                ];
-                const dirs = Object.fromEntries(subdirectories.map(([key, subdir]) => [key, join(taskDir, subdir)]));
+                if (hasPlan) {
+                    const executionDir = await allocatePlanExecutionDir(projectDirectory, String(args.planId), String(args.taskId));
+                    return {
+                        content: JSON.stringify({ namespace: "plan", executionDir }, null, 2),
+                        metadata: { title: `Allocate plan scratch · ${String(args.taskId)}` },
+                    };
+                }
+                const executionDir = await allocateUnplannedExecutionDir(projectDirectory, taskName);
                 return {
-                    content: JSON.stringify({ scratch, taskDir, dirs }, null, 2),
+                    content: JSON.stringify({ namespace: "unplanned", executionDir }, null, 2),
                     metadata: { title: `Allocate scratch · ${taskName}` },
                 };
             }

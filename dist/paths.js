@@ -1,6 +1,7 @@
+import { realpathSync } from "node:fs";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import properLockfile from "proper-lockfile";
 const LOCK_TIMEOUT_MS = 10_000;
 const STALE_LOCK_MS = 5_000;
@@ -133,6 +134,24 @@ export async function withFileLock(target, operation, signal) {
     }
     finally {
         await release().catch(() => undefined);
+    }
+}
+/**
+ * `isFilesystemRoot` (shared by scratch, ship, and legacy plan code): lexical root sentinel plus an
+ * existing symlink whose canonical realpath resolves to the filesystem root.
+ */
+export function isFilesystemRoot(dir) {
+    const resolved = resolve(dir);
+    const parsed = parse(resolved);
+    if (resolved === parsed.root)
+        return true;
+    try {
+        const real = realpathSync(resolved);
+        const realParsed = parse(real);
+        return real === realParsed.root;
+    }
+    catch {
+        return false;
     }
 }
 //# sourceMappingURL=paths.js.map

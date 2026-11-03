@@ -14,7 +14,6 @@ Use this skill before creating a new persisted implementation plan.
 
 - New plans live at `.aria/plans/<descriptive-slug>-<uuid>.md`. Mint a fresh lowercase UUIDv4 as the immutable `id`, include it in the descriptive filename, and record the exact canonical, worktree-relative path in frontmatter. Check the exact proposed path directly when possible and regenerate if it exists; ordinary glob/list output may omit hidden `.aria/` content and is not proof that the ID is unused. Do not rename or move a plan after creation.
 - Several plans may coexist. Never choose a plan by modification time, recency, title similarity, glob order, or a project-wide “active plan” assumption. Continue a Markdown plan only when the user or current coordinator handoff provides its exact `id` **and** path. If a continuation request lacks either, ask for it. A new objective may receive a new plan without searching for older plans.
-- Keep legacy work on `.aria/rdc/TASKS.md` and its existing Plan tool only when the user or current handoff explicitly identifies that legacy path. Do not migrate it or make the legacy and Markdown plans authoritative for the same task.
 - Use the native OpenCode `edit` permission only. Planner is the only agent granted `edit` on `.aria/plans` and `.aria/plans/**`; other agents retain read access and are denied those edit resources. Never use shell, an auxiliary tool, or another agent as a write workaround. This is tool authorization, not a filesystem sandbox: shell commands and auxiliary tools with side effects may not be confined by native `edit` rules.
 
 ## Minimal Markdown schema
@@ -106,4 +105,4 @@ For a genuinely new objective, retrieve relevant Engram context before creating 
 - Select one best plan supported by evidence; do not present competing plans.
 - Do not implement.
 - Do not redesign tests at fixture/mock level unless testing infrastructure is itself the requested work.
-- A new Markdown task uses only the exact `.aria/plans/` identity supplied to you. An expressly identified legacy task continues to use `.aria/rdc/TASKS.md` and the Plan tool; never select either system by recency or use both for one task.
+- A task uses only the exact `.aria/plans/` identity supplied to you; never select a plan by recency or presumed active status.

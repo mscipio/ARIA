@@ -18,20 +18,18 @@
 
 ## Workflow
 
-1. At the start of every turn, the coder calls `plan` action `get` to read `.aria/rdc/TASKS.md`. If an active plan exists, work continues it instead of planning again.
-2. For non-trivial new work, the coder tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
-3. The planner calls `plan` `get` then `create` to persist a title and an actionable, ordered task list; each task integrates its acceptance criteria and the relevant tests. The planner does not implement.
-4. Reviewer always performs read-only QA of the active plan with `get`, replying `READY` or `REVISION_REQUIRED` with the smallest corrections. Planner alone applies corrections with `replace`; each replacement invalidates prior approval. Reviewer rechecks the resulting revision.
-5. The coder re-reads the plan, summarizes its title, tasks, and revision to the user, and **stops and waits for explicit user approval**.
-6. Only after the user approves the exact Plan ID and revision does the coder task Planner to record approval. Tasks cannot enter implementation until that revision is approved.
-7. The implementer completes tasks and runs the relevant checks; Planner records task status and evidence when directed by the coder.
-8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
-9. If Reviewer reports blocking findings for tasks within approved scope, the coder tasks Planner to use `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews. After any substantive adversarial-origin fix, normal review runs again before adversarial re-review.
-10. Optionally, after normal review passes, the coder may invoke adversarial review based on risk signals (permissions, mutation, security, migration, concurrency, public API, architecture). Adversarial review attacks the apparently correct implementation and follows the same remediation/re-review cycle. Both normal and adversarial review must pass after the last substantive change.
-11. If review reveals a material scope change, the coder tasks Reviewer for a post-review scope assessment. For `SCOPE_CHANGE`, the coder tasks Planner to use `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
-12. Planner alone performs Plan mutations (`create`, `replace`, `update`, `add`, `remediate`, `approve`, `cancel`, and `close`). Coder and Reviewer may read with `get`; the coder coordinates execution and conveys user decisions but does not mutate the Plan. A clean, completed plan is archived under `.aria/rdc/plans/` via Planner's `close` action.
+Planning uses Markdown plans under `.aria/plans/` only. Each plan is identified by an immutable lowercase UUIDv4 and its exact canonical path; no workflow selects a plan by recency or by a presumed active plan.
 
-The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace directory, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
+1. For non-trivial new work, the coder tasks explorer (and visualizer when UI is involved) to gather the minimum evidence before planning.
+2. The planner obtains a new UUID from the `plan_id_new` tool, creates `.aria/plans/<slug>-<uuid>.md` in `draft` state, and verifies that the frontmatter identity matches the filename. The planner does not implement.
+3. The reviewer performs read-only pre-approval QA on that exact path and returns `READY` or `REVISION_REQUIRED`. The planner applies corrections in the same file.
+4. The coder summarizes the draft and **stops for explicit user approval** of that plan.
+5. After explicit approval, the planner freezes the initial contract under `## Approved contract` and sets `approved`. Tasks run in order.
+6. The implementer executes each task. The reviewer returns `TASK_PASS`, `TASK_FAIL`, or `TASK_INSUFFICIENT EVIDENCE` for that task.
+7. When every task is complete, the reviewer returns the whole-plan verdict `PLAN_PASS` or `PLAN_FAIL`. Only then does the planner set `complete`.
+8. Material changes are classified by the reviewer as `SCOPE_CHANGE` or `WITHIN_SCOPE`. The planner records a proposed amendment, which grants no authority until the user approves that amendment in its own entry. An approved amendment that adds pending tasks reopens a `complete` plan to `approved` until a new `PLAN_PASS`.
+9. Remediation continues only while each cycle reduces the open blocking findings; otherwise the coder stops and reports to the user.
+10. Adversarial review remains optional and follows the same remediation and re-review cycle.
 
 ## Team
 
@@ -78,86 +76,20 @@ ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifi
 
 The package also includes `aria-web-ui` for framework-agnostic web accessibility, responsive design, and browser validation guidance. Visualizer can load both `aria-qt-ui` for Qt Widgets/PySide6 and QML/Qt Quick work and `aria-web-ui` for web applications; the prompt keeps those platform-specific boundaries distinct, and web guidance does not imply a Qt/QML migration.
 
-## Shared Plan
+## Markdown Plans
 
-`.aria/rdc/TASKS.md` is the project-wide source of truth for the coder workflow, following the OpenCode workspace/session directory rather than the Git worktree or a single OpenCode conversation. On first Plan access, a legacy `.code-ensemble/` state directory is migrated once to `.aria/rdc/` when the canonical destination does not already exist.
-
-Schema v3 fields:
-
-- `version`: schema version (`3`)
-- `id`: stable Plan ID (UUID) identifying this plan across sessions
-- `revision`: integer incremented on every mutation; callers pass the current Plan ID and revision to detect conflicts
-- `status`: `active` or `closed`
-- `approval`: `pending` or `approved` — a plan must be `approved` before tasks can enter implementation
-- `title`, `createdAt`, `updatedAt`: plan metadata
-- `tasks[]`: ordered tasks with stable `id` (e.g. `T001`), `text` (action plus integrated acceptance/tests), `status` (`pending`/`in_progress`/`completed`/`blocked`), and optional `evidence`
-
-Approval lifecycle:
-- `create` produces a plan with `approval: pending`
-- `approve` (Planner only, after explicit human approval is conveyed by the coder) sets `approval: approved` and increments revision
-- `replace` (Planner only) resets `approval: pending` (invalidates any previous approval)
-- `add` (Planner only) resets `approval: pending` (scope changes require re-approval)
-- `remediate` (Planner only) preserves `approval: approved` (autonomous remediation loop)
-- `update`, `close` require `approval: approved`
-
-```md
-<!-- aria-rdc-plan
-{"version":3,"id":"7e3f1a92-...","revision":4,"status":"active","approval":"approved","title":"Dashboard","createdAt":"2026-07-20T12:00:00.000Z","updatedAt":"2026-07-20T12:05:00.000Z","tasks":[{"id":"T001","text":"Define the data model; schema tests pass","status":"completed","evidence":"schema tests pass"},{"id":"T002","text":"Implement the dashboard; renders without errors","status":"in_progress"},{"id":"T003","text":"Review responsive behavior; no layout regressions at common breakpoints","status":"pending"}]}
--->
-
-# Plan: Dashboard
-
-Status: **active**
-Approval: **approved**
-Revision: **4**
-
-## Tasks
-
-- [x] **T001** Define the data model; schema tests pass
-  - Evidence: schema tests pass
-- [~] **T002** Implement the dashboard; renders without errors
-- [ ] **T003** Review responsive behavior; no layout regressions at common breakpoints
-```
-
-## Plan Tool ACL
-
-The `coder`, `planner`, and `reviewer` can call `plan`; execution authorization limits Coder and Reviewer to `get`, while Planner alone can mutate. Every other agent has `plan: deny`.
-
-| Agent | Allowed `plan` actions |
-|---|---|
-| coder | `get` |
-| planner | all actions (`get`, `create`, `replace`, `update`, `add`, `remediate`, `approve`, `cancel`, `close`) |
-| reviewer | `get` |
-| researcher | none |
-| explorer | none |
-| visualizer | none |
-| implementer | none |
-| scientist | none |
-
-- `get` returns the active plan (or `No active plan.`).
-- `create` writes a new plan with `approval: pending` and returns the initial `revision` (`1`); rejected when an active plan already exists.
-- Every mutation accepts the current `expectedPlanID` and `expectedRevision`; only Planner may perform mutations.
-- `approve` sets `approval: approved` and increments the revision only after the coder confirms explicit human approval of that exact plan revision.
-- `replace` accepts the corrected `title` and `tasks`, produces a new revision, and resets `approval: pending`. Reviewer requests corrections during read-only QA; Planner applies them.
-- `update`, `add`, `remediate`, and `close` require both `expectedPlanID` and `expectedRevision` to detect conflicts.
-- `update` requires `approval: approved`.
-- `add` resets `approval: pending` (scope changes require renewed approval).
-- `remediate` requires `approval: approved` and all existing tasks completed; preserves `approval: approved` (autonomous remediation loop).
-- `close` requires `approval: approved` and all tasks completed; archives the plan.
-
-Planner is the only role allowed to mutate the Plan. The coder coordinates and conveys explicit user decisions; Reviewer performs read-only QA and verification. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
-
-## Plan Ownership
-
-- **Planner** owns all Plan mutations: it creates executable plans, applies Reviewer-requested corrections, records approved human decisions conveyed by the coder, tracks task status/evidence, adds remediation or approved scope, and closes/cancels plans as explicitly directed.
-- **Reviewer** owns read-only plan correctness checks (`READY` or `REVISION_REQUIRED`), post-review scope assessment (`SCOPE_CHANGE` or `WITHIN_SCOPE`), and independent implementation verification (`PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`).
-- **Coder** coordinates the lifecycle: it summarizes plans for explicit human approval, conveys user decisions to Planner, delegates implementation/review, and never mutates the Plan itself.
+- Plans live in `.aria/plans/` as `<descriptive-slug>-<uuid>.md`. The frontmatter `id` and `path` are immutable; the file is never renamed or moved.
+- Only the planner has native edit permission for `.aria/plans/`. The coder and reviewer read plans; the coder never mutates them.
+- Approvals are append-only. The frozen contract is never rewritten; amendments are separate entries with their own approval.
+- Task reviews return `TASK_PASS`, `TASK_FAIL`, or `TASK_INSUFFICIENT EVIDENCE`. Only the whole-plan review returns `PLAN_PASS` or `PLAN_FAIL`.
+- Scratch output for planned work goes to `.aria/scratch/<plan-id>/<task-id>/<timestamp>/`; `.aria/scratch/` is ignored by Git, while `.aria/plans/` stays versionable.
+- The coder never reads a plan by recency; it passes the exact plan ID and path to each delegated role.
 
 ## Workspace execution policy
 
 ARIA-controlled generated output lives under `.aria/scratch/` in two categories: planned work at `.aria/scratch/<plan-id>/<task-id>/<timestamp>/`, and unplanned work plus independent tool output (including Playwright MCP) at `.aria/scratch/unplanned/<timestamp>-<description>/`. `.aria/scratch/` is ignored by Git, while `.aria/plans/` stays versionable. Historical `./scratch/` content is left untouched.
 
-Canonical source: `src/scratch.ts` via `src/paths.ts` guards. Every agent confines transient/generated artifacts (logs, fixtures, temporary outputs, verification evidence, etc.) to a unique local `.aria/scratch/unplanned/<timestamp>-<description>/` directory. No taskId, approved Plan, or `scratch_task` allocation is required. The policy applies to all agents and survives delegation; it does not restrict intentional edits to authorized repository source, tests, configuration, or documentation. Persistent project data, existing output paths/history, and project/global configuration remain at their established locations. Never stage scratch artifacts. Staging authorized source changes still requires explicit human authorization; editing does not itself authorize staging. Doctor remains read-only, setup/lifecycle boundaries and `.aria/rdc/TASKS.md`/Plan authority are unchanged. Preserve `HOME`/`XDG`/global config; this is not an OS sandbox. See `src/scratch.ts` for helper/path semantics and historical-artifact handling.
+Canonical source: `src/scratch.ts` via `src/paths.ts` guards. Every agent confines transient/generated artifacts (logs, fixtures, temporary outputs, verification evidence, etc.) to a unique local `.aria/scratch/unplanned/<timestamp>-<description>/` directory. No taskId, approved Plan, or `scratch_task` allocation is required. The policy applies to all agents and survives delegation; it does not restrict intentional edits to authorized repository source, tests, configuration, or documentation. Persistent project data, existing output paths/history, and project/global configuration remain at their established locations. Never stage scratch artifacts. Staging authorized source changes still requires explicit human authorization; editing does not itself authorize staging. Doctor remains read-only, setup/lifecycle boundaries and Markdown plan authority under `.aria/plans/` are unchanged. Preserve `HOME`/`XDG`/global config; this is not an OS sandbox. See `src/scratch.ts` for helper/path semantics and historical-artifact handling.
 
 ## Install
 
@@ -356,7 +288,7 @@ writer  openai/gpt-6-luna  xhigh
 scientist  openai/gpt-6.1-sol  medium
 ```
 
-MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
+MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. Markdown plans under `.aria/plans/` are authoritative for plan, task, scope, and approval state.
 
 ## Writer
 

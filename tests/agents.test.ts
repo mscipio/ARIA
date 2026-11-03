@@ -20,7 +20,6 @@ import {
   rollbackAgentInstall,
 } from "../src/agents";
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions";
-import { PLAN_PREMISE_RECOVERY_TOOL_NAME } from "../src/plan-premise-recovery-tool";
 import { resolveAriaConfig } from "../src/overrides";
 import { allocateUnplannedExecutionDir } from "../src/scratch.js";
 import type { RoleName } from "../src/types";
@@ -220,10 +219,9 @@ describe("T003 agent installation", () => {
     expect(guidance).toContain("remediation by progress");
     expect(guidance).toContain("do not require a second human acceptance");
     expect(guidance).not.toContain("native `task`");
-    expect(guidance).toContain("continue legacy work only when the user or current handoff explicitly identifies `.aria/rdc/tasks.md`");
     expect(guidance).toContain("without creating a plan or involving planner or reviewer");
     expect(guidance).toContain("do not bind plans automatically to session metadata");
-    expect(guidance).toContain("for any rejected legacy plan action, do not retry");
+    expect(guidance).toContain("m11. completion");
   });
 
   it("generates Planner-only Markdown plan mutation and read-only Reviewer guidance", async () => {
@@ -241,7 +239,7 @@ describe("T003 agent installation", () => {
     expect(planner).toContain("never select by recency, directory order, title similarity, or an assumed active plan");
     expect(planner).toContain("the approved contract is protected");
     expect(planner).toContain("preserve task ids and all prior evidence");
-    expect(planner).toContain("explicitly identified legacy plans");
+    expect(planner).toContain("reopening: when an approved amendment adds pending tasks");
 
     expect(reviewer).toContain("read only the exact `.aria/plans/` path and plan id supplied by the coder");
     expect(reviewer).toContain("never discover a plan by recency");
@@ -404,11 +402,11 @@ describe("T003 agent installation", () => {
 
     // Simulate a valid previous generated file before this permission rule was
     // introduced: the old rules and body still match its ownership checksum.
-    const previousPermissions = getPermissionsForRole("explorer").filter(
-      (rule) => rule.action !== PLAN_PREMISE_RECOVERY_TOOL_NAME,
+    const previousPermissions = getPermissionsForRole("planner").filter(
+      (rule) => rule.action !== "plan_id_new",
     );
-    const previousWithoutChecksum = generated.explorer.replace(
-      /  - action: "plan_premise_recovery"\n    resource: "\*"\n    effect: (?:allow|deny)\n/,
+    const previousWithoutChecksum = generated.planner.replace(
+      /  - action: "plan_id_new"\n    resource: "\*"\n    effect: allow\n/,
       "",
     );
     const lines = previousWithoutChecksum.split("\n");
@@ -424,16 +422,16 @@ describe("T003 agent installation", () => {
       /^# aria-checksum: [0-9a-f]{64}$/m,
       `# aria-checksum: ${oldChecksum}`,
     );
-    expect(previous).not.toContain(`action: "${PLAN_PREMISE_RECOVERY_TOOL_NAME}"`);
-    await writeFile(join(dir, agentFileName("explorer")), previous);
+    expect(previous).not.toContain(`action: "plan_id_new"`);
+    await writeFile(join(dir, agentFileName("planner")), previous);
 
     const result = await reconcileManagedAgents(resolved, { dir, version: FIXTURE_VERSION });
 
-    expect(result.written).toEqual(["explorer"]);
-    expect(result.unchanged).toEqual(ROLES.filter((role) => role !== "explorer"));
-    expect(result.tampered).not.toContain("explorer");
-    expect(result.previousContents.explorer).toBe(previous);
-    expect(await readFile(join(dir, agentFileName("explorer")), "utf8")).toBe(generated.explorer);
+    expect(result.written).toEqual(["planner"]);
+    expect(result.unchanged).toEqual(ROLES.filter((role) => role !== "planner"));
+    expect(result.tampered).not.toContain("planner");
+    expect(result.previousContents.planner).toBe(previous);
+    expect(await readFile(join(dir, agentFileName("planner")), "utf8")).toBe(generated.planner);
   });
 
   it("checksum-validates and migrates owned legacy route frontmatter without losing other fields", async () => {

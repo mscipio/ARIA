@@ -33,7 +33,7 @@ describe("accepted Playwright integration boundaries", () => {
 
     for (const context of contexts) {
       const worktree = await fixtureWorktree(`playwright-${context.name}`);
-      const planPath = join(worktree, ".aria", "rdc", "TASKS.md");
+      const planPath = join(worktree, ".aria", "plans", "fixture-plan.md");
       if (context.plan !== undefined) {
         await mkdir(dirname(planPath), { recursive: true });
         await writeFile(planPath, context.plan);

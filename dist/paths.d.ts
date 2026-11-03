@@ -16,4 +16,9 @@ export declare function safeProjectFile(worktree: string, file: string, options?
 }>;
 export declare function verifySafeParent(root: string, filePath: string): Promise<void>;
 export declare function withFileLock<T>(target: string, operation: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+/**
+ * `isFilesystemRoot` (shared by scratch, ship, and legacy plan code): lexical root sentinel plus an
+ * existing symlink whose canonical realpath resolves to the filesystem root.
+ */
+export declare function isFilesystemRoot(dir: string): boolean;
 //# sourceMappingURL=paths.d.ts.map

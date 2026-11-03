@@ -12,7 +12,7 @@ Use this skill for the reviewer's read-only pre-implementation Plan QA mode.
 
 ## Review the plan against these criteria
 
-- Read only the exact plan `id` and canonical path supplied in the task. Never choose among plans by recency, filename order, or presumed project-wide active status. For explicitly identified legacy work, inspect only `.aria/rdc/TASKS.md` through the existing Plan tool.
+- Read only the exact plan `id` and canonical path supplied in the task. Never choose among plans by recency, filename order, or presumed project-wide active status.
 - Check that a new Markdown plan is under `.aria/plans/`, its UUID ID and frontmatter path match its filename and actual path, and its ID/path are treated as immutable.
 - Revised-task QA (after a substantive future-task revision during execution): check only the revised task's instructions against the frozen approved contract plus approved amendments (proposed or rejected amendments grant no authorization), and return `READY` or `REVISION_REQUIRED` with minimal corrections. Routine status or evidence updates are not reviewed.
 - Check the contract for a clear objective, scope, exclusions, constraints, and acceptance criteria. Ensure a draft is identified as unapproved, the contract is distinct from adaptable strategy, and material changes to an approved contract require explicit renewed human approval.

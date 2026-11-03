@@ -119,7 +119,7 @@ function healthySnapshot(): DoctorV2Snapshot {
     agents: healthyAgents(),
     skills: ARIA_SKILL_NAMES.map((name) => ({ id: name, name })),
     tools: [
-      { id: "plan", name: "plan" },
+      { id: "plan_id_new", name: "plan_id_new" },
       { id: "other-tool", name: "other-tool" },
     ],
     sessionsObserved: 2,
@@ -138,8 +138,8 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(runtimeFinding(report, "agents (10)")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "agents (10)")?.detail).toContain("10 of 10");
     expect(runtimeFinding(report, "skills (24 live)")?.severity).toBe("PASS");
-    expect(runtimeFinding(report, "plan tool")?.severity).toBe("PASS");
-    expect(runtimeFinding(report, "plan tool")?.detail).toContain("exactly once");
+    expect(runtimeFinding(report, "plan id tool")?.severity).toBe("PASS");
+    expect(runtimeFinding(report, "plan id tool")?.detail).toContain("exactly once");
     const coexistence = runtimeFinding(report, "coexistence");
     expect(coexistence?.severity).toBe("PASS");
     expect(coexistence?.detail).toContain("UNKNOWN");
@@ -149,12 +149,41 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(report.findings.filter((finding) => finding.severity === "FAIL")).toHaveLength(0);
   });
 
-  it("fails a missing plugin, duplicated plan tool, and colliding IDs", async () => {
+  it("FAILs when plan_id_new is missing from the V2 tool list", async () => {
+    const snapshot = healthySnapshot();
+    snapshot.tools = [{ id: "other-tool", name: "other-tool" }];
+    const report = await runDoctor({ ...(await baseOptions()), v2: snapshot });
+
+    expect(runtimeFinding(report, "plan id tool")?.severity).toBe("FAIL");
+    expect(runtimeFinding(report, "plan id tool")?.detail).toContain("is not in the V2 tool list");
+  });
+
+  it("FAILs when plan_id_new is registered more than once", async () => {
+    const snapshot = healthySnapshot();
+    snapshot.tools = [
+      { id: "plan_id_new", name: "plan_id_new" },
+      { id: "plan_id_new_clone", name: "plan_id_new" },
+    ];
+    const report = await runDoctor({ ...(await baseOptions()), v2: snapshot });
+
+    expect(runtimeFinding(report, "plan id tool")?.severity).toBe("FAIL");
+    expect(runtimeFinding(report, "plan id tool")?.detail).toContain("more than once");
+  });
+
+  it("SKIPs the plan id tool check without live tool evidence", async () => {
+    const withoutSnapshot = await runDoctor(await baseOptions());
+    expect(runtimeFinding(withoutSnapshot, "plan id tool")?.severity).toBe("SKIP");
+
+    const snapshot = healthySnapshot();
+    snapshot.tools = undefined;
+    const withoutTools = await runDoctor({ ...(await baseOptions()), v2: snapshot });
+    expect(runtimeFinding(withoutTools, "plan id tool")?.severity).toBe("SKIP");
+  });
+
+  it("fails a missing plugin and colliding IDs", async () => {
     const snapshot = healthySnapshot();
     snapshot.plugins = [{ id: "other-plugin", state: { status: "active" } }];
     snapshot.tools = [
-      { id: "plan", name: "plan" },
-      { id: "plan-clone", name: "plan" },
       { id: "dup", name: "dup-tool" },
       { id: "dup", name: "dup-tool" },
     ];
@@ -162,8 +191,6 @@ describe("T008 doctor V2 runtime truth", () => {
 
     expect(runtimeFinding(report, "plugin aria")?.severity).toBe("FAIL");
     expect(runtimeFinding(report, "plugin aria")?.detail).toContain("not in the V2 plugin list");
-    expect(runtimeFinding(report, "plan tool")?.severity).toBe("FAIL");
-    expect(runtimeFinding(report, "plan tool")?.detail).toContain("more than once");
     const coexistence = runtimeFinding(report, "coexistence");
     expect(coexistence?.severity).toBe("FAIL");
     expect(coexistence?.detail).toContain("duplicate tool id: dup");
@@ -190,7 +217,7 @@ describe("T008 doctor V2 runtime truth", () => {
   it("skips runtime truth outside a live session with documented gaps", async () => {
     const report = await runDoctor(await baseOptions());
 
-    for (const title of ["plugin aria", "agents (10)", "skills (24 live)", "plan tool", "coexistence"]) {
+    for (const title of ["plugin aria", "agents (10)", "skills (24 live)", "plan id tool", "coexistence"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
     }
@@ -309,7 +336,7 @@ describe("T004 OpenCode runtime compatibility", () => {
   it("words standalone runtime SKIP as absent live runtime evidence, not version inequality", async () => {
     const report = await runDoctor(await baseOptions(await compatExecutor("opencode 2.0.23")));
 
-    for (const title of ["plugin aria", "agents (10)", "skills (24 live)", "plan tool"]) {
+    for (const title of ["plugin aria", "agents (10)", "skills (24 live)", "plan id tool"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
       expect(finding?.detail).toContain("no live OpenCode runtime evidence observed");

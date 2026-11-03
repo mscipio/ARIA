@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, sym
 import { join } from "node:path";
 import process from "node:process";
 
-import { createUniqueScratchDir } from "../dist/scratch.js";
+import { allocateUnplannedExecutionDir } from "../dist/scratch.js";
 
 const npmScript = process.env.npm_execpath;
 const npm = npmScript ? process.execPath : "npm";
@@ -22,7 +22,7 @@ function fail(message) {
 const packageRoot = process.cwd();
 // All transient smoke state (index snapshot, tarball, install prefix, npm
 // cache) lives in one owned scratch run directory, cleaned up below.
-const runDir = await createUniqueScratchDir(packageRoot, "smoke-package", "run");
+const runDir = await allocateUnplannedExecutionDir(packageRoot, "smoke-package-run");
 const sourceDir = join(runDir, "source");
 const installRoot = join(runDir, "install");
 const npmCache = join(runDir, "npm-cache");
@@ -97,7 +97,9 @@ try {
     "bin/aria.mjs",
     "dist/index.js",
     "dist/index.d.ts",
-    "dist/plan-tool.js",
+    "dist/plan-id-tool.js",
+    "dist/role-requirements.js",
+    "dist/paths.js",
     "dist/scratch.js",
     "defaults/prompts/coder.md",
     "wiki-pipeline/docs/compile-workflow.md",
@@ -140,12 +142,12 @@ try {
   }
 
   const installedFile = (rel) => readFileSync(join(installedDir, rel), "utf8");
-  const planPrompt = installedFile("defaults/prompts/coder.md");
-  for (const marker of [".aria/rdc/TASKS.md", "continue it instead of planning the same work again"]) {
-    if (!planPrompt.includes(marker)) fail(`installed plan recovery prompt is missing ${JSON.stringify(marker)}`);
+  const planPrompt = installedFile("defaults/prompts/planner.md");
+  for (const marker of [".aria/plans/", "plan_id_new"]) {
+    if (!planPrompt.includes(marker)) fail(`installed planner prompt is missing ${JSON.stringify(marker)}`);
   }
   const scratchSource = installedFile("dist/scratch.js");
-  for (const marker of ["SCRATCH_DIR_NAME", "createUniqueScratchDir", "Scratch directory"]) {
+  for (const marker of ["SCRATCH_DIR_NAME", "allocatePlanExecutionDir", "allocateUnplannedExecutionDir"]) {
     if (!scratchSource.includes(marker)) fail(`installed scratch helper is missing ${JSON.stringify(marker)}`);
   }
 

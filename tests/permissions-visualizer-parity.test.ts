@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { generateAgentFiles } from "../src/agents";
-import { authorizePlan } from "../src/plan-tool";
 import { evaluatePermission, getPermissionsForRole } from "../src/permissions";
 import type { AgentRule } from "../src/permissions";
 import { resolveAriaConfig } from "../src/overrides";
@@ -137,6 +136,7 @@ describe("T003 visualizer/implementer effective edit/shell parity", () => {
     expect(ruleSlice(vizRules, "shell")).toEqual(ruleSlice(implRules, "shell"));
   });
 
+
   it("allows only the Qt/web UI skills and preserves other visualizer permissions", () => {
     const rules = VISUALIZER();
     // Exactly these two skills are granted; unknown skills stay denied.
@@ -179,10 +179,6 @@ describe("T003 visualizer/implementer effective edit/shell parity", () => {
     expect(evaluatePermission(rules, "websearch", "query")).toBe("deny");
     expect(evaluatePermission(rules, "question", "*")).toBe("deny");
     expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("allow");
-    // Plan access stays denied at execution; no Rule[] emitted for it.
-    expect(evaluatePermission(rules, "plan", "*")).toBe("ask");
-    expect(rules.some((rule) => rule.action === "mcp_plan")).toBe(false);
-    expect(authorizePlan({ sessionID: "test", agent: "visualizer" }, "get")).not.toBeNull();
   });
 
   it("leaves other roles unchanged (spot checks)", () => {

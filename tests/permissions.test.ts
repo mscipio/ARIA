@@ -10,11 +10,9 @@ import {
   type AgentRule,
 } from "../src/permissions";
 import { generateAgentFiles } from "../src/agents";
-import { authorizePlan } from "../src/plan-tool";
 import { getPackageRoot } from "../src/defaults";
-import { PLAN_PREMISE_RECOVERY_ROLES, PLAN_PREMISE_RECOVERY_TOOL_NAME } from "../src/plan-premise-recovery-tool";
 import { ROLES, resolveAriaConfig } from "../src/overrides";
-import { effectiveRolePermissions } from "../src/register";
+import { liveRoleRules } from "../src/role-requirements.js";
 import type { RoleName } from "../src/types";
 import { Agent } from "@opencode/schema";
 
@@ -118,26 +116,6 @@ describe("T022 native scratch task permissions", () => {
     }
   });
 
-  it("preserves effective registered edits while granting only scratch paths", () => {
-    const registered = effectiveRolePermissions();
-    for (const role of ROLES) {
-      const permission = registered[role] as unknown as Record<string, unknown>;
-      const scratchWriter = role === "coder" || role === "visualizer" || role === "implementer" || role === "reviewer" || role === "archivist";
-      expect(effectiveDecision(permission, "edit", ".aria/scratch")).toBe(scratchWriter ? "allow" : "deny");
-      expect(effectiveDecision(permission, "edit", ".aria/scratch/tests/result.json")).toBe(scratchWriter ? "allow" : "deny");
-      if (scratchWriter) expect(effectiveDecision(permission, "edit", ".aria/scratch/.env")).toBe("ask");
-      expect(effectiveDecision(permission, "edit", "src/app.ts")).toBe(
-        role === "implementer" || role === "visualizer" ? "allow" : "deny",
-      );
-      expect(effectiveDecision(permission, "edit", "src/.env")).toBe(
-        role === "implementer" || role === "visualizer" ? "ask" : "deny",
-      );
-      expect(effectiveDecision(permission, "edit", "src/.env.example")).toBe(
-        role === "implementer" || role === "visualizer" ? "allow" : "deny",
-      );
-      expect(effectiveDecision(permission, "edit", "/tmp/scratch/result.json")).toBe("deny");
-    }
-  });
 
   it("grants scratch allocation only to artifact-producing roles and renders matching guidance", () => {
     const roles: RoleName[] = [
@@ -154,8 +132,6 @@ describe("T022 native scratch task permissions", () => {
     ];
     const artifactRoles = new Set<RoleName>(["coder", "visualizer", "implementer", "reviewer"]);
     const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
-    const registered = effectiveRolePermissions();
-
     for (const role of roles) {
       const permitted = artifactRoles.has(role);
       const rules = getPermissionsForRole(role);
@@ -167,61 +143,14 @@ describe("T022 native scratch task permissions", () => {
       expect(generated[role].includes("invoke the native `scratch_task` tool")).toBe(false);
       expect(generated[role]).toContain("Persistent project data");
       expect(generated[role]).toContain("exact `.aria/plans/` identity");
-      expect(generated[role]).toContain("legacy `.aria/rdc/TASKS.md`");
       if (role === "visualizer") {
         expect(generated[role]).toContain("under `.aria/scratch/`: planned work in its allocated plan execution directory");
         expect(generated[role]).toContain("`scratch_task`");
       }
-      if (permitted) {
-        expect(registered[role].scratch_task).toBe("allow");
-      } else {
-        expect(registered[role].scratch_task).toBeUndefined();
-      }
     }
   });
 });
 
-describe("plan premise recovery permissions", () => {
-  it("serializes effective native allow/deny rules for exactly the authorized roles", () => {
-    const authorizedRoles = new Set<RoleName>(PLAN_PREMISE_RECOVERY_ROLES);
-    expect(PLAN_PREMISE_RECOVERY_ROLES).toEqual([
-      "explorer",
-      "visualizer",
-      "implementer",
-      "reviewer",
-      "researcher",
-      "archivist",
-      "writer",
-      "scientist",
-    ]);
-    expect(ROLES.filter((role) => !authorizedRoles.has(role))).toEqual(["coder", "planner"]);
-
-    const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
-    for (const role of ROLES) {
-      const expected = authorizedRoles.has(role) ? "allow" : "deny";
-      const rule = getPermissionsForRole(role).find(({ action }) => action === PLAN_PREMISE_RECOVERY_TOOL_NAME);
-      expect(rule, `${role} has an explicit recovery rule`).toEqual({
-        action: PLAN_PREMISE_RECOVERY_TOOL_NAME,
-        resource: "*",
-        effect: expected,
-      });
-
-      const serializedRules = [
-        ...generated[role].matchAll(
-          /- action: "plan_premise_recovery"\n\s+resource: "\*"\n\s+effect: (allow|deny)/g,
-        ),
-      ];
-      expect(serializedRules, `${role} managed definition serializes one recovery rule`).toHaveLength(1);
-      expect(serializedRules[0]?.[1], `${role} serialized effect`).toBe(expected);
-
-      // OpenCode merges generated rules after its permissive builtin rules;
-      // the explicit rule must win without changing the default ask policy.
-      const merged = [...Agent.Info.default(Agent.ID.make(role)).permissions, ...getPermissionsForRole(role)];
-      expect(evaluatePermission(merged, PLAN_PREMISE_RECOVERY_TOOL_NAME, "*")).toBe(expected);
-      expect(evaluatePermission(merged, "future_tool", "*")).toBe("ask");
-    }
-  });
-});
 
 describe("T002 Visualizer Playwright permissions", () => {
   it("allows Playwright only for Visualizer without overriding unrelated permissions", () => {
@@ -253,17 +182,6 @@ describe("T002 Visualizer Playwright permissions", () => {
 });
 
 describe("T004 permission/model/delegation parity", () => {
-  it("authorizes all Plan mutations for Planner while Coder and Reviewer remain read-only", () => {
-    const mutations = ["create", "replace", "update", "add", "remediate", "approve", "cancel", "close"];
-    for (const action of mutations) {
-      expect(authorizePlan({ sessionID: "test", agent: "planner" }, action)).toBeNull();
-      expect(authorizePlan({ sessionID: "test", agent: "coder" }, action)).not.toBeNull();
-      expect(authorizePlan({ sessionID: "test", agent: "reviewer" }, action)).not.toBeNull();
-    }
-    for (const agent of ["coder", "planner", "reviewer"]) {
-      expect(authorizePlan({ sessionID: "test", agent }, "get")).toBeNull();
-    }
-  });
 
   it("never emits legacy V1 actions as V2 rules", () => {
     const roles: RoleName[] = [
@@ -340,89 +258,6 @@ describe("T004 permission/model/delegation parity", () => {
     expect(evaluatePermission(getPermissionsForRole("coder"), "shell", "git status")).toBe("deny");
   });
 
-  it("evaluates visualizer T003 exact edit/shell parity with implementer (shared helpers, shared decisions)", () => {
-    // T003: the visualizer reuses the canonical implementer edit + shell
-    // definitions directly (`protectedEditRules()` + `implementerShellRules()`,
-    // same order), so equivalent actions/resources evaluate IDENTICALLY.
-    // Increased authority is intentional: ordinary dev shell commands that
-    // previously prompted (`ask`) or were visualizer-denied now `allow`,
-    // matching the implementer. Workspace/scratch instructions and RDC
-    // approvals remain required but are NOT OS-level sandbox enforcement.
-    const rules = getPermissionsForRole("visualizer");
-    const impl = getPermissionsForRole("implementer");
-    // Edit allow with the shared `.env` ask gates preserved.
-    expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("allow");
-    expect(evaluatePermission(rules, "edit", ".env")).toBe("ask");
-    expect(evaluatePermission(rules, "edit", "a.env.bak")).toBe("ask");
-    expect(evaluatePermission(rules, "edit", ".env.example")).toBe("allow");
-    // Scoped-implementation navigation.
-    expect(evaluatePermission(rules, "glob", "src/**")).toBe("allow");
-    expect(evaluatePermission(rules, "grep", "pattern")).toBe("allow");
-    // Protected reads unchanged.
-    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
-    expect(evaluatePermission(rules, "read", ".env")).toBe("ask");
-    expect(evaluatePermission(rules, "read", ".env.example")).toBe("allow");
-    // Shell parity: ordinary dev commands allow (previously ask).
-    expect(evaluatePermission(rules, "shell", "git status")).toBe("allow");
-    expect(evaluatePermission(rules, "shell", "python -m pytest tests/")).toBe("allow");
-    expect(evaluatePermission(rules, "shell", "xvfb-run python screenshot.py")).toBe("allow");
-    expect(evaluatePermission(rules, "shell", "python scripts/capture.py")).toBe("allow");
-    expect(evaluatePermission(rules, "shell", "ls")).toBe("allow");
-    // Shared destructive/publishing denies prevail after the broad allow.
-    expect(evaluatePermission(rules, "shell", "rm foo")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "rm")).toBe("deny");
-    expect(evaluatePermission(rules, "shell", "npm publish foo")).toBe("deny");
-    // Former visualizer-only denies are superseded by parity: these now
-    // allow, exactly matching the implementer (increased authority).
-    for (const cmd of [
-      "curl https://example.com",
-      "wget https://example.com/pkg.tar.gz",
-      "npm install some-package",
-      "pip install some-package",
-      "pnpm add some-package",
-      "git push origin main",
-      "git reset --hard",
-    ]) {
-      expect(evaluatePermission(rules, "shell", cmd)).toBe(
-        evaluatePermission(impl, "shell", cmd),
-      );
-    }
-    expect(evaluatePermission(impl, "shell", "curl https://example.com")).toBe("allow");
-    expect(evaluatePermission(rules, "shell", "curl https://example.com")).toBe("allow");
-    // Broad shell allow is present (shared implementer helper); there is no
-    // visualizer-only `python *` allowlist resource and no blanket ask.
-    expect(rules.some((rule) => rule.action === "shell" && rule.effect === "allow")).toBe(true);
-    expect(rules.some((rule) => rule.action === "shell" && rule.resource === "python *")).toBe(false);
-    // Skill grant-only `aria-qt-ui` per T003 (replaces `rdc-visual-analysis`).
-    expect(evaluatePermission(rules, "skill", "aria-qt-ui")).toBe("allow");
-    expect(evaluatePermission(rules, "skill", "rdc-visual-analysis")).toBe("deny");
-    expect(evaluatePermission(rules, "skill", "unknown-skill")).toBe("deny");
-    // Coding MCP unchanged; everything else stays denied.
-    expect(evaluatePermission(rules, "engram_*", "*")).toBe("allow");
-    expect(evaluatePermission(rules, "context7_*", "*")).toBe("allow");
-    expect(evaluatePermission(rules, "codegraph_*", "*")).toBe("allow");
-    // Unrelated research MCP tools stay denied via the explicit `zotpilot_*`
-    // deny after the fallback: the whole family denies (mutation and read
-    // alike), while the intended coding-triple allows above still prevail.
-    expect(evaluatePermission(rules, "zotpilot_manage_tags", "*")).toBe("deny");
-    expect(evaluatePermission(rules, "zotpilot_search_papers", "*")).toBe("deny");
-    // `mcp_plan` matches no registered tool (`PLAN_TOOL_NAME` is "plan";
-    // verified zero references), so no rule is emitted for it: no action
-    // keys outside the supported set.
-    expect(rules.some((rule) => rule.action === "mcp_plan")).toBe(false);
-    // Plan-tool access is denied at execution by `authorizePlan`
-    // (`PLAN_ACTIONS_BY_ROLE` excludes visualizer), not by a Rule[]: `plan`
-    // stays a legacy-banned V2 action, so unmatched `plan` falls back to
-    // `ask` with `authorizePlan` as the denial backstop.
-    expect(evaluatePermission(rules, "plan", "*")).toBe("ask");
-    expect(authorizePlan({ sessionID: "test", agent: "visualizer" }, "get")).not.toBeNull();
-    expect(authorizePlan({ sessionID: "test", agent: "visualizer" }, "replace")).not.toBeNull();
-    expect(evaluatePermission(rules, "webfetch", "https://example.com")).toBe("deny");
-    expect(evaluatePermission(rules, "websearch", "query")).toBe("deny");
-    expect(evaluatePermission(rules, "question", "*")).toBe("deny");
-    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("allow");
-    expect(evaluatePermission(rules, "subagent", "explorer")).toBe("deny");
-  });
 
   it("evaluates coder delegation: 9 subagent allows, deny for others, ask fallback", () => {
     const rules = getPermissionsForRole("coder");
@@ -660,7 +495,6 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
   it("evaluates scoped read/edit/external allows with python allowlist ordering", () => {
     process.env.WIKI_DIR = "/tmp/aria-wiki";
     const rules = getArchivistScopedPermissions("/repo");
-    expect(evaluatePermission(rules, PLAN_PREMISE_RECOVERY_TOOL_NAME, "*")).toBe("allow");
     // V2 path semantics: external wiki scopes as canonical absolute paths
     // (repro `/tmp/aria-wiki/page.md` denied under worktree-relative scope).
     expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "ask" });
@@ -707,5 +541,80 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
     expect(evaluatePermission(rules, "edit", "wiki/page.md")).toBe("allow");
     expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
     expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("deny");
+  });
+});
+
+describe("visualizer T003 permission boundaries", () => {
+  it("evaluates visualizer T003 exact edit/shell parity with implementer (shared helpers, shared decisions)", () => {
+    // T003: the visualizer reuses the canonical implementer edit + shell
+    // definitions directly (`protectedEditRules()` + `implementerShellRules()`,
+    // same order), so equivalent actions/resources evaluate IDENTICALLY.
+    // Increased authority is intentional: ordinary dev shell commands that
+    // previously prompted (`ask`) or were visualizer-denied now `allow`,
+    // matching the implementer. Workspace/scratch instructions and RDC
+    // approvals remain required but are NOT OS-level sandbox enforcement.
+    const rules = getPermissionsForRole("visualizer");
+    const impl = getPermissionsForRole("implementer");
+    // Edit allow with the shared `.env` ask gates preserved.
+    expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("allow");
+    expect(evaluatePermission(rules, "edit", ".env")).toBe("ask");
+    expect(evaluatePermission(rules, "edit", "a.env.bak")).toBe("ask");
+    expect(evaluatePermission(rules, "edit", ".env.example")).toBe("allow");
+    // Scoped-implementation navigation.
+    expect(evaluatePermission(rules, "glob", "src/**")).toBe("allow");
+    expect(evaluatePermission(rules, "grep", "pattern")).toBe("allow");
+    // Protected reads unchanged.
+    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
+    expect(evaluatePermission(rules, "read", ".env")).toBe("ask");
+    expect(evaluatePermission(rules, "read", ".env.example")).toBe("allow");
+    // Shell parity: ordinary dev commands allow (previously ask).
+    expect(evaluatePermission(rules, "shell", "git status")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "python -m pytest tests/")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "xvfb-run python screenshot.py")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "python scripts/capture.py")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "ls")).toBe("allow");
+    // Shared destructive/publishing denies prevail after the broad allow.
+    expect(evaluatePermission(rules, "shell", "rm foo")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "rm")).toBe("deny");
+    expect(evaluatePermission(rules, "shell", "npm publish foo")).toBe("deny");
+    // Former visualizer-only denies are superseded by parity: these now
+    // allow, exactly matching the implementer (increased authority).
+    for (const cmd of [
+      "curl https://example.com",
+      "wget https://example.com/pkg.tar.gz",
+      "npm install some-package",
+      "pip install some-package",
+      "pnpm add some-package",
+      "git push origin main",
+      "git reset --hard",
+    ]) {
+      expect(evaluatePermission(rules, "shell", cmd)).toBe(
+        evaluatePermission(impl, "shell", cmd),
+      );
+    }
+    expect(evaluatePermission(impl, "shell", "curl https://example.com")).toBe("allow");
+    expect(evaluatePermission(rules, "shell", "curl https://example.com")).toBe("allow");
+    // Broad shell allow is present (shared implementer helper); there is no
+    // visualizer-only `python *` allowlist resource and no blanket ask.
+    expect(rules.some((rule) => rule.action === "shell" && rule.effect === "allow")).toBe(true);
+    expect(rules.some((rule) => rule.action === "shell" && rule.resource === "python *")).toBe(false);
+    // Skill grant-only `aria-qt-ui` per T003 (replaces `rdc-visual-analysis`).
+    expect(evaluatePermission(rules, "skill", "aria-qt-ui")).toBe("allow");
+    expect(evaluatePermission(rules, "skill", "rdc-visual-analysis")).toBe("deny");
+    expect(evaluatePermission(rules, "skill", "unknown-skill")).toBe("deny");
+    // Coding MCP unchanged; everything else stays denied.
+    expect(evaluatePermission(rules, "engram_*", "*")).toBe("allow");
+    expect(evaluatePermission(rules, "context7_*", "*")).toBe("allow");
+    expect(evaluatePermission(rules, "codegraph_*", "*")).toBe("allow");
+    // Unrelated research MCP tools stay denied via the explicit `zotpilot_*`
+    // deny after the fallback: the whole family denies (mutation and read
+    // alike), while the intended coding-triple allows above still prevail.
+    expect(evaluatePermission(rules, "zotpilot_manage_tags", "*")).toBe("deny");
+    expect(evaluatePermission(rules, "zotpilot_search_papers", "*")).toBe("deny");
+    expect(evaluatePermission(rules, "webfetch", "https://example.com")).toBe("deny");
+    expect(evaluatePermission(rules, "websearch", "query")).toBe("deny");
+    expect(evaluatePermission(rules, "question", "*")).toBe("deny");
+    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("allow");
+    expect(evaluatePermission(rules, "subagent", "explorer")).toBe("deny");
   });
 });

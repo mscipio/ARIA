@@ -14,7 +14,7 @@ Use this skill for independent post-implementation verification.
 
 When an approved persisted plan governs the implementation, preserve the full plan-based RDC review:
 
-1. Read the approved plan in full at the exact ID and canonical path supplied by the coder; never discover it by recency or assume a project-wide active plan. For explicitly identified legacy work, use `.aria/rdc/TASKS.md` and its existing Plan tool.
+1. Read the approved plan in full at the exact ID and canonical path supplied by the coder; never discover it by recency or assume a project-wide active plan.
 2. Enumerate every task and every explicit acceptance criterion.
 3. Verify each criterion against the actual changed code and relevant runtime/test evidence. For a Markdown plan, check that the approved contract has not been silently changed and that task IDs and prior evidence remain intact.
 4. Classify each criterion as:

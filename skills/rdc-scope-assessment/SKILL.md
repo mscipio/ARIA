@@ -12,7 +12,7 @@ Use this skill only when the reviewer is asked to classify an implementation fin
 
 ## Method
 
-1. Read the approved plan at the exact ID and canonical path supplied by the coder, plus the reviewer finding. Never discover a Markdown plan by recency or presumed project-wide active status. Use the legacy Plan tool only when the task explicitly identifies `.aria/rdc/TASKS.md`.
+1. Read the approved plan at the exact ID and canonical path supplied by the coder, plus the reviewer finding. Never discover a Markdown plan by recency or presumed project-wide active status.
 2. Identify the specific approved task, acceptance criterion, invariant, or stated scope boundary relevant to the finding.
 3. Classify the work as:
    - **WITHIN_SCOPE** when it is necessary to satisfy the already-approved behavior or correct an implementation defect inside that scope (missing `.aria/scratch/` placement alone is WITHIN_SCOPE remediation, not a scope change).

@@ -5,7 +5,6 @@ import { parse } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { isFilesystemRoot } from "../src/paths.js";
-import * as planTool from "../src/plan-tool.js";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (relative: string): string => readFileSync(join(REPO_ROOT, relative), "utf8");
@@ -46,9 +45,8 @@ describe("amendment reopening and precedence contract (Markdown plans)", () => {
 });
 
 describe("shared isFilesystemRoot utility", () => {
-  it("lives in src/paths.ts and is no longer exported by the legacy plan tool", () => {
+  it("lives in src/paths.ts", () => {
     expect(isFilesystemRoot(parse(resolve("/tmp/aria-amendment-root")).root)).toBe(true);
     expect(isFilesystemRoot(resolve("/tmp/aria-amendment-root"))).toBe(false);
-    expect("isFilesystemRoot" in planTool).toBe(false);
   });
 });

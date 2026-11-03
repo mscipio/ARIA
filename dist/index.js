@@ -1,7 +1,6 @@
 import { Plugin } from "@opencode/plugin";
-import { createPlanTool, resolvePlanRootFromLocation } from "./plan-tool.js";
-import { createPlanPremiseRecoveryTool } from "./plan-premise-recovery-tool.js";
 import { createScratchTaskTool } from "./scratch-tool.js";
+import { createPlanIdTool } from "./plan-id-tool.js";
 import { createGitReadTool } from "./git-tool.js";
 import { createShipTool } from "./ship.js";
 import { createReleaseTool } from "./release.js";
@@ -10,7 +9,7 @@ import { ROLES, resolveAriaConfig } from "./overrides.js";
 import { applyArchivistRuntimeTransform, applyProjectModelTransforms, readProjectAgentModelOverrides, } from "./project-overrides.js";
 /**
  * ARIA native V2 plugin foundation (T002) with project model overlays (T005),
- * the native RDC plan tool (T006), and location-independent archivist runtime
+ * location-independent archivist runtime
  * binding (v1.0.14 T006).
  *
  * T005 production wiring: the real plugin setup path resolves the
@@ -32,11 +31,10 @@ import { applyArchivistRuntimeTransform, applyProjectModelTransforms, readProjec
  * `WIKI_DIR` is set). No files are written; other roles are untouched except
  * via the T005 overlay above.
  *
-  * T006/T021/T007/T002/T003 production wiring: native plan, task-scratch,
-  * Git-read, scoped ship/release, and one-shot plan-premise recovery tools are registered via
+  * Production wiring: native plan-id, task-scratch, Git-read, and scoped ship/release
+  * tools are registered via
  * `ctx.tool.transform(editor => editor.add(...))` — no command workaround or
- * MCP sidecar. Plan persistence and recovery use the setup-time `ctx.location`
- * root; scratch uses that location as well. Missing location evidence never
+ * MCP sidecar. Scratch allocation uses the setup-time `ctx.location` project directory. Missing location evidence never
  * falls back to `process.cwd()`.
  */
 function projectDirectoryFromContext(ctx) {
@@ -64,22 +62,14 @@ const aria = Plugin.define({
         // overlays, including when no worktree exists. Each tool validates its
         // own setup-time location at execution (scratch allocation fails closed).
         // Guarded for location/tool-less hosts (e.g. smoke `setup({})`).
-        const location = ctx?.location;
-        const planRoot = resolvePlanRootFromLocation(location);
         const toolDomain = ctx?.tool;
         if (typeof toolDomain?.transform === "function") {
             await toolDomain.transform((editor) => {
-                editor.add(createPlanTool(planRoot));
                 editor.add(createScratchTaskTool(worktree));
+                editor.add(createPlanIdTool());
                 editor.add(createGitReadTool(worktree));
                 editor.add(createShipTool(getPackageRoot(), worktree));
                 editor.add(createReleaseTool(getPackageRoot(), worktree));
-                // Native @opencode/plugin session APIs are runtime-owned. Keep the
-                // session domain in this setup closure and expose recovery only when
-                // the host supplies it (real V2 plugin hosts always do).
-                if (ctx.session) {
-                    editor.add(createPlanPremiseRecoveryTool(planRoot, ctx.session));
-                }
             });
         }
         // Project/location evidence (@opencode/plugin@2.0.23

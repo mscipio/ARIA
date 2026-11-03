@@ -12,7 +12,7 @@ import { type ModelDiscoverFn } from "./model-config.js";
  * status, mismatches) — it never installs, upgrades, or syncs.
  *
  * Workspace execution policy (canonical `src/scratch.ts`): doctor writes
- * nothing, including under `scratch/` — read-only in every mode.
+ * nothing, including under `.aria/scratch/` — read-only in every mode.
  */
 export type DoctorFindingSeverity = "PASS" | "WARN" | "FAIL" | "SKIP";
 /**
@@ -90,7 +90,7 @@ export interface DoctorOptions {
  *   (id/name); used. `ctx.skill.transform` stays unused (T007 single
  *   source is config discovery).
  * - `tool: ToolDomain` — `list()` returns the effective post-transform
- *   tools (plugin-local); used for the plan-tool-once check. There is no
+ *   tools (plugin-local); used for runtime tool inventory checks. There is no
  *   `tool` HTTP client API, so this list is runtime-only.
  * - `session: SessionDomain extends SessionApi` — `list()` observes live
  *   sessions; informational only (sessions carry no ARIA registration

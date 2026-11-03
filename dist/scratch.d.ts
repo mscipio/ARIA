@@ -1,138 +1,74 @@
 /**
- * T002 — Canonical workspace/scratch policy.
+ * ARIA-controlled generated output lives under `<canonical-worktree>/.aria/scratch/`
+ * in exactly two categories:
  *
- * All ARIA-controlled generated output (task working state, test fixtures
- * and results, logs, captures, caches, builds, environments, runtime state,
- * experiments) lives under `<canonical-worktree>/scratch/`, never under the
- * ambient temp dir, never under `/home/scratch` staging, and never under a
- * caller-global location. The scratch root is derived from the verified
- * canonical project worktree and every path below it is fail-closed through
- * the `src/paths.ts` guards (`canonicalWorktree`, `ensureSafeDirectory`,
- * `safeProjectFile`, `assertContained`, `verifySafeParent`) plus the
- * filesystem-root sentinel shared with the plan tool (`isFilesystemRoot`):
- * `..` traversal, symlink escapes, filesystem roots, and ambiguous
- * (empty/whitespace) roots are rejected before anything is created.
+ * - `<plan-id>/<task-id>/<timestamp>/` — planned work. The plan ID is a lowercase
+ *   UUIDv4 and the task ID is `T` plus three digits, both validated by format only;
+ *   the plan file is never read.
+ * - `unplanned/<timestamp>-<description>/` — unplanned work and independent tool
+ *   output (for example Playwright MCP, described as `playwright-mcp`).
  *
- * What this module never does:
- * - No process-wide `HOME`/`XDG_*`/`TMPDIR`/`ENGRAM_DATA_DIR` mutation. The
- *   task scope below returns a per-call `env` record only, merged by the
- *   caller into a single `ExecutorOptions.env` (the T011 precedent). Global
- *   config resolution (`~/.config/opencode`, Engram data) is preserved
- *   byte-identical.
- * - No `TMPDIR`-via-executor-env steering. `node:os.tmpdir()` and
- *   `mkdtemp()` read the ambient process environment at call time, so a
- *   per-call env merge does not steer them (TMPDIR-via-executor-env is NOT
- *   proven safe). Callers route temp output through the explicit `tmp`
- *   directory returned here instead.
- * - No migration or deletion of historical artifacts outside `scratch/`.
- *   Pre-existing repo clutter stays untouched; only needed `scratch/`
- *   subdirectories are created.
-  * - Scratch confinement applies only to transient/generated artifacts (logs,
-  *   fixtures, temporary outputs, verification evidence, etc.), not intentional
-  *   edits to authorized repository code, tests, configuration, or documentation.
-  *   Scratch artifacts are never staged. `ensureScratchGitignore` never runs
-  *   `git add`/`git rm` and never deletes already-tracked `scratch/` paths;
-  *   tracked content and the index are left byte-identical. Staging explicitly
-  *   approved source changes is permitted only during human-authorized Git
-  *   operations; editing files does not itself authorize staging.
+ * Timestamps are local `YYYYMMDD-HHMMSS`. Each allocation is created with an atomic
+ * non-recursive `mkdir`; a collision appends a random hex suffix and retries, so an
+ * existing execution directory is never reused or overwritten. Only the execution
+ * directory is created. Subdirectories and files are created on demand by
+ * `writeExecutionFileAtomically`, which creates parents only for the file it writes.
  *
- * Explicit exceptions (not promised): tools that do not accept explicit
- * output paths or per-call env — hardcoded `~/.cache` writers, absolute
- * `/tmp` writers, and call sites that resolve `os.tmpdir()` ambiently at
- * call time (e.g. the Engram download path in `src/deps.ts`, which cleans up
- * with `finally rm -rf`) — remain ambient until those call sites accept
- * explicit directories. This module provides no OS sandbox (no chroot,
- * mount, or user namespace); containment is path-level fail-closed checks
- * plus explicit-path routing for cooperative operations.
+ * Guarantees (enforced by the `src/paths.ts` guards): traversal, absolute paths, and
+ * symlinks anywhere in the path are rejected; filesystem-root and empty worktrees are
+ * rejected; identifiers are validated before any directory is created; a path is
+ * accepted as an execution directory only if it has exactly one of the two shapes,
+ * so namespace roots and parent directories are rejected. Historical `./scratch/`
+ * content is never moved, deleted, or staged, and no `git add` or `git rm` runs here.
  *
- * Approvals/workflow note: workspace/scratch instructions and RDC approvals
- * remain required but are not OS-sandbox enforcement (the Unix account can
- * still write outside those locations). Increased Visualizer authority under
- * T003 edit/shell parity changes nothing here.
+ * Not an OS sandbox: the Unix account can still write outside the project, and
+ * cooperative tools must use the directories returned here.
  */
-export declare const SCRATCH_DIR_NAME = "scratch";
-export declare const SCRATCH_GITIGNORE_RULE = "/scratch/";
-export declare const SCRATCH_SUBDIRS: readonly ["tmp", "tests/fixtures", "tests/results", "logs", "captures/screenshots", "captures/videos", "caches/npm", "caches/pip", "caches/python", "builds", "environments", "runtime", "experiments"];
-export type ScratchSubdir = (typeof SCRATCH_SUBDIRS)[number];
-export type ScratchTaskScope = {
+/** Scratch location relative to the canonical worktree. */
+export declare const SCRATCH_DIR_NAME = ".aria/scratch";
+/** The single managed ignore rule for scratch. */
+export declare const SCRATCH_GITIGNORE_RULE = "/.aria/scratch/";
+/** Namespace for unplanned work and independent tool output. */
+export declare const UNPLANNED_NAMESPACE = "unplanned";
+/** Lowercase RFC 4122 UUIDv4, the immutable Markdown plan identity. */
+export declare const PLAN_ID_PATTERN: RegExp;
+/** Plan task identifier as written in Markdown plans (`T001`). */
+export declare const PLAN_TASK_ID_PATTERN: RegExp;
+export type ScratchExecutionKind = "plan" | "unplanned";
+export type ScratchExecution = {
+    kind: ScratchExecutionKind;
     root: string;
     scratch: string;
-    taskDir: string;
-    dirs: {
-        tmp: string;
-        testFixtures: string;
-        testResults: string;
-        logs: string;
-        screenshots: string;
-        videos: string;
-        npmCache: string;
-        pipCache: string;
-        pythonCache: string;
-        builds: string;
-        environments: string;
-        runtime: string;
-        experiments: string;
-    };
-    /**
-     * Per-call environment additions only. Merge into a single
-     * `ExecutorOptions.env`; never assign to `process.env`. Deliberately
-     * carries no `HOME`, `XDG_*`, `ENGRAM_*`, or `TMPDIR` entries.
-     */
-    env: Record<string, string>;
+    executionDir: string;
 };
+/** Local timestamp `YYYYMMDD-HHMMSS` for execution directory names. */
+export declare function formatScratchTimestamp(date?: Date): string;
 /** Resolve and verify the canonical scratch root for a worktree (fail closed). */
 export declare function resolveScratchRoot(worktree: string): Promise<{
     root: string;
     scratch: string;
 }>;
-/** Create the scratch root plus the requested subdirectories (defaults to the full layout). */
-export declare function ensureScratchDirs(worktree: string, subdirs?: readonly string[]): Promise<{
-    root: string;
-    scratch: string;
-}>;
+/** Validate a plan ID (lowercase UUIDv4) before it becomes a path component. */
+export declare function validatePlanId(planId: string): string;
+/** Validate a plan task ID (`T001`) before it becomes a path component. */
+export declare function validatePlanTaskId(taskId: string): string;
+/** Allocate `.aria/scratch/<plan-id>/<task-id>/<timestamp>/` for planned work. */
+export declare function allocatePlanExecutionDir(worktree: string, planId: string, taskId: string): Promise<string>;
+/** Allocate `.aria/scratch/unplanned/<timestamp>-<description>/` for unplanned work and tool output. */
+export declare function allocateUnplannedExecutionDir(worktree: string, description: string): Promise<string>;
 /**
- * Create a concurrent-safe unique directory under `scratch/<scope>/` via
- * `mkdtemp` (atomic unique naming; sibling `mkdir` races resolve through
- * the `ensureSafeDirectory` EEXIST path). The scope parent stays inside the
- * verified scratch root; symlink escapes fail closed.
+ * Verify that `executionDir` is an existing execution directory: exactly
+ * `<plan-id>/<task-id>/<timestamp>` or `unplanned/<timestamp>-<description>`
+ * under the scratch root, with no symlinks on the path. Namespace roots, parent
+ * directories, and anything outside `.aria/scratch/` are rejected.
  */
-export declare function createUniqueScratchDir(worktree: string, scope: string, prefix: string): Promise<string>;
-/** Create a timestamped, human-readable scratch directory for one output run. */
-export declare function createScratchRunDir(worktree: string, title: string): Promise<string>;
-/** Per-day deterministic directory: `<scratch>/<local date>/<task name>/`; a new local day intentionally gets a new path. */
-export declare function createTaskScratch(worktree: string, taskId: string, taskName?: string): Promise<string>;
-/** Concurrent-safe unique run directory under the per-task directory. */
-export declare function createTaskRunDir(worktree: string, taskId: string, prefix?: string, taskName?: string): Promise<string>;
+export declare function resolveExecutionDir(worktree: string, executionDir: string): Promise<ScratchExecution>;
 /**
- * Task-scoped directories plus per-call env for ARIA-controlled operations.
- * Route caches, logs, captures, builds, and test outputs through `dirs`
- * (or explicit CLI flags pointed at them); merge `env` per call via
- * `ExecutorOptions.env`. Nothing here touches `process.env`, `HOME`,
- * `XDG_*`, or global config, and atomic sibling-temp + `withFileLock`
- * semantics are preserved by `writeScratchFileAtomically` for file writes.
- *
- * Non-collision layout: every task-owned output (`tmp`, `tests/fixtures`,
- * `tests/results`, `logs`, `captures/*`, `builds`, `environments`,
- * `runtime`, `experiments`) lives beneath the per-task directory
- * (`<scratch>/<taskId>/`), so two distinct task scopes return disjoint
- * task-owned paths and cooperative callers following `ARIA_LOG_DIR`/
- * `ARIA_CAPTURE_DIR`/`ARIA_BUILD_DIR` (and the other `ARIA_*` task env
- * values, which all point beneath `taskDir`) cannot overwrite another
- * task's same-named output. Deliberately shared across tasks (content-
- * addressed caches safe for reuse): `caches/npm`, `caches/pip`,
- * `caches/python` under the scratch root, surfaced as `NPM_CONFIG_CACHE`,
- * `PIP_CACHE_DIR`, and `PYTHONPYCACHEPREFIX`.
+ * Atomically write one file inside an existing execution directory. Parents are
+ * created on demand, only for this file; the write is sibling-temp + rename under
+ * `withFileLock`. The file path must stay strictly inside the execution directory.
  */
-export declare function scratchTaskScope(worktree: string, taskId: string, taskName?: string): Promise<ScratchTaskScope>;
-/**
- * Atomically write a file under `scratch/` (path relative to the scratch
- * root, e.g. `logs/run.log`): sibling-temp + `verifySafeParent` + rename,
- * serialized with `withFileLock` like the plan persistence. Paths escaping
- * `scratch/` (absolute, `..`) fail closed; the sibling temp is contained
- * iff the target is contained. Historical files outside `scratch/` are
- * never touched.
- */
-export declare function writeScratchFileAtomically(worktree: string, scratchRelativePath: string, content: string | Uint8Array, options?: {
+export declare function writeExecutionFileAtomically(worktree: string, executionDir: string, relativeFile: string, content: string | Uint8Array, options?: {
     signal?: AbortSignal;
 }): Promise<string>;
 /**

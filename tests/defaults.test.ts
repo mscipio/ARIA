@@ -148,8 +148,8 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("native V2 `subagent` tool");
     expect(prompt).toContain("never use a legacy `task` tool");
     expect(prompt).toContain("Steps M1–M11 are the only Markdown-plan path");
-    expect(prompt).toContain("Legacy Plan-tool workflow");
-    expect(prompt).toContain("STOP autonomous remediation");
+    expect(prompt).toContain("M11. Completion");
+    expect(prompt).toContain("M10. Remediation by progress");
     expect(prompt).not.toContain("native `task`");
     expect(prompt).toContain("task `archivist`");
     expect(prompt).not.toContain("Writing routing:");
@@ -202,12 +202,12 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Do not capture screenshots automatically");
   });
 
-  it("planner prompt keeps Markdown and legacy plan authority boundaries and loads planning skills", () => {
+  it("planner prompt keeps Markdown plan authority boundaries and loads planning skills", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.planner.promptText;
     expect(prompt).toContain("load `rdc-implementation-planning`");
     expect(prompt).toContain("Load `rdc-testing-discipline`");
     expect(prompt).toContain("only ARIA agent authorized to create or modify Markdown plan files under `.aria/plans/`");
-    expect(prompt).toContain("Explicitly identified legacy plans");
+    expect(prompt).toContain("Reopening: when an approved amendment adds pending tasks");
     expect(prompt).toContain("the approved contract is protected");
     expect(prompt).toContain("Record every material change as an amendment");
     expect(prompt).toContain("Proposed and rejected amendments grant no authorization");
@@ -234,7 +234,7 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Load `rdc-adversarial-review`");
     expect(prompt).toContain("only when the coder explicitly tasks adversarial review");
     expect(prompt).toContain("For a new Markdown plan, read only the exact `.aria/plans/` path and plan ID supplied by the coder");
-    expect(prompt).toContain("the only allowed Plan action is `get`");
+    expect(prompt).toContain("Conflict check before approval");
     expect(prompt).toContain("REVISION_REQUIRED");
     expect(prompt).toContain("SCOPE_CHANGE");
     expect(prompt).toContain("WITHIN_SCOPE");

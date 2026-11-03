@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { dirname, isAbsolute, resolve, sep, win32 } from "node:path";
 import { assertContained, safeProjectFile } from "./paths.js";
-import { isFilesystemRoot } from "./plan-tool.js";
+import { isFilesystemRoot } from "./paths.js";
 import { resolveGitProjectDirectory, sanitizedGitEnv } from "./git-tool.js";
 export const SHIP_TOOL_NAME = "aria_ship";
 const MAX_PATHS = 1000;

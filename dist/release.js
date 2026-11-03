@@ -315,7 +315,7 @@ function checkCleanHead(root) {
     }
     if (git(root, ["ls-files", "-u", "-z"]).length > 0)
         throw new Error("Release is unavailable with unresolved index conflicts");
-    const scratchPath = join(root, "scratch");
+    const scratchPath = join(root, ".aria", "scratch");
     let canonicalScratch;
     try {
         if (lstatSync(scratchPath).isDirectory() && realpathSync(scratchPath) === resolve(scratchPath))
@@ -334,7 +334,7 @@ function checkCleanHead(root) {
         return !rel || rel === ".." || rel.startsWith(`..${sep}`) || resolve(absolute) !== absolute;
     });
     if (dirty)
-        throw new Error("Release requires a clean worktree and index; tracked changes are never exempt, and only untracked files under canonical scratch are ignored");
+        throw new Error("Release requires a clean worktree and index; tracked changes are never exempt, and only untracked files under canonical .aria/scratch/ are ignored");
     const head = git(root, ["rev-parse", "--verify", "HEAD"]).trim();
     return { branch, head };
 }
