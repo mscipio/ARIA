@@ -27,12 +27,13 @@ import { createUniqueScratchDir } from "../dist/scratch.js";
 //
 // Usage:
 //   node scripts/verify-release-tag.mjs <tag> [--expect-sha <sha>]
-//     [--spec <npm-spec>] [--skip-remote-check] [--keep]
+//     [--spec <npm-spec>] [--remote-url <git-url>] [--skip-remote-check] [--keep]
 //
 // `<tag>` is the immutable release tag (e.g. v1.1.1). The install spec
 // defaults to `github:mscipio/ARIA#<tag>`; `--spec` overrides it for
 // isolated testing (e.g. a tarball packed from the tagged commit).
-// `--skip-remote-check` skips the `git ls-remote origin` comparison for
+// `--remote-url` selects the exact effective push destination for readback;
+// by default the historical `origin` behavior is retained. `--skip-remote-check` skips the `git ls-remote` comparison for
 // offline/disposable-tag testing. `--keep` preserves the sandbox on success.
 
 const repoRoot = process.cwd();
@@ -55,7 +56,7 @@ function stage(label, fn) {
 const argv = process.argv.slice(2);
 const tag = argv.find((arg) => !arg.startsWith("--"));
 if (!tag) {
-  fail("usage: node scripts/verify-release-tag.mjs <tag> [--expect-sha <sha>] [--spec <npm-spec>] [--skip-remote-check] [--keep]");
+  fail("usage: node scripts/verify-release-tag.mjs <tag> [--expect-sha <sha>] [--spec <npm-spec>] [--remote-url <git-url>] [--skip-remote-check] [--keep]");
 }
 function flagValue(name) {
   const index = argv.indexOf(name);
@@ -63,6 +64,7 @@ function flagValue(name) {
 }
 const expectSha = flagValue("--expect-sha");
 const specOverride = flagValue("--spec");
+const remoteUrl = flagValue("--remote-url") ?? "origin";
 const skipRemoteCheck = argv.includes("--skip-remote-check");
 const keepSandbox = argv.includes("--keep");
 const installSpec = specOverride ?? `github:mscipio/ARIA#${tag}`;
@@ -70,6 +72,7 @@ const installSpec = specOverride ?? `github:mscipio/ARIA#${tag}`;
 if (expectSha !== undefined && !/^[0-9a-f]{4,40}$/i.test(expectSha)) {
   fail(`--expect-sha must be a hex commit SHA, got ${JSON.stringify(expectSha)}`);
 }
+if (!remoteUrl || remoteUrl.startsWith("--")) fail("--remote-url requires one destination URL/name");
 
 let tagSha = "";
 let expectedVersion = "";
@@ -139,9 +142,9 @@ if (!skipRemoteCheck) {
       // Query both the tag ref and its peeled commit: for annotated tags
       // the direct ref is the tag-object SHA while `^{}` is the commit;
       // lightweight tags have no `^{}` line (the direct ref is the commit).
-      output = capture("git", ["ls-remote", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`]);
-    } catch (error) {
-      fail(`git ls-remote origin failed: ${error instanceof Error ? error.message : String(error)}`);
+      output = capture("git", ["ls-remote", remoteUrl, `refs/tags/${tag}`, `refs/tags/${tag}^{}`]);
+    } catch {
+      fail("configured release tag destination query failed (network/authentication must be checked before retrying)");
     }
     const remoteRefs = new Map();
     for (const entry of output.split("\n")) {
@@ -157,7 +160,7 @@ if (!skipRemoteCheck) {
     if (remoteCommit.toLowerCase() !== tagSha.toLowerCase()) {
       fail(`remote tag drift: origin refs/tags/${tag} peels to ${remoteCommit}, local is ${tagSha}`);
     }
-    console.log(`verify-release-tag: origin refs/tags/${tag} peels to ${tagSha}`);
+    console.log(`verify-release-tag: configured destination refs/tags/${tag} peels to ${tagSha}`);
   });
 } else {
   console.log("verify-release-tag: [stage] 2/6 remote tag identity SKIPPED (--skip-remote-check)");

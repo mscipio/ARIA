@@ -49,21 +49,23 @@ describe("native task scratch tool", () => {
     const tools = await registerTools({ project: { directory: root } });
     const tool = tools.get("scratch_task");
 
-    expect([...tools.keys()]).toEqual(["plan", "scratch_task"]);
+    expect([...tools.keys()]).toEqual(expect.arrayContaining(["plan", "scratch_task"]));
     expect(tool?.input).toMatchObject({
       type: "object",
-      required: ["taskId", "taskName"],
+      required: ["taskName"],
     });
     expect(tool).toBeDefined();
     const result = await tool!.execute({ taskId: "T021", taskName: "Native Scratch Tool" });
-    expect(result.metadata.title).toBe("Allocate task scratch · Native Scratch Tool");
+    expect(result.metadata.title).toBe("Allocate scratch · Native Scratch Tool");
     const payload = JSON.parse(result.content) as {
       scratch: string;
       taskDir: string;
       dirs: Record<string, string>;
     };
-    const expectedDate = new Date().toISOString().slice(0, 10);
-    expect(payload.taskDir).toBe(join(root, "scratch", expectedDate, "native-scratch-tool"));
+    const now = new Date();
+    const pad = (value: number): string => String(value).padStart(2, "0");
+    const expectedDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    expect(relative(payload.scratch, payload.taskDir)).toMatch(new RegExp(`^${expectedDate}/\\d{6}-native-scratch-tool(?:-[a-f0-9]{6})?$`));
     expect(payload.scratch).toBe(join(root, "scratch"));
     expect(payload.dirs.tmp).toBe(join(payload.taskDir, "tmp"));
     expect(payload.dirs.testFixtures).toBe(join(payload.taskDir, "tests", "fixtures"));
@@ -73,12 +75,12 @@ describe("native task scratch tool", () => {
       expect(relativePath.length).toBeGreaterThan(0);
       expect(relativePath).not.toBe("..");
       expect(relativePath.startsWith(`..${sep}`)).toBe(false);
-      expect((await lstat(path)).isDirectory()).toBe(true);
+      await expect(lstat(path)).rejects.toMatchObject({ code: "ENOENT" });
     }
 
     const sanitizedName = await tool!.execute({ taskId: "T022", taskName: "../../safe task" });
     const sanitizedPayload = JSON.parse(sanitizedName.content) as { taskDir: string; scratch: string };
-    expect(sanitizedPayload.taskDir).toBe(join(sanitizedPayload.scratch, expectedDate, "safe-task"));
+    expect(relative(sanitizedPayload.scratch, sanitizedPayload.taskDir)).toMatch(new RegExp(`^${expectedDate}/\\d{6}-safe-task(?:-\\d+)?$`));
     expect(relative(sanitizedPayload.scratch, sanitizedPayload.taskDir).startsWith(`..${sep}`)).toBe(false);
   });
 
@@ -93,9 +95,8 @@ describe("native task scratch tool", () => {
 
     const root = await fixtureWorktree("scratch-tool-invalid-input");
     const tool = (await registerTools({ project: { directory: root } })).get("scratch_task")!;
-    const unsafeId = await tool.execute({ taskId: "../escape", taskName: "Invalid task ID" });
-    expect(unsafeId.metadata.title).toBe("Error");
-    expect(unsafeId.content).toContain("safe path component");
+    const ignoredTaskId = await tool.execute({ taskId: "../escape", taskName: "Task-independent" });
+    expect(ignoredTaskId.metadata.title).toContain("Task-independent");
     const unsafeName = await tool.execute({ taskId: "T021", taskName: "Bad\u0000Name" });
     expect(unsafeName.metadata.title).toBe("Error");
     expect(unsafeName.content).toContain("without control characters");
@@ -116,22 +117,19 @@ describe("native task scratch tool", () => {
 
     const unicodeName = "Préparation 東京 🚀";
     const unicodeResult = await tool.execute({ taskId: "T022", taskName: unicodeName });
-    expect(unicodeResult.metadata.title).toBe(`Allocate task scratch · ${unicodeName}`);
+    expect(unicodeResult.metadata.title).toBe(`Allocate scratch · ${unicodeName}`);
     expect(JSON.parse(unicodeResult.content)).toMatchObject({ scratch: join(root, "scratch") });
   });
 
-  it("instructs shared and artifact-producing roles to allocate before creating outputs", async () => {
+  it("keeps prompts on the current worktree-local scratch policy", async () => {
     const prompts = await Promise.all(
       ["coder", "implementer", "visualizer", "reviewer"].map((role) =>
         readFile(join(REPO_ROOT, "defaults", "prompts", `${role}.md`), "utf8"),
       ),
     );
-    for (const prompt of prompts) {
-      expect(prompt).toContain("scratch_task");
-      expect(prompt).toContain("taskId");
-      expect(prompt).toContain("taskName");
-      expect(prompt).toContain("taskDir");
-      expect(prompt).toContain("process.cwd()");
-    }
+    expect(prompts[0]?.toLowerCase()).toContain("no taskid, approved plan, or `scratch_task` allocation is required");
+    expect(prompts[1]?.toLowerCase()).toContain("no taskid, approved plan, or `scratch_task` allocation is required");
+    expect(prompts[2]).toContain("./scratch/YYYY-MM-DD/HHMMSS-title/");
+    expect(prompts[3]?.toLowerCase()).toContain("no taskid, approved plan, or `scratch_task` allocation is required");
   });
 });

@@ -13,7 +13,7 @@ Role boundaries:
 - Select one best plan supported by evidence; do not present competing plans.
 - For a genuinely new objective, retrieve relevant Engram context before `create` when available. Do not repeat ceremonial retrieval for continuation of an active plan.
 - `.aria/rdc/TASKS.md` and the Plan tool are authoritative for active scope, approval, status, and revision.
-- Workspace execution policy (canonical `src/scratch.ts` via `src/paths.ts`): state per-task `./scratch/` placement for ARIA-controlled outputs in each task; keep doctor read-only, setup/lifecycle boundaries, and TASKS.md/Plan authority unchanged.
+- Workspace execution policy: state that transient/generated artifacts go under unique worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` directories, without requiring taskId, an approved Plan, or `scratch_task`. Preserve source edit/staging and persistent-data boundaries; keep doctor read-only, setup/lifecycle boundaries, and TASKS.md/Plan authority unchanged.
 - Define verification by the behavior to demonstrate: prefer actual implementation/application execution in the existing environment with representative inputs. Do not prescribe synthetic/mock/toy/harness/isolated/dedicated scripts without concrete justification; never use dangerous production data. State essential pre-acceptance syntax/type/build and safe representative real-smoke evidence, plus essential risk checks when relevant; avoid comprehensive suites and exhaustive tests. Ordinary focused regression protection follows explicit human functional acceptance, while essential security/destructive/permissions/data-integrity checks remain pre-acceptance.
 
 After `create` returns, report only:

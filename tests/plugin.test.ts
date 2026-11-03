@@ -430,7 +430,7 @@ describe("ariaPlugin", () => {
     expect(wikiBash).not.toHaveProperty("python -c *");
     expect(wikiBash).not.toHaveProperty("python *run.py*");
     expect(wikiBash).not.toHaveProperty("python *");
-    // external_directory, read, edit, glob, grep, list are scoped or denied depending on WIKI_DIR
+    // Archivist can read external paths; edits stay limited to the wiki.
     if (process.env.WIKI_DIR) {
       const wikiDir = process.env.WIKI_DIR;
       const pipelineRoot = join(getPackageRoot(), "wiki-pipeline");
@@ -439,9 +439,14 @@ describe("ariaPlugin", () => {
       const pipelineRelative = relative(root, pipelineRoot).replaceAll("\\", "/");
 
       expect(wikiPerm).toMatchObject({
-        read: { "*": "deny" },
+        read: {
+          "*": "allow",
+          "*.env": "ask",
+          "*.env.*": "ask",
+          "*.env.example": "allow",
+        },
         edit: { "*": "deny" },
-        external_directory: { "*": "deny" },
+        external_directory: { "*": "allow" },
       });
 
       // read/edit permissions are relative to the OpenCode worktree
@@ -449,19 +454,17 @@ describe("ariaPlugin", () => {
       expect(wikiPerm.read).toHaveProperty(`${wikiRelative}/**`, "allow");
       expect(wikiPerm.read).toHaveProperty(pipelineRelative, "allow");
       expect(wikiPerm.read).toHaveProperty(`${pipelineRelative}/**`, "allow");
+      expect(wikiPerm.read).toMatchObject({
+        "*.env": "ask",
+        "*.env.*": "ask",
+        "*.env.example": "allow",
+      });
 
       expect(wikiPerm.edit).toHaveProperty(wikiRelative, "allow");
       expect(wikiPerm.edit).toHaveProperty(`${wikiRelative}/**`, "allow");
 
-      // external_directory permissions remain absolute
-      expect(wikiPerm.external_directory).toHaveProperty(
-        `${wikiDir}/**`,
-        "allow",
-      );
-      expect(wikiPerm.external_directory).toHaveProperty(
-        `${pipelineRoot}/**`,
-        "allow",
-      );
+      // external_directory permissions remain absolute and broad for reads.
+      expect(wikiPerm.external_directory).toEqual({ "*": "allow" });
 
       // discovery tools stay disabled
       expect(wikiPerm.glob).toBe("deny");
@@ -472,10 +475,15 @@ describe("ariaPlugin", () => {
         glob: "deny",
         grep: "deny",
         list: "deny",
-        read: { "*": "deny" },
+        read: {
+          "*": "allow",
+          "*.env": "ask",
+          "*.env.*": "ask",
+          "*.env.example": "allow",
+        },
         edit: { "*": "deny" },
         bash: { "*": "deny" },
-        external_directory: "deny",
+        external_directory: { "*": "allow" },
       });
     }
   });
@@ -489,11 +497,11 @@ describe("ariaPlugin", () => {
     const researcher = permission("researcher");
 
     // Research-only base: read/navigation and web evidence allowed; every
-    // mutation, delegation, plan, and external-directory surface denied.
+    // mutation, delegation, and plan surface denied; external reads allowed.
     expect(researcher.edit).toBe("deny");
     expect(researcher.task).toEqual({ "*": "deny", scientist: "allow" });
     expect(researcher.plan).toBe("deny");
-    expect(researcher.external_directory).toBe("deny");
+    expect(researcher.external_directory).toBe("allow");
     expect(researcher.todowrite).toBe("deny");
     expect(researcher.webfetch).toBe("allow");
     expect(researcher.websearch).toBe("allow");
@@ -597,7 +605,7 @@ describe("ariaPlugin", () => {
       edit: "deny",
       bash: "deny",
       plan: "deny",
-      external_directory: "deny",
+      external_directory: "allow",
       todowrite: "deny",
       question: "deny",
       webfetch: "deny",

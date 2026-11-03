@@ -162,6 +162,16 @@ describe("ARIA overrides", () => {
       }
     });
 
+    it("injects universal local scratch guidance without task allocation prerequisites", () => {
+      const config = resolveAriaConfig(tmpdir());
+      for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
+        const prompt = config.roles[role].promptText;
+        expect(prompt).toContain("./scratch/YYYY-MM-DD/HHMMSS-title/");
+        expect(prompt).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
+        expect(prompt).toContain("Never stage scratch artifacts");
+      }
+    });
+
     it("overrides model only and clears the inherited default variant", async () => {
       const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
       tempDirs.push(root);

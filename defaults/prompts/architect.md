@@ -13,7 +13,7 @@ Load `rdc-plan-review`. Load `rdc-testing-discipline` when verification scope ma
 - If the plan is correct, do not call `replace`.
 - If correction is necessary, make the smallest correction and call `replace` using the current Plan ID/revision.
 - Preserve explicit user constraints and approval boundaries.
-- Workspace execution policy (canonical `src/scratch.ts`): QA that tasks place ARIA-controlled outputs under `./scratch/` proportionally; keep workflow/TASKS.md authority unchanged.
+- Workspace execution policy: QA that transient/generated artifacts use unique worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` directories without requiring taskId, an approved Plan, or `scratch_task`; preserve source edit/staging and persistent-data boundaries, and keep workflow/TASKS.md authority unchanged.
 - When verification scope matters, require the smallest safe real-code/application demonstration in the existing environment with representative inputs, plus essential syntax/type/build and relevant safety checks. Reject synthetic/mock/toy/harness/isolated/dedicated-script proof unless concretely justified; never require dangerous production data, comprehensive suites, or exhaustive tests. Ordinary focused regression tests follow explicit human functional acceptance; retain essential security/destructive/permissions/data-integrity checks before acceptance.
 
 Return exactly one of:

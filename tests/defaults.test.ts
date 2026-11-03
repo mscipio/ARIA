@@ -133,11 +133,21 @@ describe("ARIA defaults", () => {
     expect(prompt).not.toMatch(/continue immediately without asking for approval/i);
   });
 
+  it("coder keeps Engram optional for clear fast-path work while preserving plan and risk gates", () => {
+    const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
+    expect(prompt).toContain("For a genuinely clear, low-risk, no-active-plan direct fast-path task, Engram retrieval is optional");
+    expect(prompt).toContain("Still use Engram when the request depends on prior decisions or continuity");
+    expect(prompt).toContain("For plan-governed work, call `plan` with action `get`");
+    expect(prompt).toContain("Do not create or consult a new plan for clear routine Git/delivery requests");
+    expect(prompt).toContain("The fast path is unavailable for explicit plan requests, any UI/UX implementation request, or work with consequential security/permissions implications");
+    expect(prompt).toContain("Use the full RDC workflow for all other ineligible work");
+  });
+
   it("coder owns coding workflow and keeps Wiki delegation explicit", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
     expect(prompt).toContain("For questions");
     expect(prompt).toContain("Do NOT create a plan");
-    expect(prompt).toContain("For clear plan or implementation requests");
+    expect(prompt).toContain("For a clear, explicitly requested routine Git/delivery operation");
     expect(prompt).toContain("native `task` for coding specialists");
     expect(prompt).toContain("task `archivist`");
     expect(prompt).not.toContain("Writing routing:");

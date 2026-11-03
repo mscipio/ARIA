@@ -43,6 +43,11 @@ function containedUnder(scratch: string, candidate: string): boolean {
   return child.length > 0 && !child.startsWith(`..${sep}`) && child !== "..";
 }
 
+function localDate(date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 describe("T002 workspace/scratch policy", () => {
   it("creates the canonical layout under repo, subdir, and nested worktrees", async () => {
     const repoLayout = await ensureScratchDirs(REPO_ROOT);
@@ -102,7 +107,7 @@ describe("T002 workspace/scratch policy", () => {
   it("creates concurrent-safe noncolliding directories per task", async () => {
     const worktree = await fixtureWorktree("collide");
     const taskDir = await createTaskScratch(worktree, "task-p2", "Create task scratch layout");
-    expect(taskDir).toBe(join((await resolveScratchRoot(worktree)).scratch, new Date().toISOString().slice(0, 10), "create-task-scratch-layout"));
+    expect(taskDir).toBe(join((await resolveScratchRoot(worktree)).scratch, localDate(), "create-task-scratch-layout"));
     const runs = await Promise.all(
       Array.from({ length: 8 }, () => createTaskRunDir(worktree, "task-p2", "run", "Create task scratch layout")),
     );
@@ -113,10 +118,20 @@ describe("T002 workspace/scratch policy", () => {
     }
   });
 
+  it("creates a task directory lazily without materializing the output layout", async () => {
+    const worktree = await fixtureWorktree("lazy-task");
+    const { scratch } = await resolveScratchRoot(worktree);
+    const taskDir = await createTaskScratch(worktree, "lazy-task-id", "Lazy Task Outputs");
+
+    expect(taskDir).toBe(join(scratch, localDate(), "lazy-task-outputs"));
+    expect(await readdir(taskDir)).toEqual([".aria-task-id"]);
+    expect(await readdir(join(scratch, localDate()))).toEqual(["lazy-task-outputs"]);
+  });
+
   it("reuses a task directory and suffixes only same-name collisions without touching history", async () => {
     const worktree = await fixtureWorktree("task-names");
     const { scratch } = await resolveScratchRoot(worktree);
-    const date = new Date().toISOString().slice(0, 10);
+    const date = localDate();
     const historic = join(scratch, date, "human-readable-task");
     await mkdir(historic, { recursive: true });
     const historicalFile = join(historic, "keep.txt");

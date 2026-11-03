@@ -59,4 +59,4 @@ upstream is vendored.
 - QML prototypes are design-only and disposable; production UI is Qt
   Widgets — the transfer gap is explicit in `references/qml-notes.md`,
   with no migration, embedding, or conversion tooling.
-- Before creating captures, builds, logs, or other transient/generated task artifacts, invoke the native `scratch_task` tool with the approved task ID and a concise, descriptive task name; use its returned paths under the UTC-date directory. Fail closed if task identity, project location, or allocation is unavailable; never invent paths or fall back to `process.cwd()`. Preserve existing/historical evidence paths; offline only, no OS-sandbox promise.
+- Keep captures, builds, logs, and other transient/generated artifacts under a unique project-local `./scratch/YYYY-MM-DD/HHMMSS-title/` activity directory, using local calendar date/time and a descriptive title. No task ID, approved Plan, or `scratch_task` allocation is required. Preserve existing/historical evidence paths; offline only, no OS-sandbox promise.

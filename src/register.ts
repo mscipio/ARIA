@@ -130,6 +130,7 @@ type NonCoderRole = Exclude<RoleName, "coder">;
 
 const BASE_PERMISSION: AgentPermission = {
   "*": "deny",
+  "playwright_*": "deny",
   read: "deny",
   edit: "deny",
   glob: "deny",
@@ -137,7 +138,7 @@ const BASE_PERMISSION: AgentPermission = {
   list: "deny",
   bash: "deny",
   task: "deny",
-  external_directory: "deny",
+  external_directory: "allow",
   todowrite: "deny",
   question: "deny",
   webfetch: "deny",
@@ -161,6 +162,32 @@ const PROTECTED_EDIT: Record<string, PermissionAction> = {
   "*.env": "ask",
   "*.env.*": "ask",
   "*.env.example": "allow",
+  "/**": "deny",
+};
+
+const SCRATCH_EDIT: Record<string, PermissionAction> = {
+  "*": "deny",
+  "scratch": "allow",
+  "scratch/**": "allow",
+  "/**": "deny",
+  "scratch/*.env": "ask",
+  "scratch/*.env.*": "ask",
+  "scratch/*.env.example": "allow",
+  "scratch/**/*.env": "ask",
+  "scratch/**/*.env.*": "ask",
+  "scratch/**/*.env.example": "allow",
+};
+
+const IMPLEMENTER_SCRATCH_EDIT: Record<string, PermissionAction> = {
+  "scratch": "allow",
+  "scratch/**": "allow",
+  "/**": "deny",
+  "scratch/*.env": "ask",
+  "scratch/*.env.*": "ask",
+  "scratch/*.env.example": "allow",
+  "scratch/**/*.env": "ask",
+  "scratch/**/*.env.*": "ask",
+  "scratch/**/*.env.example": "allow",
 };
 
 const CODE_READ: AgentPermission = {
@@ -235,20 +262,24 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   explorer: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
+    edit: SCRATCH_EDIT,
     ...planPremiseRecoveryPermission("explorer"),
     skill: skillAccess("rdc-code-exploration"),
   },
   visualizer: {
     ...BASE_PERMISSION,
     ...REQUIRED_MCP_PERMISSION,
+    "playwright_*": "allow",
     ...planPremiseRecoveryPermission("visualizer"),
     read: PROTECTED_READ,
+    edit: { ...PROTECTED_EDIT, ...IMPLEMENTER_SCRATCH_EDIT },
     scratch_task: "allow",
     skill: skillAccess("aria-qt-ui"),
   },
   planner: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
+    edit: SCRATCH_EDIT,
     webfetch: "allow",
     websearch: "allow",
     skill: skillAccess("rdc-implementation-planning", "rdc-testing-discipline"),
@@ -257,6 +288,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   architect: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
+    edit: SCRATCH_EDIT,
     webfetch: "allow",
     websearch: "allow",
     skill: skillAccess("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
@@ -266,7 +298,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
     ...planPremiseRecoveryPermission("implementer"),
-    edit: PROTECTED_EDIT,
+    edit: { ...PROTECTED_EDIT, ...IMPLEMENTER_SCRATCH_EDIT },
     scratch_task: "allow",
     bash: {
       "*": "allow",
@@ -288,6 +320,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
     ...planPremiseRecoveryPermission("reviewer"),
+    edit: SCRATCH_EDIT,
     scratch_task: "allow",
     bash: "allow",
     webfetch: "allow",
@@ -298,6 +331,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   researcher: {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("researcher"),
+    edit: SCRATCH_EDIT,
     read: PROTECTED_READ,
     glob: "allow",
     grep: "allow",
@@ -330,18 +364,24 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   "archivist": {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("archivist"),
-    read: { "*": "deny" },
-    edit: { "*": "deny" },
+    read: {
+      "*": "allow",
+      "*.env": "ask",
+      "*.env.*": "ask",
+      "*.env.example": "allow",
+    },
+    edit: { ...SCRATCH_EDIT },
     glob: "deny",
     grep: "deny",
     list: "deny",
     bash: { "*": "deny" },
     skill: skillAccess("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
-    external_directory: "deny",
+    external_directory: "allow",
   },
   writer: {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("writer"),
+    edit: SCRATCH_EDIT,
     read: PROTECTED_READ,
     skill: skillAccess(
       "aria-academic-writing",
@@ -360,6 +400,7 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
   scientist: {
     ...BASE_PERMISSION,
     ...planPremiseRecoveryPermission("scientist"),
+    edit: SCRATCH_EDIT,
     read: PROTECTED_READ,
     glob: "allow",
     grep: "allow",
@@ -393,11 +434,14 @@ function buildArchivistPermissions(worktree: string): AgentPermission {
   // OpenCode evaluates read/edit permissions against paths relative to the
   // active worktree, even when the tool was called with an absolute path.
   const readScope: Record<string, PermissionAction> = {
-    "*": "deny",
+    "*": "allow",
     [wikiRelative]: "allow",
     [`${wikiRelative}/**`]: "allow",
     [pipelineRelative]: "allow",
     [`${pipelineRelative}/**`]: "allow",
+    "*.env": "ask",
+    "*.env.*": "ask",
+    "*.env.example": "allow",
   };
 
   const editScope: Record<string, PermissionAction> = {
@@ -408,9 +452,7 @@ function buildArchivistPermissions(worktree: string): AgentPermission {
 
   // external_directory is evaluated against absolute filesystem paths.
   const externalDirScope: Record<string, PermissionAction> = {
-    "*": "deny",
-    [`${wikiDir}/**`]: "allow",
-    [`${pipelineRoot}/**`]: "allow",
+    "*": "allow",
   };
 
   return {
@@ -419,7 +461,7 @@ function buildArchivistPermissions(worktree: string): AgentPermission {
     grep: "deny",
     list: "deny",
     read: readScope,
-    edit: editScope,
+    edit: { ...editScope, ...IMPLEMENTER_SCRATCH_EDIT },
     bash: {
       "*": "deny",
       [`python ${pipelineRun} archive-opencode`]: "allow",
@@ -466,7 +508,8 @@ const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
 function coderPermission(): AgentPermission {
   return {
     ...REQUIRED_MCP_PERMISSION,
-    edit: "deny",
+    "playwright_*": "deny",
+    edit: SCRATCH_EDIT,
     bash: "deny",
     scratch_task: "allow",
     task: TASK_PERMISSIONS,

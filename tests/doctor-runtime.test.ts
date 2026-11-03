@@ -137,7 +137,7 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(runtimeFinding(report, "plugin aria")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "agents (11)")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "agents (11)")?.detail).toContain("11 of 11");
-    expect(runtimeFinding(report, "skills (22 live)")?.severity).toBe("PASS");
+    expect(runtimeFinding(report, "skills (24 live)")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "plan tool")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "plan tool")?.detail).toContain("exactly once");
     const coexistence = runtimeFinding(report, "coexistence");
@@ -182,7 +182,7 @@ describe("T008 doctor V2 runtime truth", () => {
     expect(agents?.severity).toBe("FAIL");
     expect(agents?.detail).toContain("missing: scientist");
     expect(agents?.detail).toContain("bash");
-    const skills = runtimeFinding(report, "skills (22 live)");
+    const skills = runtimeFinding(report, "skills (24 live)");
     expect(skills?.severity).toBe("FAIL");
     expect(skills?.detail).toContain(`missing: ${ARIA_SKILL_NAMES[0]}`);
   });
@@ -190,7 +190,7 @@ describe("T008 doctor V2 runtime truth", () => {
   it("skips runtime truth outside a live session with documented gaps", async () => {
     const report = await runDoctor(await baseOptions());
 
-    for (const title of ["plugin aria", "agents (11)", "skills (22 live)", "plan tool", "coexistence"]) {
+    for (const title of ["plugin aria", "agents (11)", "skills (24 live)", "plan tool", "coexistence"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
     }
@@ -309,7 +309,7 @@ describe("T004 OpenCode runtime compatibility", () => {
   it("words standalone runtime SKIP as absent live runtime evidence, not version inequality", async () => {
     const report = await runDoctor(await baseOptions(await compatExecutor("opencode 2.0.23")));
 
-    for (const title of ["plugin aria", "agents (11)", "skills (22 live)", "plan tool"]) {
+    for (const title of ["plugin aria", "agents (11)", "skills (24 live)", "plan tool"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
       expect(finding?.detail).toContain("no live OpenCode runtime evidence observed");

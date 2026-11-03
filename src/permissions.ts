@@ -128,6 +128,9 @@ function scopeResources(worktree: string, target: string): string[] {
 function protectedReadRules(): AgentRule[] {
   return [
     { action: "read", resource: "*", effect: "allow" },
+    // External files use canonical absolute paths. Keep this explicit for
+    // generated roles (including legacy Researcher/Scientist definitions).
+    { action: "read", resource: "/**", effect: "allow" },
     // Intentionally `ask` (not V1 `deny`) to match the 2.0.23 builtin
     // (`Agent.Info.default`: `read *.env ask`) and the approved T004
     // wording ("*.env.example allow after *.env.* ask"). Note: weaker
@@ -145,6 +148,20 @@ function protectedEditRules(): AgentRule[] {
     { action: "edit", resource: "*.env", effect: "ask" },
     { action: "edit", resource: "*.env.*", effect: "ask" },
     { action: "edit", resource: "*.env.example", effect: "allow" },
+  ];
+}
+
+/** Allow scratch edits without granting ordinary project edits. */
+function scratchEditRules(): AgentRule[] {
+  return [
+    { action: "edit", resource: "scratch", effect: "allow" },
+    { action: "edit", resource: "scratch/**", effect: "allow" },
+    { action: "edit", resource: "scratch/*.env", effect: "ask" },
+    { action: "edit", resource: "scratch/*.env.*", effect: "ask" },
+    { action: "edit", resource: "scratch/*.env.example", effect: "allow" },
+    { action: "edit", resource: "scratch/**/*.env", effect: "ask" },
+    { action: "edit", resource: "scratch/**/*.env.*", effect: "ask" },
+    { action: "edit", resource: "scratch/**/*.env.example", effect: "allow" },
   ];
 }
 
@@ -180,13 +197,17 @@ const CODING_MCP: AgentRule[] = [
   { action: "codegraph_*", resource: "*", effect: "allow" },
 ];
 
+const PLAYWRIGHT_DENY: AgentRule = { action: "playwright_*", resource: "*", effect: "deny" };
+
 // Implementer shell: broad allow first, then deny-list after so denies
 // prevail (last-match-wins). Mirrors V1 `bash` object verbatim.
 const IMPLEMENTER_SHELL_DENIES: readonly string[] = [
   "rm",
   "rm *",
+  "rm **",
   "rmdir",
   "rmdir *",
+  "rmdir **",
   "del",
   "del *",
   "Remove-Item*",
@@ -247,15 +268,21 @@ function implementerShellRules(): AgentRule[] {
 function archivistBaseRules(): AgentRule[] {
   return [
     fallbackAskRule(),
-    denyRule("read"),
+    PLAYWRIGHT_DENY,
+    { action: "read", resource: "*", effect: "allow" },
+    { action: "read", resource: "/**", effect: "allow" },
+    { action: "read", resource: "*.env", effect: "ask" },
+    { action: "read", resource: "*.env.*", effect: "ask" },
+    { action: "read", resource: "*.env.example", effect: "allow" },
     denyRule("edit"),
+    ...scratchEditRules(),
     denyRule("glob"),
     denyRule("grep"),
     denyRule("shell"),
     denyRule("webfetch"),
     denyRule("websearch"),
     denyRule("question"),
-    denyRule("external_directory"),
+    allowRule("external_directory"),
     ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
     ...subagentRules(),
     planPremiseRecoveryRule("archivist"),
@@ -284,8 +311,10 @@ export function getArchivistScopedPermissions(worktree: string): AgentRule[] {
   const pipelineScopes = scopeResources(worktree, pipelineRoot);
   return [
     fallbackAskRule(),
-    // Read scope: deny first, then scoped allows after.
-    { action: "read", resource: "*", effect: "deny" },
+    PLAYWRIGHT_DENY,
+    // Read access is broad; only protected files require approval.
+    { action: "read", resource: "*", effect: "allow" },
+    { action: "read", resource: "/**", effect: "allow" },
     ...wikiScopes.map((resource) => ({
       action: "read",
       resource,
@@ -296,13 +325,20 @@ export function getArchivistScopedPermissions(worktree: string): AgentRule[] {
       resource,
       effect: "allow" as const,
     })),
-    // Edit scope: deny first, then wiki allows after (pipeline read-only).
+    // Apply protected-file prompts after every broad/external/wiki grant.
+    { action: "read", resource: "*.env", effect: "ask" },
+    { action: "read", resource: "*.env.*", effect: "ask" },
+    { action: "read", resource: "*.env.example", effect: "allow" },
+    // Edit scope: deny first, deny absolute external targets, then the
+    // explicitly scoped wiki exception (pipeline read-only).
     { action: "edit", resource: "*", effect: "deny" },
+    { action: "edit", resource: "/**", effect: "deny" },
     ...wikiScopes.map((resource) => ({
       action: "edit",
       resource,
       effect: "allow" as const,
     })),
+    ...scratchEditRules(),
     denyRule("glob"),
     denyRule("grep"),
     // Shell: deny first, then exact python allowlist after (never wildcards).
@@ -315,10 +351,9 @@ export function getArchivistScopedPermissions(worktree: string): AgentRule[] {
     denyRule("webfetch"),
     denyRule("websearch"),
     denyRule("question"),
-    // External directories stay absolute.
-    { action: "external_directory", resource: "*", effect: "deny" },
-    { action: "external_directory", resource: `${wikiDir}/**`, effect: "allow" },
-    { action: "external_directory", resource: `${pipelineRoot}/**`, effect: "allow" },
+    // External-directory approval is independent of read/edit authorization.
+    // Permit external reads; edit remains constrained above.
+    { action: "external_directory", resource: "*", effect: "allow" },
     ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
     ...subagentRules(),
     planPremiseRecoveryRule("archivist"),
@@ -341,8 +376,11 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "coder":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
+        allowRule("scratch_task"),
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
@@ -350,9 +388,11 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         // Coder coordinates via questions; other roles deny (V1: coder had
         // no `question` entry so default-allowed, others explicit-deny).
         { action: "question", resource: "*", effect: "allow" },
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
-        allowRule("scratch_task"),
+        allowRule("git_read"),
+        allowRule("aria_ship"),
+        allowRule("aria_release"),
         // Shell: V1 `bash: deny` → V2 `shell * deny`.
         denyRule("shell"),
         // Delegation: deny first, then the 9 V1 `TASK_PERMISSIONS` allows
@@ -377,15 +417,20 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "explorer":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
         denyRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         denyRule("shell"),
         ...subagentRules(),
         ...skillRules("rdc-code-exploration"),
@@ -405,10 +450,12 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
       // enforcement holds only where ARIA controls paths/env). Unrelated
       // research MCP tools stay denied via
       // the explicit `zotpilot_*` deny after the fallback (last-match-wins
-      // grants below never match it). Skill is grant-only `aria-qt-ui` per
-      // T003 (replaces `rdc-visual-analysis`). MCP stays the coding triple;
-      // everything else (webfetch/websearch/question/external/subagent)
-      // stays denied.
+      // grants below never match it). Skills are grant-only `aria-qt-ui` and
+      // `aria-web-ui` per T006 (replaces `rdc-visual-analysis`). Playwright
+      // tools are granted only here; Code Mode stays disabled in its V2 MCP
+      // registration so per-tool permissions remain effective.
+      // everything else (webfetch/websearch/question/subagent) stays denied;
+      // external-directory approval is allowed for read-only file access.
       //
       // Plan-tool access is denied at execution by `authorizePlan`
       // (`PLAN_ACTIONS_BY_ROLE` in `src/plan-tool.ts` excludes visualizer),
@@ -426,34 +473,46 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
       // provides.
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
+        allowRule("playwright_*"),
+        allowRule("scratch_task"),
         denyRule("zotpilot_*"),
         ...protectedReadRules(),
         ...protectedEditRules(),
+        { action: "edit", resource: "/**", effect: "deny" },
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
         denyRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
-        allowRule("scratch_task"),
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         ...implementerShellRules(),
         ...subagentRules(),
-        ...skillRules("aria-qt-ui"),
+        ...skillRules("aria-qt-ui", "aria-web-ui"),
         planPremiseRecoveryRule("visualizer"),
       ];
     case "planner":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
         allowRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         denyRule("shell"),
         ...subagentRules(),
         ...skillRules("rdc-implementation-planning", "rdc-testing-discipline"),
@@ -462,15 +521,20 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "architect":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
         allowRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         denyRule("shell"),
         ...subagentRules(),
         ...skillRules("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
@@ -479,16 +543,22 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "implementer":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
+        allowRule("scratch_task"),
         ...protectedReadRules(),
         ...protectedEditRules(),
+        { action: "edit", resource: "/**", effect: "deny" },
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
         denyRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
-        allowRule("scratch_task"),
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         ...implementerShellRules(),
         ...subagentRules(),
         ...skillRules("rdc-code-implementation", "rdc-testing-discipline"),
@@ -497,15 +567,20 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "reviewer":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
         allowRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         ...CODING_MCP,
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         allowRule("scratch_task"),
         // Reviewer shell is unrestricted for inspection (V1 `bash: allow`).
         allowRule("shell"),
@@ -516,17 +591,22 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "researcher":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
         allowRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         // Researcher MCP: Context7 only (no Engram/CodeGraph), plus the
         // 22 verified ZotPilot tools (14 allow, 8 ask). No wildcards.
         { action: "context7_*", resource: "*", effect: "allow" },
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         ...ZOTPILOT_READ.map((tool) => ({
           action: tool,
           resource: "*",
@@ -548,19 +628,24 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         planPremiseRecoveryRule("researcher"),
       ];
     case "archivist":
-      return archivistBaseRules();
+      return [...archivistBaseRules(), PLAYWRIGHT_DENY, denyRule("git_read"), denyRule("aria_ship"), denyRule("aria_release")];
     case "writer":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         denyRule("glob"),
         denyRule("grep"),
         denyRule("webfetch"),
         denyRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         // No MCP authority (writing-only).
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         denyRule("shell"),
         ...subagentRules("archivist", "researcher", "scientist"),
         ...skillRules(
@@ -575,15 +660,20 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
     case "scientist":
       return [
         fallbackAskRule(),
+        PLAYWRIGHT_DENY,
         ...protectedReadRules(),
         denyRule("edit"),
+        ...scratchEditRules(),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
         denyRule("websearch"),
         denyRule("question"),
-        denyRule("external_directory"),
+        allowRule("external_directory"),
         // No MCP authority of any kind.
+        denyRule("git_read"),
+        denyRule("aria_ship"),
+        denyRule("aria_release"),
         denyRule("shell"),
         ...subagentRules("researcher", "writer", "coder"),
         ...skillRules("aria-research-planning", "aria-results-analysis"),
@@ -597,7 +687,7 @@ function escapeRegExp(value: string): string {
 }
 
 function patternToRegExp(pattern: string): RegExp {
-  return new RegExp(`^${pattern.split("*").map(escapeRegExp).join(".*")}$`);
+  return new RegExp(`^${pattern.split("**").map((part) => part.split("*").map(escapeRegExp).join("[^/]*")).join(".*")}$`);
 }
 
 function actionMatches(ruleAction: string, requestedAction: string): boolean {
@@ -608,7 +698,11 @@ function actionMatches(ruleAction: string, requestedAction: string): boolean {
 
 function resourceMatches(ruleResource: string, requestedResource: string): boolean {
   if (ruleResource === "*") return true;
-  if (ruleResource.includes("*")) return patternToRegExp(ruleResource).test(requestedResource);
+  if (ruleResource === "/**") return requestedResource.startsWith("/");
+  if (ruleResource.includes("*")) {
+    const pattern = patternToRegExp(ruleResource);
+    return pattern.test(requestedResource) || (!ruleResource.includes("/") && pattern.test(requestedResource.split("/").at(-1) ?? ""));
+  }
   return ruleResource === requestedResource;
 }
 

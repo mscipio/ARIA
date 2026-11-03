@@ -7,6 +7,7 @@ import {
   evaluatePermission,
   getArchivistScopedPermissions,
   getPermissionsForRole,
+  type AgentRule,
 } from "../src/permissions";
 import { generateAgentFiles } from "../src/agents";
 import { authorizePlan } from "../src/plan-tool";
@@ -30,9 +31,82 @@ function actionsFor(role: RoleName): string[] {
   return getPermissionsForRole(role).map((rule) => rule.action);
 }
 
+function generatedPermissions(content: string): AgentRule[] {
+  const closing = content.indexOf("\n---", 4);
+  if (closing < 0) throw new Error("generated agent frontmatter is incomplete");
+  const frontmatter = content.slice(0, closing);
+  const rules: AgentRule[] = [];
+  const expression = /- action: ("(?:[^"\\]|\\.)*")\n\s+resource: ("(?:[^"\\]|\\.)*")\n\s+effect: (allow|deny|ask)/g;
+  for (const match of frontmatter.matchAll(expression)) {
+    rules.push({
+      action: JSON.parse(match[1]!) as string,
+      resource: JSON.parse(match[2]!) as string,
+      effect: match[3] as AgentRule["effect"],
+    });
+  }
+  return rules;
+}
+
+function effectiveDecision(permission: Record<string, unknown>, action: string, resource: string): string {
+  const rule = permission[action];
+  if (typeof rule === "string") return rule;
+  if (!rule || typeof rule !== "object") return "ask";
+  let decision = "ask";
+  for (const [pattern, effect] of Object.entries(rule)) {
+    if (pattern === "/**" && !resource.startsWith("/")) continue;
+    const expression = new RegExp(`^${pattern.split("**").map((part) => part.split("*").map((value) => value.replace(/[.+?^${}()|[\\]\\]/g, "\\$&")).join("[^/]*")).join(".*")}$`);
+    if (expression.test(resource) || (!pattern.includes("/") && expression.test(resource.split("/").at(-1) ?? ""))) {
+      decision = String(effect);
+    }
+  }
+  return decision;
+}
+
 describe("T022 native scratch task permissions", () => {
+  it("allows edits under scratch for every role without widening ordinary edits", () => {
+    const roles: RoleName[] = [
+      "coder", "explorer", "visualizer", "planner", "architect", "implementer",
+      "reviewer", "researcher", "archivist", "writer", "scientist",
+    ];
+
+    for (const role of roles) {
+      const rules = getPermissionsForRole(role);
+      expect(evaluatePermission(rules, "edit", "scratch")).toBe("allow");
+      expect(evaluatePermission(rules, "edit", "scratch/tests/results/run.json")).toBe("allow");
+      expect(evaluatePermission(rules, "edit", "other/scratch/tests/results/run.json")).toBe(
+        role === "implementer" || role === "visualizer" ? "allow" : "deny",
+      );
+      expect(evaluatePermission(rules, "edit", "/tmp/scratch/tests/results/run.json")).toBe("deny");
+      expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe(
+        role === "implementer" || role === "visualizer" ? "allow" : "deny",
+      );
+      expect(evaluatePermission(rules, "edit", "src/.env")).toBe(
+        role === "implementer" || role === "visualizer" ? "ask" : "deny",
+      );
+    }
+  });
+
+  it("preserves effective registered edits while granting only scratch paths", () => {
+    const registered = effectiveRolePermissions();
+    for (const role of ROLES) {
+      const permission = registered[role] as unknown as Record<string, unknown>;
+      expect(effectiveDecision(permission, "edit", "scratch")).toBe("allow");
+      expect(effectiveDecision(permission, "edit", "scratch/tests/result.json")).toBe("allow");
+      expect(effectiveDecision(permission, "edit", "scratch/.env")).toBe("ask");
+      expect(effectiveDecision(permission, "edit", "src/app.ts")).toBe(
+        role === "implementer" || role === "visualizer" ? "allow" : "deny",
+      );
+      expect(effectiveDecision(permission, "edit", "src/.env")).toBe(
+        role === "implementer" || role === "visualizer" ? "ask" : "deny",
+      );
+      expect(effectiveDecision(permission, "edit", "src/.env.example")).toBe(
+        role === "implementer" || role === "visualizer" ? "allow" : "deny",
+      );
+      expect(effectiveDecision(permission, "edit", "/tmp/scratch/result.json")).toBe("deny");
+    }
+  });
+
   it("grants scratch allocation only to artifact-producing roles and renders matching guidance", () => {
-    const artifactRoles = new Set<RoleName>(["coder", "visualizer", "implementer", "reviewer"]);
     const roles: RoleName[] = [
       "coder",
       "explorer",
@@ -46,6 +120,7 @@ describe("T022 native scratch task permissions", () => {
       "writer",
       "scientist",
     ];
+    const artifactRoles = new Set<RoleName>(["coder", "visualizer", "implementer", "reviewer"]);
     const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
     const registered = effectiveRolePermissions();
 
@@ -57,13 +132,14 @@ describe("T022 native scratch task permissions", () => {
       expect(evaluatePermission(merged, "scratch_task", "*")).toBe(permitted ? "allow" : "ask");
       const grant = generated[role].match(/- action: "scratch_task"\n\s+resource: "\*"\n\s+effect: (allow|ask|deny)/);
       expect(grant?.[1] ?? null).toBe(permitted ? "allow" : null);
-      expect(generated[role].includes("invoke the native `scratch_task` tool")).toBe(permitted);
+      expect(generated[role].includes("invoke the native `scratch_task` tool")).toBe(false);
       expect(generated[role]).toContain("Persistent project data");
       expect(generated[role]).toContain("authoritative `.aria/rdc/TASKS.md` plan");
+      if (role === "visualizer") {
+        expect(generated[role]).toContain("worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` path");
+        expect(generated[role]).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
+      }
       if (permitted) {
-        expect(generated[role]).toContain("Use the returned `taskDir` and exact returned `dirs` paths");
-        expect(generated[role]).toContain("`testFixtures`/`testResults`");
-        expect(generated[role]).toContain("`npmCache`/`pipCache`/`pythonCache`");
         expect(registered[role].scratch_task).toBe("allow");
       } else {
         expect(registered[role].scratch_task).toBeUndefined();
@@ -111,6 +187,35 @@ describe("plan premise recovery permissions", () => {
       expect(evaluatePermission(merged, PLAN_PREMISE_RECOVERY_TOOL_NAME, "*")).toBe(expected);
       expect(evaluatePermission(merged, "future_tool", "*")).toBe("ask");
     }
+  });
+});
+
+describe("T002 Visualizer Playwright permissions", () => {
+  it("allows Playwright only for Visualizer without overriding unrelated permissions", () => {
+    const requestedAction = "playwright_browser_navigate";
+    for (const role of ROLES) {
+      const rules = getPermissionsForRole(role);
+      const matchingRules = rules.filter((rule) =>
+        (rule.action === "*" || rule.action === "playwright_*" || rule.action === requestedAction)
+        && (rule.resource === "*" || rule.resource === "https://example.com"),
+      );
+
+      expect(evaluatePermission(rules, requestedAction, "https://example.com")).toBe(
+        role === "visualizer" ? "allow" : "deny",
+      );
+      expect(matchingRules.map(({ effect }) => effect)).toEqual(
+        role === "visualizer"
+          ? ["ask", "deny", "allow"]
+          : role === "archivist"
+            ? ["ask", "deny", "deny"]
+            : ["ask", "deny"],
+      );
+    }
+
+    const visualizer = getPermissionsForRole("visualizer");
+    expect(evaluatePermission(visualizer, "edit", "src/app.ts")).toBe("allow");
+    expect(evaluatePermission(visualizer, "shell", "python scripts/capture.py")).toBe("allow");
+    expect(evaluatePermission(visualizer, "webfetch", "https://example.com")).toBe("deny");
   });
 });
 
@@ -185,6 +290,16 @@ describe("T004 permission/model/delegation parity", () => {
     // Reviewer stays unrestricted for inspection; others deny.
     expect(evaluatePermission(getPermissionsForRole("reviewer"), "shell", "rm foo")).toBe("allow");
     expect(evaluatePermission(getPermissionsForRole("explorer"), "shell", "git status")).toBe("deny");
+    expect(evaluatePermission(getPermissionsForRole("coder"), "shell", "git status")).toBe("deny");
+  });
+
+  it("grants native Git read, ship, and release tools only to coder without granting shell", () => {
+    for (const role of ROLES) {
+      const merged = [...Agent.Info.default(Agent.ID.make(role)).permissions, ...getPermissionsForRole(role)];
+      expect(evaluatePermission(merged, "git_read", "*")).toBe(role === "coder" ? "allow" : "deny");
+      expect(evaluatePermission(merged, "aria_ship", "*")).toBe(role === "coder" ? "allow" : "deny");
+      expect(evaluatePermission(merged, "aria_release", "*")).toBe(role === "coder" ? "allow" : "deny");
+    }
     expect(evaluatePermission(getPermissionsForRole("coder"), "shell", "git status")).toBe("deny");
   });
 
@@ -268,7 +383,7 @@ describe("T004 permission/model/delegation parity", () => {
     expect(evaluatePermission(rules, "webfetch", "https://example.com")).toBe("deny");
     expect(evaluatePermission(rules, "websearch", "query")).toBe("deny");
     expect(evaluatePermission(rules, "question", "*")).toBe("deny");
-    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("deny");
+    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("allow");
     expect(evaluatePermission(rules, "subagent", "explorer")).toBe("deny");
   });
 
@@ -349,14 +464,36 @@ describe("T004 permission/model/delegation parity", () => {
     expect(evaluatePermission(getPermissionsForRole("archivist"), "context7_*", "*")).toBe("ask");
   });
 
-  it("evaluates external-directory deny with archivist scoping and fallback ask", () => {
-    // Most roles deny external directories explicitly.
-    expect(evaluatePermission(getPermissionsForRole("coder"), "external_directory", "/tmp/x")).toBe("deny");
-    expect(evaluatePermission(getPermissionsForRole("explorer"), "external_directory", "/tmp/x")).toBe("deny");
-    // Managed-file archivist is deny-by-default (safe without worktree).
-    expect(evaluatePermission(getPermissionsForRole("archivist"), "external_directory", "/tmp/x")).toBe("deny");
-    expect(evaluatePermission(getPermissionsForRole("archivist"), "read", "src/app.ts")).toBe("deny");
-    expect(evaluatePermission(getPermissionsForRole("archivist"), "shell", "ls")).toBe("deny");
+  it("allows external directory reads without granting external edits", () => {
+    // Exercise the real generation path and normal config resolution rather
+    // than only the canonical helper arrays.
+    const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
+    for (const role of ROLES) {
+      const rules = generatedPermissions(generated[role]);
+      const merged = [...Agent.Info.default(Agent.ID.make(role)).permissions, ...rules];
+      expect(evaluatePermission(merged, "external_directory", "/tmp/user-file.txt")).toBe("allow");
+      expect(evaluatePermission(merged, "read", "/tmp/user-file.txt")).toBe("allow");
+      expect(evaluatePermission(merged, "read", "/tmp/service.env")).toBe("ask");
+      expect(evaluatePermission(merged, "read", "/tmp/service.env.local")).toBe("ask");
+      expect(evaluatePermission(merged, "read", "/tmp/service.env.example")).toBe("allow");
+      expect(evaluatePermission(merged, "read", "src/app.ts")).toBe("allow");
+      expect(evaluatePermission(merged, "edit", "/tmp/user-file.txt")).toBe("deny");
+      const canEditInternally = role === "implementer" || role === "visualizer";
+      expect(evaluatePermission(merged, "edit", "src/app.ts")).toBe(canEditInternally ? "allow" : "deny");
+      expect(evaluatePermission(merged, "edit", ".env")).toBe(canEditInternally ? "ask" : "deny");
+      expect(evaluatePermission(merged, "edit", "config.env")).toBe(canEditInternally ? "ask" : "deny");
+      expect(evaluatePermission(merged, "edit", "a.env.bak")).toBe(canEditInternally ? "ask" : "deny");
+      expect(evaluatePermission(merged, "edit", ".env.example")).toBe(canEditInternally ? "allow" : "deny");
+    }
+    // Normal generated Archivist permissions grant universal external reads,
+    // but runtime permissions separately scope Wiki edits and keep pipeline read-only.
+    const archivist = generatedPermissions(generated.archivist);
+    expect(evaluatePermission(archivist, "read", "src/app.ts")).toBe("allow");
+    expect(evaluatePermission(archivist, "edit", "src/app.ts")).toBe("deny");
+    expect(evaluatePermission(archivist, "shell", "ls")).toBe("deny");
+    expect(evaluatePermission(getPermissionsForRole("implementer"), "edit", "/tmp/user-file.txt")).toBe("deny");
+    expect(evaluatePermission(getPermissionsForRole("visualizer"), "edit", "/tmp/user-file.txt")).toBe("deny");
+    expect(evaluatePermission(getPermissionsForRole("implementer"), "edit", "src/app.ts")).toBe("allow");
   });
 
   it("falls back to ask when no rule matches (2.0.23 default)", () => {
@@ -493,8 +630,11 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
     // (repro `/tmp/aria-wiki/page.md` denied under worktree-relative scope).
     expect(rules[0]).toEqual({ action: "*", resource: "*", effect: "ask" });
     expect(evaluatePermission(rules, "read", "/tmp/aria-wiki/page.md")).toBe("allow");
+    expect(evaluatePermission(rules, "read", "/tmp/aria-wiki/service.env")).toBe("ask");
+    expect(evaluatePermission(rules, "read", "/tmp/aria-wiki/service.env.local")).toBe("ask");
+    expect(evaluatePermission(rules, "read", "/tmp/aria-wiki/service.env.example")).toBe("allow");
     expect(evaluatePermission(rules, "edit", "/tmp/aria-wiki/page.md")).toBe("allow");
-    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("deny");
+    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
     expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("deny");
     // Package pipeline is external to the worktree: absolute reads allow,
     // edits stay denied (pipeline read-only).
@@ -502,7 +642,11 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
     expect(evaluatePermission(rules, "read", join(pipelineRoot, "run.py"))).toBe("allow");
     expect(evaluatePermission(rules, "read", join(pipelineRoot, "docs/guide.md"))).toBe("allow");
     expect(evaluatePermission(rules, "edit", join(pipelineRoot, "run.py"))).toBe("deny");
-    expect(evaluatePermission(rules, "read", "/other/file.md")).toBe("deny");
+    expect(evaluatePermission(rules, "external_directory", "/other/**")).toBe("allow");
+    expect(evaluatePermission(rules, "read", "/other/file.md")).toBe("allow");
+    expect(evaluatePermission(rules, "read", "/other/service.env")).toBe("ask");
+    expect(evaluatePermission(rules, "read", "/other/service.env.local")).toBe("ask");
+    expect(evaluatePermission(rules, "read", "/other/service.env.example")).toBe("allow");
     // Shell: deny first, then exact python allowlist after (never `python *`).
     expect(evaluatePermission(rules, "shell", "ls")).toBe("deny");
     expect(evaluatePermission(rules, "shell", "python *")).toBe("deny");
@@ -512,7 +656,7 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
     expect(evaluatePermission(rules, "shell", pipelineRun!)).toBe("allow");
     // External directories stay absolute with scoped allows after deny.
     expect(evaluatePermission(rules, "external_directory", "/tmp/aria-wiki/**")).toBe("allow");
-    expect(evaluatePermission(rules, "external_directory", "/other/**")).toBe("deny");
+    expect(evaluatePermission(rules, "external_directory", "/other/**")).toBe("allow");
     // Wiki skills stay scoped; no MCP authority even when scoped.
     expect(evaluatePermission(rules, "skill", "aria-wiki-lookup")).toBe("allow");
     expect(evaluatePermission(rules, "skill", "aria-document-design")).toBe("deny");
@@ -526,7 +670,7 @@ describe("T004 archivist WIKI scoping (runtime, WIKI_DIR set)", () => {
     // Internal wiki lives inside the Location: Location-relative resources.
     expect(evaluatePermission(rules, "read", "wiki/page.md")).toBe("allow");
     expect(evaluatePermission(rules, "edit", "wiki/page.md")).toBe("allow");
-    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("deny");
+    expect(evaluatePermission(rules, "read", "src/app.ts")).toBe("allow");
     expect(evaluatePermission(rules, "edit", "src/app.ts")).toBe("deny");
   });
 });

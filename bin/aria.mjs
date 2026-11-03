@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // ARIA CLI — dependency-free, Node standard library only.
-// Public surface (v1.1.0 T002): aria setup, aria doctor, aria upgrade
+// Public surface (v1.1.0 T002 + v2 T002/T003): aria ship, aria release, aria setup, aria doctor, aria upgrade
 // [--check], aria models [--config], aria deps [--upgrade], aria --help,
 // aria --version. Legacy top-level `update`/`configure`/`routes`/`deps sync`
 // are retired (rejected with guidance); `--migrate-from`/`--handoff-json`
@@ -35,6 +35,8 @@ function usage() {
   return `ARIA CLI v${version}
 
 Usage:
+  aria ship --paths <file> [<file> ...] --message <text> [--push] Commit explicit files; push only when requested (repo hooks/filters are trusted code)
+  aria release VERSION --check|--full-check|--publish [--tag TAG] Project-specific preflight, full gate, or explicitly requested GitHub Release
   aria setup                 Register ARIA with OpenCode and install missing dependencies (idempotent; never upgrades present deps)
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria upgrade               Show upgrade inventory (requires --yes to approve any mutation; ARIA-only)
@@ -53,6 +55,28 @@ Usage:
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // `ship` operates on the invocation project, never on the ARIA install
+  // directory. Its implementation is Node/Git standard-library only.
+  if (args[0] === "ship") {
+    try {
+      const { runShipCli } = await import("../dist/ship.js");
+      return await runShipCli(args.slice(1), process.cwd());
+    } catch (error) {
+      console.error(`aria ship: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
+
+  if (args[0] === "release") {
+    try {
+      const { runReleaseCli } = await import("../dist/release.js");
+      return await runReleaseCli(args.slice(1), process.cwd());
+    } catch (error) {
+      console.error(`aria release: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
 
   if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
     console.log(usage());

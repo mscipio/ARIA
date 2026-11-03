@@ -20,6 +20,7 @@ import {
   validateZotPilotPolicy,
 } from "../src/register.js";
 import { ROLES } from "../src/routes.js";
+import { ARIA_SKILL_NAMES } from "../src/skills.js";
 import type { RoleName } from "../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -894,13 +895,13 @@ describe("runDoctor skills findings", () => {
 
     const skills = skillFinding(report, "packaged skills");
     expect(skills?.severity).toBe("PASS");
-    expect(skills?.detail).toContain("21 of 21");
+    expect(skills?.detail).toContain("24 of 24");
     expect(skills?.detail).toContain("metadata.owner: aria");
     // Only the exact derived skill paths are read — the skills directory is
     // never scanned, so user skills are never touched.
     for (const path of readPaths) {
       if (!path.includes(`${sep}skills${sep}`)) continue;
-      expect(PACKAGE_SKILL_NAMES.some((name) => path.endsWith(`${sep}skills${sep}${name}${sep}SKILL.md`))).toBe(true);
+      expect(ARIA_SKILL_NAMES.some((name) => path.endsWith(`${sep}skills${sep}${name}${sep}SKILL.md`))).toBe(true);
     }
   });
 
@@ -917,6 +918,22 @@ describe("runDoctor skills findings", () => {
     const skills = skillFinding(report, "packaged skills");
     expect(skills?.severity).toBe("FAIL");
     expect(skills?.detail).toContain("rdc-code-exploration");
+    expect(doctorExitCode(report.findings)).toBe(1);
+  });
+
+  it.each(["aria-grill-me", "aria-web-ui"])("FAILs when canonical packaged skill %s is missing", async (name) => {
+    const options = await healthyOptions();
+    const fileOps: DoctorFileOps = {
+      readText: async (path) => {
+        if (path.endsWith(`${sep}skills${sep}${name}${sep}SKILL.md`)) throw new Error("ENOENT");
+        return readFile(path, "utf8");
+      },
+    };
+    const report = await runDoctor({ ...options, fileOps });
+
+    const skills = skillFinding(report, "packaged skills");
+    expect(skills?.severity).toBe("FAIL");
+    expect(skills?.detail).toContain(name);
     expect(doctorExitCode(report.findings)).toBe(1);
   });
 

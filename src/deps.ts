@@ -7,6 +7,7 @@ import { join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { openCodeGlobalDir } from "./paths.js";
+import { inspectPlaywrightConfig, playwrightState, syncPlaywrightConfig } from "./playwright.js";
 
 const execFileAsync = promisify(nodeExecFile);
 
@@ -246,6 +247,7 @@ export interface DepsStatus {
   engram: { version: string | null; found: boolean; connected: boolean };
   context7: { configured: boolean; connected: boolean };
   codegraph: { version: string | null; found: boolean; connected: boolean };
+  playwright?: { installedVersion: string | null; registered: boolean; executable: string | null; browserReady: boolean; launchDemonstrated: false; detail: string };
   /** Optional ZotPilot MCP presence/connectivity; absent when not listed. */
   zotpilot?: ZotPilotMcpPresence;
   /** True when `opencode mcp list` itself failed (no MCP status known). */
@@ -257,6 +259,7 @@ export interface SyncResult {
   engram: { action: string; version?: string; error?: string };
   context7: { action: string; error?: string };
   codegraph: { action: string; version?: string; error?: string };
+  playwright?: { action: string; error?: string };
   health?: DepsStatus;
 }
 
@@ -1397,12 +1400,14 @@ async function detectOpenCode(executor: Executor): Promise<{ found: boolean; ver
 }
 
 export async function doctor(executor: Executor = defaultExecutor, configDir?: string): Promise<DepsStatus> {
-  const [opencode, engram, context7, codegraph, mcp] = await Promise.all([
+  const [opencode, engram, context7, codegraph, mcp, playwright, playwrightConfig] = await Promise.all([
     detectOpenCode(executor),
     detectEngram(executor),
     detectContext7(executor, configDir),
     detectCodeGraph(executor),
     detectMcpConnectivity(executor),
+    playwrightState(executor),
+    inspectPlaywrightConfig(configDir),
   ]);
 
   // Legacy shape is preserved when ZotPilot is absent: the optional fields
@@ -1415,6 +1420,14 @@ export async function doctor(executor: Executor = defaultExecutor, configDir?: s
   };
   if (mcp.zotpilot) status.zotpilot = mcp.zotpilot;
   if (mcp.listFailed) status.mcpListFailed = true;
+  status.playwright = {
+    installedVersion: playwright.version,
+    registered: playwrightConfig.registered,
+    executable: playwright.executable,
+    browserReady: playwright.browser,
+    launchDemonstrated: false,
+    detail: [playwright.issue, playwrightConfig.detail, "server launch and browser navigation are not demonstrated by static doctor checks"].filter(Boolean).join("; "),
+  };
   return status;
 }
 
@@ -1426,6 +1439,7 @@ export function formatDoctor(version: string, status: DepsStatus): string {
     `Engram       ${status.engram.found ? `[OK] ${status.engram.version}` : "[FAIL] not found"}`,
     `Context7     ${status.context7.configured ? "[OK] configured" : "[FAIL] not configured"}`,
     `CodeGraph    ${status.codegraph.found ? `[OK] ${status.codegraph.version}` : "[FAIL] not found"}`,
+    ...(status.playwright ? [`Playwright MCP ${status.playwright.installedVersion ? `[${status.playwright.installedVersion}]` : "[WARN] not installed"} — ${status.playwright.registered ? "registered" : "not registered"}; ${status.playwright.browserReady ? "static Chromium readiness passed" : "Chromium not statically ready"}; launch/navigation not demonstrated`] : []),
     "",
     "Required MCPs:",
     `  engram     ${status.engram.connected ? "[OK] connected" : "[FAIL] not connected"}`,
@@ -1466,18 +1480,20 @@ export async function depsSync(executor: Executor = defaultExecutor, configDir?:
   const engramResult = await syncEngram(executor, fileOps, configDir);
   const context7Result = await syncContext7(executor, configDir);
   const codegraphResult = await syncCodeGraph(executor);
+  const playwrightResult = await syncPlaywrightConfig(configDir);
 
   // Final health verification -- reuse doctor logic
   const health = await doctor(executor, configDir);
   const healthOk = doctorExitCode(health) === 0;
 
-  const hasErrors = Boolean(engramResult.error || context7Result.error || codegraphResult.error);
+  const hasErrors = Boolean(engramResult.error || context7Result.error || codegraphResult.error || playwrightResult.error);
 
   return {
     ok: !hasErrors && healthOk,
     engram: engramResult,
     context7: context7Result,
     codegraph: codegraphResult,
+    playwright: playwrightResult,
     health,
   };
 }
@@ -1488,6 +1504,7 @@ export function formatSyncResult(result: SyncResult): string {
   lines.push(`Engram:    ${result.engram.error ? `[FAIL] ${result.engram.error}` : `[OK] ${result.engram.action}${result.engram.version ? ` (${result.engram.version})` : ""}`}`);
   lines.push(`Context7:  ${result.context7.error ? `[FAIL] ${result.context7.error}` : `[OK] ${result.context7.action}`}`);
   lines.push(`CodeGraph: ${result.codegraph.error ? `[FAIL] ${result.codegraph.error}` : `[OK] ${result.codegraph.action}${result.codegraph.version ? ` (${result.codegraph.version})` : ""}`}`);
+  if (result.playwright) lines.push(`Playwright: ${result.playwright.error ? `[WARN] ${result.playwright.error}` : `[OK] ${result.playwright.action}`}`);
 
   if (result.ok) {
     lines.push("");

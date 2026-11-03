@@ -137,11 +137,37 @@ describe("T003 visualizer/implementer effective edit/shell parity", () => {
     expect(ruleSlice(vizRules, "shell")).toEqual(ruleSlice(implRules, "shell"));
   });
 
-  it("preserves visualizer non-edit/shell safeguards", () => {
+  it("allows only the Qt/web UI skills and preserves other visualizer permissions", () => {
     const rules = VISUALIZER();
-    // Grant-only skill.
+    // Exactly these two skills are granted; unknown skills stay denied.
+    expect(ruleSlice(rules, "skill")).toEqual([
+      { action: "skill", resource: "*", effect: "deny" },
+      { action: "skill", resource: "aria-qt-ui", effect: "allow" },
+      { action: "skill", resource: "aria-web-ui", effect: "allow" },
+    ]);
     expect(evaluatePermission(rules, "skill", "aria-qt-ui")).toBe("allow");
+    expect(evaluatePermission(rules, "skill", "aria-web-ui")).toBe("allow");
     expect(evaluatePermission(rules, "skill", "unknown-skill")).toBe("deny");
+
+    // The Playwright grant is the sole intentional non-skill exception to
+    // the implementer baseline; ZotPilot remains the existing deny exception.
+    const nonSkillRules = rules.filter((rule) => rule.action !== "skill");
+    expect(nonSkillRules.filter((rule) => rule.action !== "zotpilot_*" && rule.action !== "playwright_*")).toEqual(
+      IMPLEMENTER().filter(
+        (rule) => rule.action !== "skill" && rule.action !== "zotpilot_*" && rule.action !== "playwright_*",
+      ),
+    );
+    expect(ruleSlice(rules, "playwright_*")).toEqual([
+      { action: "playwright_*", resource: "*", effect: "deny" },
+      { action: "playwright_*", resource: "*", effect: "allow" },
+    ]);
+    expect(ruleSlice(IMPLEMENTER(), "playwright_*")).toEqual([
+      { action: "playwright_*", resource: "*", effect: "deny" },
+    ]);
+    expect(nonSkillRules.filter((rule) => rule.action === "zotpilot_*")).toEqual([
+      { action: "zotpilot_*", resource: "*", effect: "deny" },
+    ]);
+
     // Coding MCP triple; research MCP family denied.
     expect(evaluatePermission(rules, "engram_*", "*")).toBe("allow");
     expect(evaluatePermission(rules, "context7_*", "*")).toBe("allow");
@@ -152,7 +178,7 @@ describe("T003 visualizer/implementer effective edit/shell parity", () => {
     expect(evaluatePermission(rules, "webfetch", "https://example.com")).toBe("deny");
     expect(evaluatePermission(rules, "websearch", "query")).toBe("deny");
     expect(evaluatePermission(rules, "question", "*")).toBe("deny");
-    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("deny");
+    expect(evaluatePermission(rules, "external_directory", "/tmp/x")).toBe("allow");
     // Plan access stays denied at execution; no Rule[] emitted for it.
     expect(evaluatePermission(rules, "plan", "*")).toBe("ask");
     expect(rules.some((rule) => rule.action === "mcp_plan")).toBe(false);

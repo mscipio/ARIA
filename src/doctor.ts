@@ -25,7 +25,6 @@ import { defaultCommandsDir, generateCommandFiles, parseManagedHeader as parseCo
 import { PLAN_TOOL_NAME } from "./plan-tool.js";
 import {
   CODING_ROLES,
-  PACKAGE_SKILL_NAMES,
   roleRequirementIssues,
   validateZotPilotPolicy,
 } from "./register.js";
@@ -34,6 +33,7 @@ import { defaultGlobalConfigPath, isSameLocalPluginIdentity, resolveSetupAriaCon
 import { classifyAriaRegistration, normalizeIdentityVersion, parsePluginList, pluginSpecTagVersion } from "./lifecycle.js";
 import { ARIA_SKILL_NAMES, areEquivalentSkillsPaths, isAriaPackageSkillsPath, resolveDurableAriaSkillsRoot } from "./skills.js";
 import type { AriaDefaults, RoleDefaults } from "./types.js";
+import { PLAYWRIGHT_MCP_VERSION } from "./playwright.js";
 
 /**
  * Read-only ARIA doctor: aggregates package, config, routes/models, skills,
@@ -570,7 +570,7 @@ function agentsRuntimeFinding(agents: DoctorV2AgentEntry[] | undefined): DoctorF
 
 function skillsRuntimeFinding(skills: DoctorV2SkillEntry[] | undefined): DoctorFinding {
   if (skills === undefined) {
-    return { severity: "SKIP", area: "runtime", title: "skills (22 live)", detail: RUNTIME_LIST_GAP };
+    return { severity: "SKIP", area: "runtime", title: "skills (24 live)", detail: RUNTIME_LIST_GAP };
   }
   const names = skills
     .map((skill) => (typeof skill.name === "string" && skill.name.length > 0 ? skill.name : skill.id))
@@ -581,13 +581,13 @@ function skillsRuntimeFinding(skills: DoctorV2SkillEntry[] | undefined): DoctorF
   const duplicated = ARIA_SKILL_NAMES.filter((name) => names.filter((seen) => seen === name).length > 1);
   if (duplicated.length > 0) problems.push(`listed more than once: ${duplicated.join(", ")}`);
   if (problems.length > 0) {
-    return { severity: "FAIL", area: "runtime", title: "skills (22 live)", detail: problems.join("; ") };
+    return { severity: "FAIL", area: "runtime", title: "skills (24 live)", detail: problems.join("; ") };
   }
   return {
     severity: "PASS",
     area: "runtime",
-    title: "skills (22 live)",
-    detail: "22 of 22 packaged skills listed exactly once",
+    title: "skills (24 live)",
+    detail: "24 of 24 packaged skills listed exactly once",
   };
 }
 
@@ -898,7 +898,7 @@ function openCodeFinding(opencode: DepsStatus["opencode"], v2: DoctorV2Snapshot 
 }
 
 function dependencyFindings(deps: DepsStatus, v2: DoctorV2Snapshot | undefined): DoctorFinding[] {
-  return [
+  const findings: DoctorFinding[] = [
     openCodeFinding(deps.opencode, v2),
     {
       severity: deps.engram.found && deps.engram.connected ? "PASS" : "FAIL",
@@ -931,6 +931,16 @@ function dependencyFindings(deps: DepsStatus, v2: DoctorV2Snapshot | undefined):
           : `${deps.codegraph.version ?? "version unknown"} (${FRESH_CLI_OBSERVATION})`,
     },
   ];
+  if (deps.playwright) {
+    const ready = deps.playwright.installedVersion === PLAYWRIGHT_MCP_VERSION && deps.playwright.registered && deps.playwright.browserReady;
+    findings.push({
+      severity: ready ? "PASS" : "WARN",
+      area: "dependencies",
+      title: "Playwright browser MCP",
+      detail: `${deps.playwright.installedVersion ? `package ${deps.playwright.installedVersion} installed` : "package missing"}; ${deps.playwright.registered ? "registered" : "not registered"}; ${deps.playwright.browserReady ? "Chromium executable and inspected libraries present" : "Chromium executable/libraries missing or unverified"}; ${ready ? "statically usable" : "not statically usable"}; browser launch/navigation not demonstrated${deps.playwright.detail ? ` (${deps.playwright.detail})` : ""}`,
+    });
+  }
+  return findings;
 }
 
 // ---------------------------------------------------------------------------
@@ -1302,7 +1312,7 @@ async function collectSkillFindings(packageRoot: string, fileOps: DoctorFileOps)
   const findings: DoctorFinding[] = [];
   const failures: string[] = [];
 
-  for (const name of PACKAGE_SKILL_NAMES) {
+  for (const name of ARIA_SKILL_NAMES) {
     const skillPath = resolve(packageRoot, "skills", name, "SKILL.md");
     try {
       const text = await fileOps.readText(skillPath);
@@ -1324,7 +1334,7 @@ async function collectSkillFindings(packageRoot: string, fileOps: DoctorFileOps)
       severity: "PASS",
       area: "skills",
       title: "packaged skills",
-      detail: `${PACKAGE_SKILL_NAMES.length} of ${PACKAGE_SKILL_NAMES.length} validated (matching name, metadata.owner: aria)`,
+      detail: `${ARIA_SKILL_NAMES.length} of ${ARIA_SKILL_NAMES.length} validated (matching name, metadata.owner: aria)`,
     });
   } else {
     findings.push({

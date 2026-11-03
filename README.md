@@ -49,7 +49,7 @@ The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace direc
 | writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-6-luna` | `xhigh` |
 | scientist (`all`) | Scientific authority: question specification, methodology design, and result interpretation | `openai/gpt-6.1-sol` | `medium` |
 
-Only implementer and visualizer can use OpenCode's edit tool for application code, with identical effective edit/shell decisions (T003 parity): both allow ordinary development shell commands and gate protected `.env` files, except destructive removal and package publishing commands, which remain blocked. Workspace/scratch instructions confine transient/generated artifacts, not intentional authorized repo edits; scratch artifacts are never staged, and staging authorized source changes requires human-authorized Git operations (editing alone is not authorization). RDC approvals remain required but are not OS-level sandbox enforcement: the Unix account can still write outside those locations, and confinement is enforced only where ARIA controls paths/environment. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
+Only implementer and visualizer can use OpenCode's edit tool for application code, with identical effective edit/shell decisions: both allow ordinary development shell commands and gate protected `.env` files, except destructive removal and package publishing commands, which remain blocked. Coder remains shell-denied and receives only the bounded native `git_read`, `aria_ship`, and `aria_release` tools. Workspace/scratch instructions confine transient/generated artifacts, not intentional authorized repo edits; scratch artifacts are never staged, and staging authorized source changes requires human-authorized Git operations (editing alone is not authorization). RDC approvals remain required but are not OS-level sandbox enforcement: the Unix account can still write outside those locations, and confinement is enforced only where ARIA controls paths/environment. Reviewer has unrestricted shell access for inspection and verification.
 
 The six RDC coding specialists — explorer, visualizer, planner, architect, implementer, reviewer — run through OpenCode's native `task` tool. The five durable roles — `coder`, `researcher`, `archivist`, `writer`, and `scientist` — run with OpenCode `mode: all` and are available both directly and through `task`. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose). Mode availability is not authority: every role's tools are deny-by-default except what is explicitly granted, and `scientist` in particular has no unrestricted code, shell, MCP, evidence, or persistence authority.
 
@@ -65,6 +65,8 @@ ARIA separates **role authority** from **task methodology**:
 Examples:
 
 - explorer → `rdc-code-exploration`
+- coder → `aria-grill-me` when requirements need a focused challenge and clarification pass
+- visualizer → `aria-qt-ui` for Qt-specific work
 - planner → `rdc-implementation-planning` + `rdc-testing-discipline`
 - architect → `rdc-plan-review` or `rdc-scope-assessment`
 - implementer → `rdc-code-implementation` + proportional testing guidance
@@ -75,6 +77,8 @@ Examples:
 - scientist → `aria-research-planning` or `aria-results-analysis`
 
 ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers packaged skills through OpenCode's V2 `skills: string[]` configuration, appending to and preserving existing entries. Skills stay version-locked to the loaded ARIA package without copying files into another skill registry.
+
+The package also includes `aria-web-ui` for framework-agnostic web accessibility, responsive design, and browser validation guidance. Visualizer can load both `aria-qt-ui` for Qt Widgets/PySide6 and QML/Qt Quick work and `aria-web-ui` for web applications; the prompt keeps those platform-specific boundaries distinct, and web guidance does not imply a Qt/QML migration.
 
 ## Shared Plan
 
@@ -154,7 +158,7 @@ The coder is the only agent allowed to approve, update plan status, add remediat
 
 ## Workspace execution policy
 
-Canonical source: `src/scratch.ts` via `src/paths.ts` guards. Confine transient/generated artifacts (logs, fixtures, temporary outputs, verification evidence, etc.) to `<worktree>/scratch/` (per-task noncolliding subdirs, single `/scratch/` gitignore, task-scoped env/helper with explicit output paths); this does not restrict intentional edits to authorized repository code, tests, configuration, or documentation. Never stage scratch artifacts. Staging explicitly approved source changes is permitted only during human-authorized Git operations; editing does not itself authorize staging. `HOME`/`XDG`/global config preserved; atomic sibling-tmp/file-lock preserved; no OS-sandbox promise (approvals remain required). External tools that cannot accept explicit paths are documented exceptions in the canonical header. See `src/scratch.ts` for the full fail-closed policy.
+Canonical source: `src/scratch.ts` via `src/paths.ts` guards. Every agent confines transient/generated artifacts (logs, fixtures, temporary outputs, verification evidence, etc.) to a unique local `./scratch/YYYY-MM-DD/HHMMSS-title/` directory. No taskId, approved Plan, or `scratch_task` allocation is required. The policy applies to all agents and survives delegation; it does not restrict intentional edits to authorized repository source, tests, configuration, or documentation. Persistent project data, existing output paths/history, and project/global configuration remain at their established locations. Never stage scratch artifacts. Staging authorized source changes still requires explicit human authorization; editing does not itself authorize staging. Doctor remains read-only, setup/lifecycle boundaries and `.aria/rdc/TASKS.md`/Plan authority are unchanged. Preserve `HOME`/`XDG`/global config; this is not an OS sandbox. See `src/scratch.ts` for helper/path semantics and historical-artifact handling.
 
 ## Install
 
@@ -226,6 +230,10 @@ OpenCode Quota 5 is optional: the setup bootstrap lifecycle installs it only whe
 Public CLI surface (see `aria --help`):
 
 ```bash
+aria ship --paths src/file.ts README.md --message "Describe the change" [--push] # Explicit files only; push requires explicit authorization
+aria release 1.2.3 --check [--tag v1.2.3]    # Read-only preflight; not a full readiness claim
+aria release 1.2.3 --full-check [--tag v1.2.3] # Run the project full release gate, no publication
+aria release 1.2.3 --publish [--tag v1.2.3] # Publish exact branch/tag refs and a GitHub Release only when explicitly requested
 aria setup                # Register ARIA with OpenCode; install missing dependencies (idempotent; never upgrades present deps)
 aria doctor               # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
 aria upgrade              # Show upgrade inventory without mutation (requires --yes to apply; ARIA-only)
@@ -240,7 +248,7 @@ aria --help               # Show help
 aria --version            # Show version
 ```
 
-`/aria-push` and `/aria-release` are OpenCode TUI slash commands, not CLI subcommands. Setup installs their managed command files in `~/.config/opencode/commands/`; invoke them in the TUI as `/aria-push [natural-language instructions]` and `/aria-release [natural-language instructions]`.
+`/aria-push` and `/aria-release` are also OpenCode TUI slash commands. Setup installs their managed command files in `~/.config/opencode/commands/`; invoke them as `/aria-push [instructions]` and `/aria-release [instructions]`. These slash commands use Coder-only native tools; they do not grant shell access.
 
 Retired commands are rejected with guidance and are not supported: `aria configure` → `aria models --config`; `aria routes` → `aria models`; `aria update` → `aria upgrade` (ARIA release moves) or `aria setup` (install missing dependencies); `aria deps sync` → `aria deps` (read-only inventory), `aria deps --upgrade` (managed upgrades), or `aria setup` (install missing). The v1.1.x public configuration surface is `aria models` / `aria models --config`.
 
@@ -293,11 +301,11 @@ Upgrade also reconciles the two managed OpenCode slash-command files in `~/.conf
 
 ### `/aria-push`
 
-Run `/aria-push` in the OpenCode TUI, optionally followed by natural-language instructions. The coder performs the repository's 11-step review-driven push workflow: inspect status and scope, validate the approved plan, implement and verify, review changes, then prepare and push the authorized result. It may only act within the approved scope and applicable user authorization. It never force-pushes or uses destructive Git operations. Scratch/generated output stays under `./scratch/`; staging requires explicit human authorization, and scratch artifacts are never staged.
+Run `/aria-push` in the OpenCode TUI or call the CLI as shown above. The Coder-only `aria_ship` tool accepts only explicit file paths, a commit message, and optional `push: true`; it has no shell, arbitrary argv, remote URL, or caller-selected cwd/environment. The tool checks exact commit scope and verifies the remote branch SHA against the configured effective push URL. Commit and push each require explicit user authorization. Never force-push or use destructive recovery. Failed pushes can leave a local commit; inspect status/refs before retrying the exact request. Repository hooks and clean filters are trusted project code and can execute.
 
 ### `/aria-release`
 
-Run `/aria-release` in the OpenCode TUI, optionally followed by natural-language release instructions. It reuses the push workflow, then performs release-specific version checks, gates, tag and GitHub Release creation, and verification. It does not auto-deploy. Authorization remains limited to the approved release scope; no force or destructive operations are allowed. Scratch/generated output stays under `./scratch/`, and staging requires explicit human authorization (scratch artifacts are never staged).
+Run `/aria-release VERSION --check|--full-check|--publish [--tag TAG]` or the same public CLI form. `aria_release` is Coder-only and accepts only a version, one mode, and optional explicit tag. `--check` performs generic clean-branch/version/destination/release-state checks and any known fast checks; it explicitly does not claim full readiness. `--full-check` requires a recognized project full gate; `--publish` additionally requires the user's explicit publication request and then pushes only the current verified branch ref and immutable tag object before creating/verifying the matching `github.com` Release. A verified ARIA target also runs its existing destination-aware post-tag verifier before release creation; no generic project is given ARIA's install workflow. Generic project validation conventions are local Git config: repeatable `aria.release.checkCommand` and `aria.release.fullCheckCommand` values. These are trusted project shell commands; the tool will not guess a test/build recipe. Tag naming is explicit `--tag`, local `aria.releaseTagTemplate` containing one `{version}`, or a single unambiguous existing semantic-tag prefix convention. Only untracked output under a real canonical `scratch/` directory is excluded from cleanliness checks; tracked changes always block. No version edits, package publication, force push, tag movement/deletion, or automatic deployment occur. If a push, verifier, or release step partially succeeds, inspect exact local/remote refs and GitHub identity/state before recovery; never blindly repeat or overwrite.
 
 ### `aria deps`
 

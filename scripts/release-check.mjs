@@ -18,6 +18,12 @@ import process from "node:process";
 // Any stage failure exits nonzero immediately.
 
 const repoRoot = process.cwd();
+const checkArgs = process.argv.slice(2);
+if (checkArgs.some((arg) => arg !== "--fast") || checkArgs.filter((arg) => arg === "--fast").length > 1) {
+  console.error("release-check: usage: node scripts/release-check.mjs [--fast]");
+  process.exit(2);
+}
+const fastOnly = checkArgs.includes("--fast");
 
 const npmScript = process.env.npm_execpath;
 const npm = npmScript ? process.execPath : "npm";
@@ -109,12 +115,16 @@ stage("4/6 git diff --check", () => {
   run("git", ["diff", "--check"]);
 });
 
-stage("5/6 focused lifecycle/hotfix Vitest subset", () => {
-  runNpm(["test", "--", ...FOCUSED_TESTS]);
-});
+if (!fastOnly) {
+  stage("5/6 focused lifecycle/hotfix Vitest subset", () => {
+    runNpm(["test", "--", ...FOCUSED_TESTS]);
+  });
 
-stage("6/6 npm pack + isolated install + packaged aria smoke", () => {
-  runNpm(["run", "smoke:package"]);
-});
+  stage("6/6 npm pack + isolated install + packaged aria smoke", () => {
+    runNpm(["run", "smoke:package"]);
+  });
+}
 
-console.log("release-check: PASS - all stages green");
+console.log(fastOnly
+  ? "release-check: PASS - fast pre-tag stages 1-4 green; not a full release qualification"
+  : "release-check: PASS - all six stages green");
