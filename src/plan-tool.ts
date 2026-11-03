@@ -52,7 +52,7 @@ import {
 
 export const PLAN_TOOL_NAME = "plan";
 
-export const PLAN_TOOL_DESCRIPTION = "Read or update the shared project plan in .aria/rdc/TASKS.md.";
+export const PLAN_TOOL_DESCRIPTION = "Read or update the explicitly identified legacy plan at .aria/rdc/TASKS.md.";
 
 export const PLAN_TOOL_ACTIONS = [
   "create",

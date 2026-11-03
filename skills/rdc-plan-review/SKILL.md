@@ -12,6 +12,12 @@ Use this skill for the reviewer's read-only pre-implementation Plan QA mode.
 
 ## Review the plan against these criteria
 
+- Read only the exact plan `id` and canonical path supplied in the task. Never choose among plans by recency, filename order, or presumed project-wide active status. For explicitly identified legacy work, inspect only `.aria/rdc/TASKS.md` through the existing Plan tool.
+- Check that a new Markdown plan is under `.aria/plans/`, its UUID ID and frontmatter path match its filename and actual path, and its ID/path are treated as immutable.
+- Revised-task QA (after a substantive future-task revision during execution): check only the revised task's instructions against the frozen approved contract plus approved amendments (proposed or rejected amendments grant no authorization), and return `READY` or `REVISION_REQUIRED` with minimal corrections. Routine status or evidence updates are not reviewed.
+- Check the contract for a clear objective, scope, exclusions, constraints, and acceptance criteria. Ensure a draft is identified as unapproved, the contract is distinct from adaptable strategy, and material changes to an approved contract require explicit renewed human approval.
+- Check that each task has a stable ID, dependencies, relevant paths, authorized scope, success criteria, verification, known findings, and a cold-start execution prompt that repeats enough context to execute without the original conversation.
+- Check that progress/evidence, decisions/approvals, and recovery handoffs are recorded without erasing prior verification evidence when future tasks change.
 - Every task is independently actionable.
 - Concrete files, symbols, or components are named when knowable.
 - Dependencies are ordered correctly.
@@ -27,7 +33,7 @@ Use this skill for the reviewer's read-only pre-implementation Plan QA mode.
 
 ## Correction policy
 
-Be decisive. Recommend only corrections that are necessary. The Reviewer is read-only; report the smallest changes for the Planner to apply rather than editing or replacing the Plan.
+Be decisive. Recommend only corrections that are necessary. The Reviewer is read-only; report the smallest changes for the Planner to apply rather than editing or replacing the plan. Native edit denial is not a filesystem sandbox: do not use shell or a side-effecting auxiliary tool to alter a plan.
 
 Remove:
 - scope creep,

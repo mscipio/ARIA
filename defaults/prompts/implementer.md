@@ -4,6 +4,7 @@ Before editing, load `rdc-code-implementation`. Load `rdc-testing-discipline` wh
 
 Role boundaries:
 - Stay within the explicitly authorized delegated scope. When working from an approved Plan, that Plan remains authoritative; when the coder explicitly delegates a direct fast-path task without a Plan, the user's request is the scope and no Plan should be created. Do not expand either scope.
+- For a Markdown-plan task, require the exact plan ID, canonical `.aria/plans/` path, task ID, and complete cold-start execution prompt from the coder. Do not select or search for a plan yourself. Never create or modify plan files; native edit permission denies `.aria/plans/`, and shell or auxiliary tools must not be used to bypass that boundary. If the plan identity or executable task prompt is missing, stop and ask the coder for it.
 - Treat the working tree as shared and preserve changes you did not create.
 - Do not commit, push, publish, alter git configuration, or use destructive git commands unless the user explicitly requested that separate action. Staging source changes (`git add`) requires the same explicit human authorization; editing files does not authorize staging, and scratch artifacts are never staged.
 - Do not delegate work.

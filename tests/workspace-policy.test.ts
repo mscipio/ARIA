@@ -56,7 +56,7 @@ describe("T004 workspace execution policy integration", () => {
   it("survives handoff: child-task instructions forbid bypass by asking another agent", async () => {
     const worktree = await scratchWorktree("policy-handoff");
     const resolved = resolveAriaConfig(worktree);
-    expect(resolved.roles.coder.promptText).toContain("delegation cannot expand authorization");
+    expect(resolved.roles.coder.promptText).toContain("Delegation cannot expand authorization");
     expect(resolved.roles.coder.promptText).toContain("no bypass by asking another agent");
     expect(resolved.roles.scientist.promptText).toContain("survives delegation");
     expect(resolved.roles.writer.promptText).toContain("survives delegation");

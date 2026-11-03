@@ -202,18 +202,54 @@ describe("T003 agent installation", () => {
     }
   });
 
-  it("generates coder guidance for fail-closed unauthorized plan corrections", async () => {
+  it("generates exact-path Markdown-plan workflow guidance while preserving the direct and legacy paths", async () => {
     const resolved = resolveAriaConfig(process.cwd());
     const files = generateAgentFiles(resolved, FIXTURE_VERSION);
 
     const guidance = files.coder.toLowerCase().replace(/\s+/g, " ");
-    expect(guidance).toMatch(/if .*plan.*rejects?.*unauthori[sz]ed.* do not retry/);
-    expect(guidance).toMatch(/candidate.*authori[sz]ed.*exact action/);
-    expect(guidance).toMatch(/real native.*(?:task|tool).*permission path/);
-    expect(guidance).toMatch(/(?:single|only once|one) handoff/);
-    expect(guidance).toMatch(/no .*candidate.*(?:blocker|blocked).*caller.*stop/);
-    expect(guidance).toMatch(/approved.scope corrections?.*`remediate`/);
-    expect(guidance).toMatch(/planner alone performs every plan mutation/);
+    expect(guidance).toContain("newly planned work uses one markdown plan under `.aria/plans/`");
+    expect(guidance).toContain("supplies both its exact id and path");
+    expect(guidance).toContain("never select a plan by recency");
+    expect(guidance).toContain("planner is the only agent with native `edit` permission for `.aria/plans/`");
+    expect(guidance).toContain("have planner record status and evidence");
+    expect(guidance).toContain("in-scope adaptations need no human approval");
+    expect(guidance).toContain("stop that additional work and seek explicit human approval");
+    expect(guidance).toContain("task-level review");
+    expect(guidance).toContain("revised-task qa mode");
+    expect(guidance).toContain("only this review may return `plan_pass`");
+    expect(guidance).toContain("remediation by progress");
+    expect(guidance).toContain("do not require a second human acceptance");
+    expect(guidance).not.toContain("native `task`");
+    expect(guidance).toContain("continue legacy work only when the user or current handoff explicitly identifies `.aria/rdc/tasks.md`");
+    expect(guidance).toContain("without creating a plan or involving planner or reviewer");
+    expect(guidance).toContain("do not bind plans automatically to session metadata");
+    expect(guidance).toContain("for any rejected legacy plan action, do not retry");
+  });
+
+  it("generates Planner-only Markdown plan mutation and read-only Reviewer guidance", async () => {
+    const resolved = resolveAriaConfig(process.cwd());
+    const files = generateAgentFiles(resolved, FIXTURE_VERSION);
+    const planner = files.planner.toLowerCase().replace(/\s+/g, " ");
+    const reviewer = files.reviewer.toLowerCase().replace(/\s+/g, " ");
+    const implementer = files.implementer.toLowerCase().replace(/\s+/g, " ");
+
+    expect(planner).toContain("you are the only aria agent authorized to create or modify markdown plan files under `.aria/plans/`");
+    expect(planner).toContain("generate a uuidv4 with version nibble");
+    expect(planner).toContain("randomness source: planner has no shell");
+    expect(planner).toContain("read the exact proposed path immediately before writing");
+    expect(planner).toContain("never overwrite an existing plan");
+    expect(planner).toContain("never select by recency, directory order, title similarity, or an assumed active plan");
+    expect(planner).toContain("the approved contract is protected");
+    expect(planner).toContain("preserve task ids and all prior evidence");
+    expect(planner).toContain("explicitly identified legacy plans");
+
+    expect(reviewer).toContain("read only the exact `.aria/plans/` path and plan id supplied by the coder");
+    expect(reviewer).toContain("never discover a plan by recency");
+    expect(reviewer).toContain("do not use shell or any side-effecting auxiliary tool to alter a plan");
+    expect(reviewer).toContain("never implement fixes or mutate any plan");
+
+    expect(implementer).toContain("require the exact plan id, canonical `.aria/plans/` path, task id, and complete cold-start execution prompt");
+    expect(implementer).toContain("never create or modify plan files");
   });
 
   it("installs idempotently and never touches unrelated user agents", async () => {

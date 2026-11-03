@@ -14,14 +14,18 @@ Use this skill for independent post-implementation verification.
 
 When an approved persisted plan governs the implementation, preserve the full plan-based RDC review:
 
-1. Read the approved persisted plan in full.
+1. Read the approved plan in full at the exact ID and canonical path supplied by the coder; never discover it by recency or assume a project-wide active plan. For explicitly identified legacy work, use `.aria/rdc/TASKS.md` and its existing Plan tool.
 2. Enumerate every task and every explicit acceptance criterion.
-3. Verify each criterion against the actual changed code and relevant runtime/test evidence.
+3. Verify each criterion against the actual changed code and relevant runtime/test evidence. For a Markdown plan, check that the approved contract has not been silently changed and that task IDs and prior evidence remain intact.
 4. Classify each criterion as:
    - `PASS`,
    - `FAIL`,
    - `INSUFFICIENT EVIDENCE`.
 5. Never return an overall clean verdict while an explicit approved criterion remains unverified or unsatisfied.
+
+For a Markdown plan, verdicts are scoped: a task review returns `TASK_PASS`, `TASK_FAIL`, or `TASK_INSUFFICIENT EVIDENCE` for that task only; the whole-plan review returns `PLAN_PASS` or `PLAN_FAIL` only after every task is completed. Never return `PLAN_PASS` from a single-task review, and never let a completed task imply that the plan passed.
+
+The Reviewer is read-only. Native edit denial is not a filesystem sandbox: do not use shell or any side-effecting auxiliary tool to change a plan. Return corrections or in-scope findings to the coder; Planner alone records plan changes.
 
 When no approved persisted plan governs a fast-path implementation, assess it against the original user request instead: identify the requested behavior and affected behavior, inspect the implementation for that behavior, and assess relevant verification evidence. Classify the requested behavior as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`; do not invent plan tasks or acceptance criteria, and do not require a persisted plan merely to review the fast path.
 

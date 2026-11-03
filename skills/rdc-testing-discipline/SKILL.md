@@ -48,12 +48,13 @@ Require additional verification when an important approved behavior would otherw
 - Before human acceptance, run only minimal essential syntax/build/safety checks and a representative check that demonstrates the real user-facing behavior; retain essential safety checks for consequential risks. No comprehensive suites.
 - Distinguish `implemented` (code exists) from `ready for human acceptance` (minimal smoke passes and behavior can be demonstrated), from `accepted` (user confirms the requested behavior), from `regression protected` (focused tests added after acceptance). Awaiting acceptance is never `accepted`; routine internal steps need no separate approvals.
 - After explicit human acceptance, add ordinary focused regression tests for the accepted behavior.
+- Markdown plans: a `PLAN_PASS` with all tasks completed and demonstration evidence recorded completes the plan. Human acceptance is an extra gate only when the approved contract states it.
 
 ## Phase 3: Real-code-first verification
 
 - Prefer safely executing the changed real code through its actual user-facing path. Use synthetic isolated-method checks only when real execution is impractical, unavailable, or unsafe; state the concrete reason and what the check does not establish.
 - Never perform dangerous or irreversible operations against production to demonstrate behavior. Use a safe representative environment/data or report that execution was not possible and its limits.
 
-Preserved boundaries: destructive/unauthorized-action, scientific-data, and consequential-security protections, plus plan approval/revision/TASKS.md, setup/lifecycle, and read-only doctor boundaries, stay intact. Do not broaden remediation/review cycles, add plan tasks, commit, release, or stage anything.
+Preserved boundaries: destructive/unauthorized-action, scientific-data, and consequential-security protections, plus exact-ID/path Markdown-plan approval and scope rules, explicitly identified legacy Plan/TASKS.md semantics, setup/lifecycle, and read-only doctor boundaries, stay intact. Do not broaden remediation/review cycles, add plan tasks, commit, release, or stage anything.
 
-All agents must put transient test fixtures/results and other generated verification artifacts under a unique local `./scratch/YYYY-MM-DD/HHMMSS-title/` directory. No taskId, approved Plan, or `scratch_task` allocation is required. Preserve persistent project data and existing output/history locations; never stage scratch artifacts. Existing meaningful coverage counts — do not add placement-only tests. Doctor remains read-only, setup/lifecycle and Plan authority boundaries remain intact.
+All agents must put transient test fixtures/results and other generated verification artifacts under a unique local `./scratch/YYYY-MM-DD/HHMMSS-title/` directory. No taskId, approved plan, or `scratch_task` allocation is required. Preserve persistent project data and existing output/history locations; never stage scratch artifacts. Existing meaningful coverage counts — do not add placement-only tests. Doctor remains read-only, setup/lifecycle, Planner-only plan mutation, and exact plan selection boundaries remain intact.

@@ -165,6 +165,15 @@ function scratchEditRules(): AgentRule[] {
   ];
 }
 
+/** Planner-only edit scope for the new coexistable Markdown plan documents. */
+function markdownPlanEditRules(effect: "allow" | "deny"): AgentRule[] {
+  return [".aria/plans", ".aria/plans/**"].map((resource) => ({
+    action: "edit",
+    resource,
+    effect,
+  }));
+}
+
 function denyRule(action: string): AgentRule {
   return { action, resource: "*", effect: "deny" };
 }
@@ -276,6 +285,7 @@ function archivistBaseRules(): AgentRule[] {
     { action: "read", resource: "*.env.example", effect: "allow" },
     denyRule("edit"),
     ...scratchEditRules(),
+    ...markdownPlanEditRules("deny"),
     denyRule("glob"),
     denyRule("grep"),
     denyRule("shell"),
@@ -339,6 +349,7 @@ export function getArchivistScopedPermissions(worktree: string): AgentRule[] {
       effect: "allow" as const,
     })),
     ...scratchEditRules(),
+    ...markdownPlanEditRules("deny"),
     denyRule("glob"),
     denyRule("grep"),
     // Shell: deny first, then exact python allowlist after (never wildcards).
@@ -381,6 +392,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
@@ -420,6 +432,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
@@ -480,6 +493,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedEditRules(),
         { action: "edit", resource: "/**", effect: "deny" },
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
@@ -502,6 +516,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("allow"),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
@@ -526,6 +541,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedEditRules(),
         { action: "edit", resource: "/**", effect: "deny" },
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),
@@ -548,6 +564,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
@@ -578,6 +595,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         allowRule("webfetch"),
@@ -619,6 +637,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         denyRule("glob"),
         denyRule("grep"),
         denyRule("webfetch"),
@@ -647,6 +666,7 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...protectedReadRules(),
         denyRule("edit"),
         ...scratchEditRules(),
+        ...markdownPlanEditRules("deny"),
         allowRule("glob"),
         allowRule("grep"),
         denyRule("webfetch"),

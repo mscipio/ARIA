@@ -151,14 +151,17 @@ describe("ARIA overrides", () => {
       expect(config.roles.scientist.promptText).toContain("scientific authority");
     });
 
-    it("injects fail-closed unauthorized-plan guidance into every ARIA role prompt", () => {
+    it("injects exact-path Markdown and explicit-legacy Plan authority guidance into every ARIA role prompt", () => {
       const config = resolveAriaConfig(tmpdir());
       for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
         const prompt = config.roles[role].promptText;
+        expect(prompt).toContain("exact plan ID and canonical path");
         expect(prompt).toContain("do not retry that action");
-        expect(prompt).toContain("real delegation/tool permission path");
+        expect(prompt).toContain("supported native Planner handoff");
         expect(prompt).toContain("report the blocker to the caller/coordinator and stop");
         expect(prompt).toContain("Never impersonate a role or bypass authority");
+        expect(prompt).toContain("Planner-only through the scoped native edit permission");
+        expect(prompt).toContain("Shell and auxiliary tools with side effects are not reliably confined");
       }
     });
 
@@ -168,7 +171,7 @@ describe("ARIA overrides", () => {
         const prompt = config.roles[role].promptText;
         expect(prompt).toContain("./scratch/YYYY-MM-DD/HHMMSS-title/");
         expect(prompt).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
-        expect(prompt).toContain("Never stage scratch artifacts");
+        expect(prompt).toContain("Scratch artifacts are never staged");
       }
     });
 

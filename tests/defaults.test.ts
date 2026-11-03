@@ -124,17 +124,18 @@ describe("ARIA defaults", () => {
 
   it("coder preserves the human approval gate", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
-    expect(prompt).toContain("STOP for explicit human approval");
-    expect(prompt).toContain("Only after the user explicitly approves the exact current Plan ID and revision");
+    expect(prompt).toContain("stop for the user's explicit approval of that contract");
+    expect(prompt).toContain("After explicit approval of the exact ID/path/contract");
     expect(prompt).not.toMatch(/continue immediately without asking for approval/i);
   });
 
-  it("coder keeps Engram optional for clear fast-path work while preserving plan and risk gates", () => {
+  it("coder keeps Engram optional for clear fast-path work while preserving exact plan identity and risk gates", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
-    expect(prompt).toContain("For a genuinely clear, low-risk, no-active-plan direct fast-path task, Engram retrieval is optional");
+    expect(prompt).toContain("For a genuinely clear, low-risk direct fast-path task, Engram retrieval is optional");
     expect(prompt).toContain("Still use Engram when the request depends on prior decisions or continuity");
-    expect(prompt).toContain("For plan-governed work, call `plan` with action `get`");
-    expect(prompt).toContain("Do not create or consult a new plan for clear routine Git/delivery requests");
+    expect(prompt).toContain("Continue a Markdown plan only when the user or current coordinator handoff supplies both its exact ID and path");
+    expect(prompt).toContain("Do not search for existing plans to decide whether this fast path applies");
+    expect(prompt).toContain("Do not create or consult a plan for clear routine Git/delivery requests");
     expect(prompt).toContain("The fast path is unavailable for explicit plan requests, any UI/UX implementation request, or work with consequential security/permissions implications");
     expect(prompt).toContain("Use the full RDC workflow for all other ineligible work");
   });
@@ -144,7 +145,12 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("For questions");
     expect(prompt).toContain("Do NOT create a plan");
     expect(prompt).toContain("For a clear, explicitly requested routine Git/delivery operation");
-    expect(prompt).toContain("native `task` for coding specialists");
+    expect(prompt).toContain("native V2 `subagent` tool");
+    expect(prompt).toContain("never use a legacy `task` tool");
+    expect(prompt).toContain("Steps M1–M11 are the only Markdown-plan path");
+    expect(prompt).toContain("Legacy Plan-tool workflow");
+    expect(prompt).toContain("STOP autonomous remediation");
+    expect(prompt).not.toContain("native `task`");
     expect(prompt).toContain("task `archivist`");
     expect(prompt).not.toContain("Writing routing:");
     expect(prompt).not.toContain("delegate directly to `writer`");
@@ -161,7 +167,7 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("planner incorporates those findings into the persisted plan");
     // Planner → Reviewer QA → explicit human approval.
     expect(prompt).toContain("Planner → Reviewer plan QA → explicit human approval applies to UI work");
-    expect(prompt).toContain("STOP for explicit human approval");
+    expect(prompt).toContain("stop for the user's explicit approval of that contract");
     // Post-approval routing: approved UI tasks to visualizer, rest to implementer.
     expect(prompt).toContain("delegates implementation to the visualizer instead of the generic implementer");
     expect(prompt).toContain("Backend/compute/infra and unrelated tasks stay with the implementer");
@@ -170,7 +176,7 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("reviewer remains the final authority");
     expect(prompt).toContain("approved visual/behavioral criteria plus code correctness/regression");
     expect(prompt).toContain("Bound BLOCKING findings to meaningful defects, missing required evidence");
-    expect(prompt).toContain("Remediation limits, revision handling, and scope-change procedures are unchanged");
+    expect(prompt).toContain("Remediation by progress");
     // Approval limitation is prompt-level convention, not host enforcement.
     expect(prompt).toContain("coder-mediated approval is a prompt-level workflow convention, NOT host-enforced containment");
     expect(prompt).toContain("directly-invoked edit-capable visualizer subagent may not be plan-state constrained");
@@ -196,14 +202,19 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Do not capture screenshots automatically");
   });
 
-  it("planner prompt keeps Plan authority boundaries and loads planning skills", () => {
+  it("planner prompt keeps Markdown and legacy plan authority boundaries and loads planning skills", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.planner.promptText;
     expect(prompt).toContain("load `rdc-implementation-planning`");
     expect(prompt).toContain("Load `rdc-testing-discipline`");
-    expect(prompt).toContain("Allowed Plan actions: `get`, `create`, `replace`, `update`, `add`, `remediate`, `approve`, `cancel`, and `close`");
-    expect(prompt).toContain("own all shared Plan mutations");
-    expect(prompt).toContain("approval: pending");
-    expect(prompt).toContain("retrieve relevant Engram context before `create`");
+    expect(prompt).toContain("only ARIA agent authorized to create or modify Markdown plan files under `.aria/plans/`");
+    expect(prompt).toContain("Explicitly identified legacy plans");
+    expect(prompt).toContain("the approved contract is protected");
+    expect(prompt).toContain("Record every material change as an amendment");
+    expect(prompt).toContain("Proposed and rejected amendments grant no authorization");
+    expect(prompt).toContain("Never produce a UUID by free-form generation");
+    expect(prompt).toContain("/proc/sys/kernel/random/uuid");
+    expect(prompt).not.toContain("Allowed Plan actions:");
+    expect(prompt).toContain("retrieve relevant Engram context before planning");
   });
 
   it("implementer prompt keeps mutation boundaries and loads implementation skills", () => {
@@ -222,11 +233,18 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Load `rdc-testing-discipline`");
     expect(prompt).toContain("Load `rdc-adversarial-review`");
     expect(prompt).toContain("only when the coder explicitly tasks adversarial review");
-    expect(prompt).toContain("Allowed Plan action: `get` only");
+    expect(prompt).toContain("For a new Markdown plan, read only the exact `.aria/plans/` path and plan ID supplied by the coder");
+    expect(prompt).toContain("the only allowed Plan action is `get`");
     expect(prompt).toContain("REVISION_REQUIRED");
     expect(prompt).toContain("SCOPE_CHANGE");
     expect(prompt).toContain("WITHIN_SCOPE");
-    expect(prompt).toContain("Planner alone applies corrections with `replace`");
+    expect(prompt).toContain("Planner alone applies Markdown corrections in the same file while preserving its ID/path");
+    expect(prompt).toContain("`TASK_PASS`, `TASK_FAIL`, or `TASK_INSUFFICIENT EVIDENCE`");
+    expect(prompt).toContain("`PLAN_PASS` or `PLAN_FAIL`");
+    expect(prompt).toContain("Revised-Task QA");
+    expect(prompt).toContain("frozen approved contract plus approved amendments");
+    expect(prompt).toContain("Proposed or rejected amendments grant no authorization");
+    expect(prompt).toContain("The coder must not run the task until `READY`");
     expect(prompt).toContain("Engram use is read-only during review");
   });
 
@@ -274,6 +292,8 @@ describe("ARIA defaults", () => {
   it("coder prompt routes optional adversarial review after normal PASS with independent non-resetting bounds", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
     expect(prompt).toContain("Optional adversarial review");
+    expect(prompt).toContain("adversarial BLOCKING findings are remediated under M10");
+    expect(prompt).toContain("The fixed allowances above apply to legacy plans only");
     expect(prompt).toContain("after a normal reviewer PASS");
     expect(prompt).toContain("coder-chosen and risk-based, not universal");
     expect(prompt).toContain("runs only after normal PASS");
@@ -295,7 +315,7 @@ describe("ARIA defaults", () => {
     // Final both-passed invariant.
     expect(prompt).toContain("both normal and adversarial review must have passed");
     // Out-of-scope materially required work: Reviewer scope assessment.
-    expect(prompt).toContain("task Reviewer for a post-review scope assessment");
+    expect(prompt).toContain("M8 for Markdown plans, legacy step 10 for legacy plans");
     // No new tools, delegation, persistence, or universal invocation.
     expect(prompt).not.toContain("load `rdc-adversarial-review`");
   });

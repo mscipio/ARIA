@@ -112,6 +112,7 @@ describe("T006 native V2 plan tool", () => {
     const tool = createPlanTool("/tmp/aria-plan-tool-test");
     expect(tool.name).toBe("plan");
     expect(tool.description).toContain(".aria/rdc/TASKS.md");
+    expect(tool.description).toContain("explicitly identified legacy plan");
   });
 
   it("enforces Planner-only Plan mutations with sessionID required", async () => {

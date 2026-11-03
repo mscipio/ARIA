@@ -86,6 +86,36 @@ describe("T022 native scratch task permissions", () => {
     }
   });
 
+  it("grants Markdown-plan edits only to Planner while every role can read plans", () => {
+    const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
+
+    for (const role of ROLES) {
+      const expected = role === "planner" ? "allow" : "deny";
+      const rules = getPermissionsForRole(role);
+      expect(evaluatePermission(rules, "read", ".aria/plans/example-1234.md")).toBe("allow");
+      expect(evaluatePermission(rules, "edit", ".aria/plans")).toBe(expected);
+      expect(evaluatePermission(rules, "edit", ".aria/plans/example-1234.md")).toBe(expected);
+      expect(evaluatePermission(rules, "edit", ".aria/plans/nested/example.md")).toBe(expected);
+      const merged = [...Agent.Info.default(Agent.ID.make(role)).permissions, ...rules];
+      expect(evaluatePermission(merged, "edit", ".aria/plans/example-1234.md")).toBe(expected);
+
+      const serialized = generatedPermissions(generated[role]);
+      expect(evaluatePermission(serialized, "read", ".aria/plans/example-1234.md")).toBe("allow");
+      expect(evaluatePermission(serialized, "edit", ".aria/plans/example-1234.md")).toBe(expected);
+    }
+
+    const originalWikiDir = process.env.WIKI_DIR;
+    try {
+      process.env.WIKI_DIR = join(process.cwd(), ".aria", "plans");
+      const archivist = getArchivistScopedPermissions(process.cwd());
+      expect(evaluatePermission(archivist, "read", ".aria/plans/example.md")).toBe("allow");
+      expect(evaluatePermission(archivist, "edit", ".aria/plans/example.md")).toBe("deny");
+    } finally {
+      if (originalWikiDir === undefined) delete process.env.WIKI_DIR;
+      else process.env.WIKI_DIR = originalWikiDir;
+    }
+  });
+
   it("preserves effective registered edits while granting only scratch paths", () => {
     const registered = effectiveRolePermissions();
     for (const role of ROLES) {
@@ -133,7 +163,8 @@ describe("T022 native scratch task permissions", () => {
       expect(grant?.[1] ?? null).toBe(permitted ? "allow" : null);
       expect(generated[role].includes("invoke the native `scratch_task` tool")).toBe(false);
       expect(generated[role]).toContain("Persistent project data");
-      expect(generated[role]).toContain("authoritative `.aria/rdc/TASKS.md` plan");
+      expect(generated[role]).toContain("exact `.aria/plans/` identity");
+      expect(generated[role]).toContain("legacy `.aria/rdc/TASKS.md`");
       if (role === "visualizer") {
         expect(generated[role]).toContain("worktree-local `./scratch/YYYY-MM-DD/HHMMSS-title/` path");
         expect(generated[role]).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
