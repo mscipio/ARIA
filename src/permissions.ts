@@ -401,7 +401,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
           "explorer",
           "visualizer",
           "planner",
-          "architect",
           "implementer",
           "reviewer",
           "researcher",
@@ -518,28 +517,6 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         ...skillRules("rdc-implementation-planning", "rdc-testing-discipline"),
         planPremiseRecoveryRule("planner"),
       ];
-    case "architect":
-      return [
-        fallbackAskRule(),
-        PLAYWRIGHT_DENY,
-        ...protectedReadRules(),
-        denyRule("edit"),
-        ...scratchEditRules(),
-        allowRule("glob"),
-        allowRule("grep"),
-        allowRule("webfetch"),
-        allowRule("websearch"),
-        denyRule("question"),
-        allowRule("external_directory"),
-        ...CODING_MCP,
-        denyRule("git_read"),
-        denyRule("aria_ship"),
-        denyRule("aria_release"),
-        denyRule("shell"),
-        ...subagentRules(),
-        ...skillRules("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("architect"),
-      ];
     case "implementer":
       return [
         fallbackAskRule(),
@@ -585,7 +562,13 @@ export function getPermissionsForRole(role: RoleName): AgentRule[] {
         // Reviewer shell is unrestricted for inspection (V1 `bash: allow`).
         allowRule("shell"),
         ...subagentRules(),
-        ...skillRules("rdc-implementation-review", "rdc-adversarial-review", "rdc-testing-discipline"),
+        ...skillRules(
+          "rdc-plan-review",
+          "rdc-implementation-review",
+          "rdc-scope-assessment",
+          "rdc-adversarial-review",
+          "rdc-testing-discipline",
+        ),
         planPremiseRecoveryRule("reviewer"),
       ];
     case "researcher":

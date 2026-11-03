@@ -55,7 +55,7 @@ function mockSessions(options: {
   context: ReturnType<typeof vi.fn>;
 } {
   return {
-    create: vi.fn(async (input: { parentID: string; agent: "coder"; title: string }) => options.child ?? ({
+    create: vi.fn(async (input: { parentID: string; agent: "planner"; title: string }) => options.child ?? ({
       id: "child-session",
       parentID: input.parentID,
       agent: input.agent,
@@ -64,7 +64,7 @@ function mockSessions(options: {
     wait: vi.fn(async (_input: { sessionID: string }) => undefined),
     context: vi.fn(async (_input: { sessionID: string }) => options.messages ?? [{
       type: "assistant",
-      agent: "coder",
+      agent: "planner",
       content: [{ type: "text", text: "Recorded the factual correction with the supplied evidence." }],
     }]),
   };
@@ -129,7 +129,7 @@ describe("one-shot plan premise recovery tool", () => {
     expect(sessions.create).toHaveBeenCalledTimes(1);
     expect(sessions.create).toHaveBeenCalledWith({
       parentID: "parent-session",
-      agent: "coder",
+      agent: "planner",
       title: "Plan premise recovery · T001",
     });
     expect(sessions.prompt).toHaveBeenCalledTimes(1);
@@ -169,7 +169,7 @@ describe("one-shot plan premise recovery tool", () => {
     expect(sessions.create).not.toHaveBeenCalled();
     expect(sessions.prompt).not.toHaveBeenCalled();
 
-    const mismatchedChild = mockSessions({ child: { id: "child-session", parentID: "another-parent", agent: "coder" } });
+    const mismatchedChild = mockSessions({ child: { id: "child-session", parentID: "another-parent", agent: "planner" } });
     const childMismatch = await createPlanPremiseRecoveryTool(root, mismatchedChild)
       .execute(recoveryInput(plan), recoveryContext());
     expect(childMismatch.content).toContain("parent or authorized agent did not match");
@@ -182,7 +182,7 @@ describe("one-shot plan premise recovery tool", () => {
     const plan = await approvedPlan(root, ["Investigate whether The source contains the obsolete figure 12."]);
     const sessions = mockSessions({ messages: [{
       type: "assistant",
-      agent: "coder",
+      agent: "planner",
       content: [{ type: "text", text: "CAS conflict: the active plan revision changed; no mutation was made." }],
     }] });
     const tool = createPlanPremiseRecoveryTool(root, sessions);
@@ -206,7 +206,7 @@ describe("one-shot plan premise recovery tool", () => {
     expect(sessions.context).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed when the coder child returns no assistant response", async () => {
+  it("fails closed when the Planner child returns no assistant response", async () => {
     const root = await fixtureRoot("missing-response");
     const plan = await approvedPlan(root, ["Investigate whether The source contains the obsolete figure 12."]);
     const sessions = mockSessions({ messages: [] });
@@ -244,7 +244,7 @@ describe("one-shot plan premise recovery tool", () => {
       },
       messages: [{
         type: "assistant",
-        agent: "coder",
+        agent: "planner",
         content: [{ type: "text", text: "Added one material-scope task; renewed approval is required." }],
       }],
     });
@@ -314,7 +314,7 @@ describe("one-shot plan premise recovery tool", () => {
     for (const role of PLAN_PREMISE_RECOVERY_ROLES) {
       expect(permissions[role][PLAN_PREMISE_RECOVERY_TOOL_NAME]).toBe("allow");
     }
-    for (const role of ["coder", "planner", "architect"] as const) {
+    for (const role of ["coder", "planner"] as const) {
       expect(permissions[role][PLAN_PREMISE_RECOVERY_TOOL_NAME]).toBe("deny");
     }
     expect(permissions.coder.plan).toBe("allow");

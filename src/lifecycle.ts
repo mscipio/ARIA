@@ -67,7 +67,7 @@ export interface SetupResult {
 /**
  * T008 file-phase outcomes: global `opencode.json(c)` (exact plugin URI,
  * single skills root, depth default 3; unrelated user keys preserved,
- * backup before replace, idempotent) and the eleven managed agent files
+ * backup before replace, idempotent) and the ten managed agent files
  * (via T003 `installAgentFiles`, resolved project-neutral). T002 discovery
  * selects which of `opencode.json` / `opencode.jsonc` is the target and
  * `path` always reports the resolved file.
@@ -978,7 +978,7 @@ export async function setup(
   };
 
   // -----------------------------------------------------------------------
-  // Phase 1c — Managed agent files (T008): the eleven deterministic files
+  // Phase 1c — Managed agent files (T008): the ten deterministic files
   // via T003 `installAgentFiles` (ownership markers, user-agent backups,
   // atomic writes). Resolution is project-neutral (defaults plus global
   // overrides only) so CWD project models never bake into global files
@@ -999,7 +999,7 @@ export async function setup(
     // exposed as `partialResult`) must be rolled back here too. Config
     // rollback below stays mandatory; both passes are best-effort.
     const partial = (error as { partialResult?: AgentInstallResult } | null | undefined)?.partialResult;
-    if (partial && (partial.written.length > 0 || Object.keys(partial.backups ?? {}).length > 0)) {
+    if (partial && (partial.written.length > 0 || Object.keys(partial.backups ?? {}).length > 0 || partial.retiredFiles?.length)) {
       await rollbackAgentInstall(agentsDir, partial).catch(() => undefined);
     }
     await rollbackSetupConfigFile(configState.path, configState).catch(() => undefined);
@@ -1019,6 +1019,11 @@ export async function setup(
     version: installed.version,
     written: installed.written.length,
     unchanged: installed.unchanged.length,
+    ...(installed.legacyArchitectWarning
+      ? { detail: installed.legacyArchitectWarning }
+      : installed.retiredFiles.length > 0
+        ? { detail: `Archived the obsolete Architect agent at ${installed.retiredFiles[0]!.backupPath}` }
+        : {}),
   };
 
   try {

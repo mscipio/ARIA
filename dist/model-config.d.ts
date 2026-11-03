@@ -154,7 +154,7 @@ export declare function reconcileManagedAgents(worktree: string, options?: {
  * Lightweight interactive model configuration for `aria models --config`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
- * shows the eleven configurable roles with their four-layer precedence
+ * shows the ten configurable roles with their four-layer precedence
  * (packaged default, global override, project override, resolved route),
  * annotating resolved models the CLI did not list (purely diagnostic — no
  * fallback routing is added). The user may keep the current configuration

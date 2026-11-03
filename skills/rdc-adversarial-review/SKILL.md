@@ -58,7 +58,7 @@ The two modes have distinct, non-overlapping purposes:
 - Runs **only after** the normal implementation review has apparently passed.
 - Assumes apparent correctness and attacks it: plausible counterexamples, hidden assumptions, negative paths, state and ordering hazards, permission and authority bypass, semantic contract violations, untested interactions, coupling, and relevant boundary failures.
 - Does **not** duplicate the normal checklist and does **not** manufacture new requirements beyond the approved plan, existing contracts/invariants, reasonably implied backward compatibility, and concrete safety/security properties.
-- Desirable but out-of-scope work is reported as `NON-BLOCKING` future work; materially required out-of-scope work stops for architect scope assessment and renewed approval.
+- Desirable but out-of-scope work is reported as `NON-BLOCKING` future work; materially required out-of-scope work stops for Reviewer scope assessment and renewed approval.
 
 ## Selective invocation
 
@@ -145,7 +145,7 @@ This skill's authority is limited to:
 - Reasonably implied backward compatibility.
 - Concrete safety and security properties.
 
-Desirable but out-of-scope work is `NON-BLOCKING` future work. Materially required out-of-scope work requires architect scope assessment and renewed approval before it becomes blocking.
+Desirable but out-of-scope work is `NON-BLOCKING` future work. Materially required out-of-scope work requires Reviewer scope assessment and renewed approval before it becomes blocking.
 
 ## Finding format
 

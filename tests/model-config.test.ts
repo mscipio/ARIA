@@ -68,7 +68,6 @@ const ROLES = [
   "explorer",
   "visualizer",
   "planner",
-  "architect",
   "implementer",
   "reviewer",
   "researcher",
@@ -451,7 +450,7 @@ describe("discoverAvailableModels", () => {
 // ---------------------------------------------------------------------------
 
 describe("configureModels", () => {
-  it("shows the four-layer precedence for all eleven roles and the simplified menu", async () => {
+  it("shows the four-layer precedence for all ten roles and the simplified menu", async () => {
     await makeHome(); // isolate from the real user global config
     const worktree = await makeWorktree();
     const { input } = scriptedInput([""]); // Enter at the top menu keeps current
@@ -474,10 +473,10 @@ describe("configureModels", () => {
     for (const role of ROLES) {
       expect(text).toContain(`  ${role}\n    default:`);
     }
-    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(11);
-    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(11);
-    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(11);
-    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(11);
+    expect((text.match(/\n {4}default: {3}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}global: {4}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}project: {3}/g) ?? []).length).toBe(10);
+    expect((text.match(/\n {4}resolved: {2}/g) ?? []).length).toBe(10);
     // researcher appears between reviewer and archivist with its packaged
     // sol/medium default (absent global/project layers render as dashes).
     expect(text).toContain(
@@ -627,7 +626,7 @@ describe("configureModels", () => {
 
     expect(result.status).toBe("configured");
     expect(result.changedRoles).toEqual(["researcher"]);
-    expect(lines.join("\n")).toContain("Roles available: coder, explorer, visualizer, planner, architect, implementer, reviewer, researcher, archivist, writer");
+    expect(lines.join("\n")).toContain("Roles available: coder, explorer, visualizer, planner, implementer, reviewer, researcher, archivist, writer, scientist");
     expect(await readWrittenRoles(home)).toEqual({
       researcher: { model: "opencode-go/deepseek-v4-pro" },
     });
@@ -790,15 +789,14 @@ describe("configureModels", () => {
     expect(text).not.toContain("low");
   });
 
-  it("preserves untouched global roles while editing one role", async () => {
+  it("migrates an untouched global Architect override to Reviewer while editing another role", async () => {
     const home = await makeHome();
     const worktree = await makeWorktree();
     const configPath = await writeGlobalConfig(home, {
       planner: { model: "openai/gpt-5.6-terra", variant: "xhigh" },
       architect: { model: "openai/gpt-5.6-sol", variant: "low" },
-      reviewer: { model: "opencode-go/custom-reviewer" },
     });
-    const { input } = scriptedInput(["2", "reviewer", "opencode-go/deepseek-v4-pro"]);
+    const { input } = scriptedInput(["2", "researcher", "opencode-go/deepseek-v4-pro"]);
     const { output } = collectOutput();
 
     const result = await configureModels(worktree, {
@@ -809,12 +807,38 @@ describe("configureModels", () => {
     });
 
     expect(result.status).toBe("configured");
-    expect(result.changedRoles).toEqual(["reviewer"]);
+    expect(result.changedRoles).toEqual(["researcher"]);
 
     const written = JSON.parse(await readFile(configPath, "utf8")) as { roles?: Record<string, unknown> };
     expect(written.roles?.planner).toEqual({ model: "openai/gpt-5.6-terra", variant: "xhigh" });
-    expect(written.roles?.architect).toEqual({ model: "openai/gpt-5.6-sol", variant: "low" });
-    expect(written.roles?.reviewer).toEqual({ model: "opencode-go/deepseek-v4-pro" });
+    expect(written.roles?.architect).toBeUndefined();
+    expect(written.roles?.reviewer).toEqual({ model: "openai/gpt-5.6-sol", variant: "low" });
+    expect(written.roles?.researcher).toEqual({ model: "opencode-go/deepseek-v4-pro" });
+  });
+
+  it("retires a colliding Architect override while preserving Reviewer during another edit", async () => {
+    const home = await makeHome();
+    const worktree = await makeWorktree();
+    const configPath = await writeGlobalConfig(home, {
+      architect: { model: "openai/gpt-5.6-sol", variant: "high" },
+      reviewer: { model: "opencode-go/custom-reviewer" },
+    });
+    const { input } = scriptedInput(["2", "planner", "opencode-go/deepseek-v4-pro"]);
+    const { output } = collectOutput();
+
+    const result = await configureModels(worktree, {
+      discovery: async () => DISCOVERED_MODELS,
+      input,
+      output,
+      tty: true,
+    });
+
+    expect(result.status).toBe("configured");
+    expect(result.changedRoles).toEqual(["planner"]);
+    const written = JSON.parse(await readFile(configPath, "utf8")) as { roles?: Record<string, unknown> };
+    expect(written.roles?.architect).toBeUndefined();
+    expect(written.roles?.reviewer).toEqual({ model: "opencode-go/custom-reviewer" });
+    expect(written.roles?.planner).toEqual({ model: "opencode-go/deepseek-v4-pro" });
   });
 
   it("seeds from legacy-global choices when the canonical file is absent", async () => {
@@ -1075,7 +1099,7 @@ describe("configureModels", () => {
     expect(result.status).toBe("unchanged");
     const text = lines.join("\n");
     const rule = `  ${"-".repeat(60)}`;
-    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(10); // between the eleven roles
+    expect(text.split("\n").filter((line) => line === rule)).toHaveLength(9); // between the ten roles
     expect(text).toContain(`${rule}\n  explorer`); // after coder's block
     expect(text).not.toContain(`${rule}\n\nWhat would you like to do?`); // never after scientist
     // The single-role configuration view starts after the roles prompt line.
@@ -1101,7 +1125,7 @@ describe("configureModels", () => {
     expect(text).toContain("resolved:  \x1b[1mopencode-go/muse-spark-1.3-contributor (xhigh)\x1b[0m [not listed by OpenCode]");
     // Exactly one bold segment per role (the resolved value); labels and other
     // layers stay unbolded, and no warnings render here.
-    expect(text.split("\x1b[1m").length - 1).toBe(11);
+    expect(text.split("\x1b[1m").length - 1).toBe(10);
     expect(text.split("\x1b[31m").length - 1).toBe(0);
   });
 

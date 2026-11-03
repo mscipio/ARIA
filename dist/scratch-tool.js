@@ -1,4 +1,5 @@
-import { scratchTaskScope } from "./scratch.js";
+import { join } from "node:path";
+import { createScratchRunDir, resolveScratchRoot } from "./scratch.js";
 export const SCRATCH_TASK_TOOL_NAME = "scratch_task";
 export const scratchTaskToolInputSchema = {
     type: "object",
@@ -8,7 +9,7 @@ export const scratchTaskToolInputSchema = {
             minLength: 1,
             maxLength: 64,
             pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
-            description: "Approved task ID (a safe 1–64 character path component)",
+            description: "Optional workflow reference; scratch allocation does not inspect task or plan state",
         },
         taskName: {
             type: "string",
@@ -17,29 +18,26 @@ export const scratchTaskToolInputSchema = {
             description: "Short descriptive task name used to form a safe scratch-directory slug",
         },
     },
-    required: ["taskId", "taskName"],
+    required: ["taskName"],
     additionalProperties: false,
 };
 function toolError(message) {
     return { content: message, metadata: { title: "Error" } };
 }
-/** Build a native V2 tool for allocating a task scope under the startup project. */
+/** Build a native V2 tool for allocating a named output run under the startup project. */
 export function createScratchTaskTool(projectDirectory) {
     return {
         name: SCRATCH_TASK_TOOL_NAME,
-        description: "Allocate the canonical date-scoped scratch directory for an approved task and return its task directory and useful output subpaths.",
+        description: "Allocate a canonical timestamped scratch directory for generated task output; no plan or task lookup is performed.",
         input: scratchTaskToolInputSchema,
         async execute(input) {
             if (!projectDirectory) {
                 return toolError("Scratch allocation requires an OpenCode project location directory; no cwd fallback is used.");
             }
             if (!input || typeof input !== "object" || Array.isArray(input)) {
-                return toolError("taskId and taskName are required for scratch allocation");
+                return toolError("taskName is required for scratch allocation");
             }
             const args = input;
-            if (typeof args.taskId !== "string" || args.taskId.trim().length === 0 || args.taskId.trim().length > 64) {
-                return toolError("taskId must be a non-empty safe task ID of at most 64 characters");
-            }
             if (typeof args.taskName !== "string") {
                 return toolError("taskName must be a non-empty descriptive string");
             }
@@ -52,10 +50,17 @@ export function createScratchTaskTool(projectDirectory) {
                 return toolError("taskName must be a non-empty descriptive string of at most 200 characters without control characters");
             }
             try {
-                const scope = await scratchTaskScope(projectDirectory, args.taskId, taskName);
+                const { scratch } = await resolveScratchRoot(projectDirectory);
+                const taskDir = await createScratchRunDir(projectDirectory, taskName);
+                const subdirectories = [
+                    ["tmp", "tmp"], ["testFixtures", "tests/fixtures"], ["testResults", "tests/results"],
+                    ["logs", "logs"], ["screenshots", "captures/screenshots"], ["videos", "captures/videos"],
+                    ["builds", "builds"], ["environments", "environments"], ["runtime", "runtime"], ["experiments", "experiments"],
+                ];
+                const dirs = Object.fromEntries(subdirectories.map(([key, subdir]) => [key, join(taskDir, subdir)]));
                 return {
-                    content: JSON.stringify({ scratch: scope.scratch, taskDir: scope.taskDir, dirs: scope.dirs }, null, 2),
-                    metadata: { title: `Allocate task scratch · ${taskName}` },
+                    content: JSON.stringify({ scratch, taskDir, dirs }, null, 2),
+                    metadata: { title: `Allocate scratch · ${taskName}` },
                 };
             }
             catch (error) {

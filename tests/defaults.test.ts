@@ -15,14 +15,13 @@ afterEach(async () => {
 });
 
 describe("ARIA defaults", () => {
-  it("contains exactly the eleven supported agents in stable order", () => {
+  it("contains exactly the ten supported agents in stable order", () => {
     const defaults = loadDefaultConfig();
     expect(Object.keys(defaults.roles)).toEqual([
       "coder",
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",
@@ -31,7 +30,6 @@ describe("ARIA defaults", () => {
       "scientist",
     ]);
     expect(defaults.roles.planner).not.toHaveProperty("fallbacks");
-    expect(defaults.roles.architect).not.toHaveProperty("fallbacks");
     expect(defaults.roles.researcher).toEqual({
       model: "openai/gpt-6.1-sol",
       variant: "medium",
@@ -46,7 +44,7 @@ describe("ARIA defaults", () => {
     });
   });
 
-  it("keeps exactly five durable `all` modes and six specialist `subagent` modes", () => {
+  it("keeps exactly five durable `all` modes and five specialist `subagent` modes", () => {
     const defaults = loadDefaultConfig();
     const byMode = Object.fromEntries(
       Object.entries(defaults.roles).map(([role, entry]) => [role, entry.mode]),
@@ -56,7 +54,6 @@ describe("ARIA defaults", () => {
       explorer: "subagent",
       visualizer: "subagent",
       planner: "subagent",
-      architect: "subagent",
       implementer: "subagent",
       reviewer: "subagent",
       researcher: "all",
@@ -73,7 +70,6 @@ describe("ARIA defaults", () => {
       explorer: { model: "opencode-go/muse-spark-1.3-contributor", variant: "high" },
       visualizer: { model: "opencode-go/muse-spark-1.3-contributor", variant: "xhigh" },
       planner: { model: "openai/gpt-6-luna", variant: "xhigh" },
-      architect: { model: "openai/gpt-6.1-sol", variant: "high" },
       implementer: { model: "opencode-go/muse-spark-1.3-contributor", variant: "xhigh" },
       reviewer: { model: "openai/gpt-6.1-sol", variant: "medium" },
       researcher: { model: "openai/gpt-6.1-sol", variant: "medium" },
@@ -128,8 +124,8 @@ describe("ARIA defaults", () => {
 
   it("coder preserves the human approval gate", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.coder.promptText;
-    expect(prompt).toContain("STOP and wait for the user to approve");
-    expect(prompt).toContain("Only after the user explicitly approves");
+    expect(prompt).toContain("STOP for explicit human approval");
+    expect(prompt).toContain("Only after the user explicitly approves the exact current Plan ID and revision");
     expect(prompt).not.toMatch(/continue immediately without asking for approval/i);
   });
 
@@ -163,9 +159,9 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("implementation-neutral requirements");
     expect(prompt).toContain("testable visual/behavioral acceptance criteria");
     expect(prompt).toContain("planner incorporates those findings into the persisted plan");
-    // Planner → architect QA → explicit human approval unchanged.
-    expect(prompt).toContain("Planner → architect QA → explicit human approval is unchanged");
-    expect(prompt).toContain("STOP and wait for the user to approve");
+    // Planner → Reviewer QA → explicit human approval.
+    expect(prompt).toContain("Planner → Reviewer plan QA → explicit human approval applies to UI work");
+    expect(prompt).toContain("STOP for explicit human approval");
     // Post-approval routing: approved UI tasks to visualizer, rest to implementer.
     expect(prompt).toContain("delegates implementation to the visualizer instead of the generic implementer");
     expect(prompt).toContain("Backend/compute/infra and unrelated tasks stay with the implementer");
@@ -204,20 +200,10 @@ describe("ARIA defaults", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.planner.promptText;
     expect(prompt).toContain("load `rdc-implementation-planning`");
     expect(prompt).toContain("Load `rdc-testing-discipline`");
-    expect(prompt).toContain("Allowed Plan actions: `get`, `create`");
+    expect(prompt).toContain("Allowed Plan actions: `get`, `create`, `replace`, `update`, `add`, `remediate`, `approve`, `cancel`, and `close`");
+    expect(prompt).toContain("own all shared Plan mutations");
     expect(prompt).toContain("approval: pending");
     expect(prompt).toContain("retrieve relevant Engram context before `create`");
-  });
-
-  it("architect prompt keeps both authority modes and loads mode-specific skills", () => {
-    const prompt = resolveAriaConfig(tmpdir()).roles.architect.promptText;
-    expect(prompt).toContain("Load `rdc-plan-review`");
-    expect(prompt).toContain("Load `rdc-scope-assessment`");
-    expect(prompt).toContain("Allowed Plan actions: `get`, `replace`");
-    expect(prompt).toContain("READY");
-    expect(prompt).toContain("REVISED");
-    expect(prompt).toContain("SCOPE_CHANGE");
-    expect(prompt).toContain("WITHIN_SCOPE");
   });
 
   it("implementer prompt keeps mutation boundaries and loads implementation skills", () => {
@@ -225,16 +211,22 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("load `rdc-code-implementation`");
     expect(prompt).toContain("Load `rdc-testing-discipline`");
     expect(prompt).toContain("Do not commit, push, publish");
-    expect(prompt).toContain("approved Plan remains authoritative");
+    expect(prompt).toContain("When working from an approved Plan, that Plan remains authoritative");
   });
 
   it("reviewer prompt keeps independent read-only review contract and loads review skills", () => {
     const prompt = resolveAriaConfig(tmpdir()).roles.reviewer.promptText;
     expect(prompt).toContain("Load `rdc-implementation-review`");
+    expect(prompt).toContain("Load `rdc-plan-review`");
+    expect(prompt).toContain("Load `rdc-scope-assessment`");
     expect(prompt).toContain("Load `rdc-testing-discipline`");
     expect(prompt).toContain("Load `rdc-adversarial-review`");
     expect(prompt).toContain("only when the coder explicitly tasks adversarial review");
     expect(prompt).toContain("Allowed Plan action: `get` only");
+    expect(prompt).toContain("REVISION_REQUIRED");
+    expect(prompt).toContain("SCOPE_CHANGE");
+    expect(prompt).toContain("WITHIN_SCOPE");
+    expect(prompt).toContain("Planner alone applies corrections with `replace`");
     expect(prompt).toContain("Engram use is read-only during review");
   });
 
@@ -302,15 +294,15 @@ describe("ARIA defaults", () => {
     expect(prompt).toContain("Stop for user direction when the applicable allowance is exhausted");
     // Final both-passed invariant.
     expect(prompt).toContain("both normal and adversarial review must have passed");
-    // Out-of-scope materially required work: architect scope assessment.
-    expect(prompt).toContain("task architect for scope assessment and renewed approval");
+    // Out-of-scope materially required work: Reviewer scope assessment.
+    expect(prompt).toContain("task Reviewer for a post-review scope assessment");
     // No new tools, delegation, persistence, or universal invocation.
     expect(prompt).not.toContain("load `rdc-adversarial-review`");
   });
 
   it("adds shared MCP guidance only to roles that have shared MCP access", () => {
     const config = resolveAriaConfig(tmpdir());
-    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"] as const) {
+    for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer"] as const) {
       const prompt = config.roles[role].promptText;
       expect(prompt).toContain("## MCP Guidance");
       expect(prompt).toContain("CodeGraph provides codebase intelligence");

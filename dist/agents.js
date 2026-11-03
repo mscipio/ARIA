@@ -41,9 +41,8 @@ export { ROLES };
 const AGENT_DESCRIPTIONS = {
     coder: "Coordinates planning, implementation, and review.",
     explorer: "explorer coding specialist for ARIA Review-Driven Coding.",
-    visualizer: "Qt UI/UX Engineer for ARIA Review-Driven Coding: UX/interaction and Qt visual design, approved-scope PySide6 implementation, and capture→inspect→refine→verify visual validation.",
+    visualizer: "Framework-agnostic UI/UX Engineer for ARIA Review-Driven Coding (Qt UI/UX Engineer and modern web UX specialist): accessibility, responsive workflows, approved-scope implementation, and honest capture→inspect→refine→verify validation.",
     planner: "planner coding specialist for ARIA Review-Driven Coding.",
-    architect: "architect coding specialist for ARIA Review-Driven Coding.",
     implementer: "implementer coding specialist for ARIA Review-Driven Coding.",
     reviewer: "reviewer coding specialist for ARIA Review-Driven Coding.",
     researcher: "Direct or delegated specialist for external literature and evidence research.",
@@ -107,7 +106,7 @@ function renderManagedAgentFile(input) {
     ];
     return `${lines.join("\n")}${input.body}`;
 }
-/** Render all eleven managed agent files in canonical role order. */
+/** Render all ten managed agent files in canonical role order. */
 export function generateAgentFiles(resolved, version) {
     return Object.fromEntries(ROLES.map((role) => [role, generateAgentFile(role, resolved.roles[role], version)]));
 }
@@ -154,6 +153,51 @@ async function readExisting(path) {
             return undefined;
         throw error;
     }
+}
+/** Positively classify the obsolete Architect path before any migration. */
+async function inspectLegacyArchitect(dir) {
+    const path = join(dir, "architect.md");
+    let stat;
+    try {
+        stat = await lstat(path);
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return { status: "absent" };
+        const reason = error instanceof Error ? error.message : String(error);
+        return { status: "ambiguous", path, reason: `could not inspect file (${reason})` };
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+        return { status: "ambiguous", path, reason: "path is not a regular file" };
+    }
+    let content;
+    try {
+        content = await readFile(path, "utf8");
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return { status: "ambiguous", path, reason: `could not read file (${reason})` };
+    }
+    if (!isAriaManaged(content)) {
+        return { status: "unowned", path, reason: "file has no ARIA ownership marker" };
+    }
+    if (!verifyManagedContent(content)) {
+        return { status: "ambiguous", path, reason: "ARIA ownership checksum/layout is invalid or the file was edited" };
+    }
+    return { status: "managed", path };
+}
+/** Archive only a checksum-verified obsolete Architect file; never overwrite it. */
+async function archiveLegacyArchitect(dir, result) {
+    const inspection = await inspectLegacyArchitect(dir);
+    if (inspection.status === "absent")
+        return;
+    if (inspection.status !== "managed") {
+        result.legacyArchitectWarning = `Preserved ${inspection.path}: ${inspection.reason}; review or remove it manually if appropriate.`;
+        return;
+    }
+    const backupPath = `${inspection.path}.aria-backup-${backupStamp()}-${randomUUID()}`;
+    await rename(inspection.path, backupPath);
+    result.retiredFiles.push({ path: inspection.path, backupPath });
 }
 /** Recompute the embedded checksum from a managed file's own fields. */
 function verifyManagedContent(content) {
@@ -252,7 +296,7 @@ async function writeFileAtomic(path, content) {
     }
 }
 /**
- * Install (or regenerate) the eleven managed agent files.
+ * Install (or regenerate) the ten managed agent files.
  *
  * Safe regeneration: byte-identical managed files are left untouched;
  * managed files are regenerated in place with their prior bytes retained on
@@ -279,8 +323,10 @@ export async function installAgentFiles(resolved, options = {}) {
         tampered: [],
         backups: {},
         previousContents: {},
+        retiredFiles: [],
     };
     try {
+        await archiveLegacyArchitect(dir, result);
         for (const role of ROLES) {
             const path = join(dir, agentFileName(role));
             const wanted = files[role];
@@ -381,6 +427,29 @@ export async function rollbackAgentInstall(dir, result) {
             await unlink(path).catch(() => undefined);
         }
     }
+    for (const retired of result.retiredFiles ?? []) {
+        try {
+            const live = await readExisting(retired.path);
+            if (live !== undefined) {
+                throw new Error(`Cannot restore retired agent because ${retired.path} now exists`);
+            }
+            await rename(retired.backupPath, retired.path);
+        }
+        catch (error) {
+            if (error?.code === "ENOENT") {
+                try {
+                    const live = await readExisting(retired.path);
+                    if (live !== undefined)
+                        continue;
+                }
+                catch {
+                    // Fall through to fail-closed below.
+                }
+            }
+            hasPending = true;
+            pending = error;
+        }
+    }
     if (hasPending)
         throw pending;
 }
@@ -453,6 +522,15 @@ export async function reconcileManagedAgents(resolved, options = {}) {
         if (conflict)
             conflicts.push(conflict);
     }
+    const legacyArchitect = await inspectLegacyArchitect(dir);
+    if (legacyArchitect.status === "unowned" || legacyArchitect.status === "ambiguous") {
+        conflicts.push({
+            role: "architect",
+            path: legacyArchitect.path,
+            kind: legacyArchitect.status,
+            detail: `${legacyArchitect.reason}; refusing to retire an unowned or ambiguous legacy agent`,
+        });
+    }
     if (conflicts.length > 0)
         throw new AgentReconciliationError(conflicts, dir);
     await mkdir(dir, { recursive: true });
@@ -467,8 +545,18 @@ export async function reconcileManagedAgents(resolved, options = {}) {
         tampered: [],
         backups: {},
         previousContents: {},
+        retiredFiles: [],
     };
     try {
+        await archiveLegacyArchitect(dir, result);
+        if (result.legacyArchitectWarning) {
+            throw new AgentReconciliationError([{
+                    role: "architect",
+                    path: join(dir, "architect.md"),
+                    kind: "ambiguous",
+                    detail: result.legacyArchitectWarning,
+                }], dir);
+        }
         for (const role of ROLES) {
             const path = join(dir, agentFileName(role));
             const wanted = files[role];

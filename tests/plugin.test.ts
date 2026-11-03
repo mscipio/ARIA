@@ -153,7 +153,7 @@ describe("ariaPlugin", () => {
     expect(typeof server).toBe("function");
   });
 
-  it("registers exactly eleven agents and the plan tool", async () => {
+  it("registers exactly ten agents and the plan tool", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const config: Config = {};
@@ -164,7 +164,6 @@ describe("ariaPlugin", () => {
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",
@@ -175,7 +174,6 @@ describe("ariaPlugin", () => {
     expect(config.agent?.coder?.mode).toBe("all");
     expect(config.agent?.planner?.model).toBe("openai/gpt-6-luna");
     expect(config.agent?.planner?.mode).toBe("subagent");
-    expect(config.agent?.architect?.mode).toBe("subagent");
     expect(config.agent?.researcher?.mode).toBe("all");
     expect(config.agent?.researcher?.model).toBe("openai/gpt-6.1-sol");
     expect(config.agent?.researcher?.variant).toBe("medium");
@@ -231,8 +229,7 @@ describe("ariaPlugin", () => {
         explorer: "allow",
         visualizer: "allow",
         planner: "allow",
-        architect: "allow",
-        implementer: "allow",
+         implementer: "allow",
         reviewer: "allow",
         researcher: "allow",
         "archivist": "allow",
@@ -281,7 +278,6 @@ describe("ariaPlugin", () => {
     expect(evaluateTest("other-skill")).toBe("allow"); // No match: default allow
     expect(permission("explorer")).toMatchObject({ edit: "deny", bash: "deny", glob: "allow" });
     expect(permission("planner")).toMatchObject({ edit: "deny", bash: "deny", webfetch: "allow", plan: "allow" });
-    expect(permission("architect")).toMatchObject({ edit: "deny", bash: "deny", websearch: "allow", plan: "allow" });
     expect(permission("implementer")).toMatchObject({
       edit: { "*": "allow", "*.env": "ask" },
       bash: { "*": "allow", "rm *": "deny", "npm publish*": "deny" },
@@ -321,12 +317,6 @@ describe("ariaPlugin", () => {
       "rdc-implementation-planning": "allow",
       "rdc-testing-discipline": "allow",
     });
-    expect(permission("architect")?.skill).toEqual({
-      "*": "deny",
-      "rdc-plan-review": "allow",
-      "rdc-scope-assessment": "allow",
-      "rdc-testing-discipline": "allow",
-    });
     expect(permission("implementer")?.skill).toEqual({
       "*": "deny",
       "rdc-code-implementation": "allow",
@@ -335,6 +325,8 @@ describe("ariaPlugin", () => {
     expect(permission("reviewer")?.skill).toEqual({
       "*": "deny",
       "rdc-implementation-review": "allow",
+      "rdc-plan-review": "allow",
+      "rdc-scope-assessment": "allow",
       "rdc-adversarial-review": "allow",
       "rdc-testing-discipline": "allow",
     });
@@ -348,14 +340,14 @@ describe("ariaPlugin", () => {
     });
     // rdc-adversarial-review is reviewer-only: no other role grants it.
     // The coder explicitly denies it (see above), so exclude coder from this check.
-    for (const role of ["explorer", "visualizer", "planner", "architect", "implementer", "researcher", "archivist", "writer", "scientist"]) {
+    for (const role of ["explorer", "visualizer", "planner", "implementer", "researcher", "archivist", "writer", "scientist"]) {
       expect(permission(role)?.skill ?? {}).not.toHaveProperty("rdc-adversarial-review");
     }
     // aria-document-design stays writer-only: no other role grants it.
-    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "scientist"]) {
+    for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer", "researcher", "archivist", "scientist"]) {
       expect(permission(role)?.skill ?? {}).not.toHaveProperty("aria-document-design");
     }
-    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"]) {
+    for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer"]) {
       expect(permission(role)).toMatchObject({
         "engram_*": "allow",
         "context7_*": "allow",
@@ -520,7 +512,7 @@ describe("ariaPlugin", () => {
     expect(researcher.skill).not.toHaveProperty("rdc-code-implementation");
     expect(researcher.skill).not.toHaveProperty("some-unknown-skill");
     // aria-zotero-tutor stays researcher-only: no other role grants it.
-    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "archivist", "writer", "scientist"]) {
+    for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer", "archivist", "writer", "scientist"]) {
       expect(permission(role)?.skill ?? {}).not.toHaveProperty("aria-zotero-tutor");
     }
 
@@ -657,113 +649,59 @@ describe("ariaPlugin", () => {
     expect(taskMap("writer").scientist).toBe("allow");
 
     // No other role delegates to scientist: no all-to-all durable-role graph.
-    for (const role of ["explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "archivist"]) {
+    for (const role of ["explorer", "visualizer", "planner", "implementer", "reviewer", "archivist"]) {
       expect(permission(role).task).toBe("deny");
     }
 
     // Coder retains its six RDC specialist targets.
     const coderTask = taskMap("coder");
     expect(coderTask["*"]).toBe("deny");
-    for (const target of ["explorer", "visualizer", "planner", "architect", "implementer", "reviewer"]) {
+    for (const target of ["explorer", "visualizer", "planner", "implementer", "reviewer"]) {
       expect(coderTask[target]).toBe("allow");
     }
   });
 
-  it("enforces the runtime plan ACL per role and action", async () => {
+  it("keeps plan mutations Planner-only and Reviewer read-only", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
     const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
-    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
     const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
     const reviewer = (session: string) => toolContext("reviewer", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "ACL plan", tasks: ["Task"] },
-      coder("coder-create"),
+      planner("planner-create"),
     );
     const planID = planIDOf(outputOf(created));
     const revision = revisionOf(outputOf(created));
 
-    // planner can get, create
     expect(outputOf(await plan.execute({ action: "get" }, planner("planner-get")))).toContain("Plan: ACL plan");
-    expect(outputOf(await plan.execute(
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "X", tasks: ["T"] },
-      planner("planner-replace"),
-    ))).toMatch(/may not replace/);
-    expect(outputOf(await plan.execute(
-      { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "completed" },
-      planner("planner-update"),
-    ))).toMatch(/may not update/);
-    expect(outputOf(await plan.execute(
-      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
-      planner("planner-add"),
-    ))).toMatch(/may not add/);
-    expect(outputOf(await plan.execute(
-      { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix"] },
-      planner("planner-remediate"),
-    ))).toMatch(/may not remediate/);
-    expect(outputOf(await plan.execute(
-      { action: "approve", expectedPlanID: planID, expectedRevision: revision },
-      planner("planner-approve"),
-    ))).toMatch(/may not approve/);
-    expect(outputOf(await plan.execute(
-      { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      planner("planner-close"),
-    ))).toMatch(/may not close/);
-
-    // architect can get, replace
-    expect(outputOf(await plan.execute({ action: "get" }, architect("architect-get")))).toContain("Plan: ACL plan");
     const replaced = await plan.execute(
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "Architect fix", tasks: ["Task"] },
-      architect("architect-replace"),
+      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "Revised plan", tasks: ["Task"] },
+      planner("planner-replace"),
     );
-    expect(outputOf(replaced)).toContain("Architect fix");
-    expect(outputOf(await plan.execute(
-      { action: "create", title: "Arch", tasks: ["T"] },
-      architect("architect-create"),
-    ))).toMatch(/may not create/);
-    expect(outputOf(await plan.execute(
-      { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "completed" },
-      architect("architect-update"),
-    ))).toMatch(/may not update/);
-    expect(outputOf(await plan.execute(
-      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
-      architect("architect-add"),
-    ))).toMatch(/may not add/);
-    expect(outputOf(await plan.execute(
-      { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      architect("architect-close"),
-    ))).toMatch(/may not close/);
+    expect(outputOf(replaced)).toContain("Revised plan");
+    const currentRevision = revisionOf(outputOf(replaced));
 
-    // reviewer can get, but not mutate
-    const getOutput = outputOf(await plan.execute({ action: "get" }, reviewer("reviewer-get")));
-    expect(getOutput).toContain("Plan: Architect fix");
-    expect(outputOf(await plan.execute({ action: "create", title: "R", tasks: ["T"] }, reviewer("reviewer-create")))).toMatch(/may not create/);
-    expect(outputOf(await plan.execute(
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "R", tasks: ["T"] },
-      reviewer("reviewer-replace"),
-    ))).toMatch(/may not replace/);
-    expect(outputOf(await plan.execute(
-      { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "completed" },
-      reviewer("reviewer-update"),
-    ))).toMatch(/may not update/);
-    expect(outputOf(await plan.execute(
-      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
-      reviewer("reviewer-add"),
-    ))).toMatch(/may not add/);
-    expect(outputOf(await plan.execute(
-      { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix"] },
-      reviewer("reviewer-remediate"),
-    ))).toMatch(/may not remediate/);
-    expect(outputOf(await plan.execute(
-      { action: "approve", expectedPlanID: planID, expectedRevision: revision },
-      reviewer("reviewer-approve"),
-    ))).toMatch(/may not approve/);
-    expect(outputOf(await plan.execute(
-      { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      reviewer("reviewer-close"),
-    ))).toMatch(/may not close/);
+    // Coder and Reviewer can inspect the plan but cannot mutate it.
+    expect(outputOf(await plan.execute({ action: "get" }, coder("coder-get")))).toContain("Plan: Revised plan");
+    expect(outputOf(await plan.execute({ action: "get" }, reviewer("reviewer-get")))).toContain("Plan: Revised plan");
+    const mutations = [
+      { action: "create", title: "Rejected", tasks: ["T"] },
+      { action: "replace", expectedPlanID: planID, expectedRevision: currentRevision, title: "Rejected", tasks: ["T"] },
+      { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID: "T001", status: "completed" },
+      { action: "add", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Extra"] },
+      { action: "remediate", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Fix"] },
+      { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
+      { action: "cancel", expectedPlanID: planID, expectedRevision: currentRevision, reason: "not authorized" },
+      { action: "close", expectedPlanID: planID, expectedRevision: currentRevision },
+    ];
+    for (const actor of [coder, reviewer]) {
+      for (const mutation of mutations) {
+        expect(outputOf(await plan.execute(mutation, actor(`${String(mutation.action)}-denied`)))).toMatch(/may not/);
+      }
+    }
 
     // researcher has no plan access at all
     expect(outputOf(await plan.execute({ action: "get" }, toolContext("researcher", "researcher-get")))).toMatch(/may not get/);
@@ -771,12 +709,12 @@ describe("ariaPlugin", () => {
     expect(outputOf(await plan.execute({ action: "get" }, toolContext("coder", "")))).toMatch(/sessionID is required/);
   });
 
-  it("runs planner -> architect -> approve -> implement -> remediate -> review happy path", async () => {
+  it("runs planner -> reviewer QA -> approve -> implement -> remediate -> review happy path", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
     const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
-    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
+    const reviewer = (session: string) => toolContext("reviewer", session, undefined, { directory: root });
     const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     // 1. planner creates
@@ -791,9 +729,9 @@ describe("ariaPlugin", () => {
     const planID = planIDOf(createdText);
     assertPlanOutput(createdText, planID);
 
-    // 2. architect reads and revises
-    const architectRead = await plan.execute({ action: "get" }, architect("architect-get"));
-    assertPlanOutput(outputOf(architectRead), planID);
+    // 2. Reviewer performs read-only Plan QA; Planner applies any revisions.
+    const reviewerRead = await plan.execute({ action: "get" }, reviewer("reviewer-plan-qa"));
+    assertPlanOutput(outputOf(reviewerRead), planID);
 
     const replaced = await plan.execute(
       {
@@ -803,7 +741,7 @@ describe("ariaPlugin", () => {
         title: "Revised plan",
         tasks: ["Define schema", "Build UI", "Review"],
       },
-      architect("architect-replace"),
+      planner("planner-replace"),
     );
     const replacedText = outputOf(replaced);
     expect(replacedText).toContain("Plan: Revised plan");
@@ -816,11 +754,11 @@ describe("ariaPlugin", () => {
     expect(outputOf(coderRead)).toContain("Plan: Revised plan");
     assertPlanOutput(outputOf(coderRead), planID);
 
-    // 4. coder approves
+    // 4. Planner records the coder's confirmed human approval.
     let currentRevision = 2;
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("coder-approve"),
+      planner("planner-approve"),
     );
     expect(outputOf(approved)).toContain("Approval: approved");
     currentRevision = revisionOf(outputOf(approved));
@@ -829,7 +767,7 @@ describe("ariaPlugin", () => {
     for (const taskID of ["T001", "T002", "T003"] as const) {
       const inProgress = await plan.execute(
         { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID, status: "in_progress" },
-        coder("coder-start"),
+        planner("planner-start"),
       );
       currentRevision = revisionOf(outputOf(inProgress));
       assertPlanOutput(outputOf(inProgress), planID);
@@ -844,7 +782,7 @@ describe("ariaPlugin", () => {
           status: "completed",
           evidence: `verified ${taskID}`,
         },
-        coder("coder-complete"),
+        planner("planner-complete"),
       );
       currentRevision = revisionOf(outputOf(completed));
       assertPlanOutput(outputOf(completed), planID);
@@ -853,7 +791,7 @@ describe("ariaPlugin", () => {
     // 6. close
     const closed = await plan.execute(
       { action: "close", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("coder-close"),
+      planner("planner-close"),
     );
     const closedText = outputOf(closed);
     expect(closedText).toMatch(/Archived to/);
@@ -871,7 +809,7 @@ describe("ariaPlugin", () => {
     const plugin = await load({ directory: nested, worktree: root } as never);
     await plugin.tool!.plan!.execute(
       { action: "create", title: "Invocation directory plan", tasks: ["Task"] },
-      toolContext("coder", "session", undefined, { worktree: root, directory: nested }),
+      toolContext("planner", "session", undefined, { worktree: root, directory: nested }),
     );
     expect(await readFile(join(nested, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Invocation directory plan");
   });
@@ -883,7 +821,7 @@ describe("ariaPlugin", () => {
     // Simulate OpenCode passing worktree="/" (POSIX root sentinel) with a valid directory.
     await plugin.tool!.plan!.execute(
       { action: "create", title: "Root sentinel plan", tasks: ["Task"] },
-      toolContext("coder", "session", undefined, { worktree: "/", directory: projectDir }),
+      toolContext("planner", "session", undefined, { worktree: "/", directory: projectDir }),
     );
     // The plan must be written to projectDir/.aria/rdc/TASKS.md, NOT to /.aria/rdc/TASKS.md.
     expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Root sentinel plan");
@@ -899,7 +837,7 @@ describe("ariaPlugin", () => {
     const plugin = await load({ directory: repoRoot } as never);
     await plugin.tool!.plan!.execute(
       { action: "create", title: "Nested invocation plan", tasks: ["Task"] },
-      toolContext("coder", "session", undefined, { worktree: repoRoot, directory: nestedDir }),
+      toolContext("planner", "session", undefined, { worktree: repoRoot, directory: nestedDir }),
     );
     // The plan must be written to nestedDir/.aria/rdc/TASKS.md, not repoRoot/.aria/rdc/TASKS.md.
     expect(await readFile(join(nestedDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Nested invocation plan");
@@ -912,7 +850,7 @@ describe("ariaPlugin", () => {
     const plugin = await load({ directory: startupDir } as never);
     await plugin.tool!.plan!.execute(
       { action: "create", title: "Invocation context plan", tasks: ["Task"] },
-      toolContext("coder", "session", undefined, { directory: invocationDir }),
+      toolContext("planner", "session", undefined, { directory: invocationDir }),
     );
     // The plan must be written to invocationDir/.aria/rdc/TASKS.md, not startupDir/.aria/rdc/TASKS.md.
     expect(await readFile(join(invocationDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Invocation context plan");
@@ -926,7 +864,7 @@ describe("ariaPlugin", () => {
     const plugin = await load({ directory: projectDir } as never);
     await plugin.tool!.plan!.execute(
       { action: "create", title: "Directory fallback plan", tasks: ["Task"] },
-      toolContext("coder", "session", undefined, { worktree: "", directory: projectDir }),
+      toolContext("planner", "session", undefined, { worktree: "", directory: projectDir }),
     );
     expect(await readFile(join(projectDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Directory fallback plan");
   });
@@ -942,7 +880,7 @@ describe("ariaPlugin", () => {
     // Case 1: context.directory is filesystem root sentinel -> fall back to startup.
     await plan.execute(
       { action: "create", title: "Root fallback plan", tasks: ["Task"] },
-      toolContext("coder", "root-fallback-session", undefined, { directory: "/" }),
+      toolContext("planner", "root-fallback-session", undefined, { directory: "/" }),
     );
     expect(await readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Root fallback plan");
 
@@ -952,7 +890,7 @@ describe("ariaPlugin", () => {
     // Case 2: context.directory is empty -> fall back to startup.
     await plan.execute(
       { action: "create", title: "Empty fallback plan", tasks: ["Task"] },
-      toolContext("coder", "empty-fallback-session", undefined, { directory: "" }),
+      toolContext("planner", "empty-fallback-session", undefined, { directory: "" }),
     );
     expect(await readFile(join(startupDir, ".aria/rdc", "TASKS.md"), "utf8")).toContain("Empty fallback plan");
   });
@@ -971,7 +909,7 @@ describe("ariaPlugin", () => {
     // fallback is exercised.
     await plan.execute(
       { action: "create", title: "Project directory fallback plan", tasks: ["Task"] },
-      toolContext("coder", "project-dir-fallback-session", undefined, { directory: "/" }),
+      toolContext("planner", "project-dir-fallback-session", undefined, { directory: "/" }),
     );
     // The plan must be written to projectDir/.aria/rdc/TASKS.md, not to
     // /.aria/rdc/TASKS.md or process.cwd()/.aria/rdc/TASKS.md.
@@ -997,7 +935,7 @@ describe("ariaPlugin", () => {
     // Invoke Plan with a symlink-to-root context.directory -> must fall back to startup.
     await plan.execute(
       { action: "create", title: "Symlink-to-root fallback plan", tasks: ["Task"] },
-      toolContext("coder", "symlink-root-fallback-session", undefined, { directory: symlinkDir }),
+      toolContext("planner", "symlink-root-fallback-session", undefined, { directory: symlinkDir }),
     );
     // The plan must be written to startupDir/.aria/rdc/TASKS.md, not to the
     // filesystem root via the symlink.
@@ -1023,7 +961,7 @@ describe("ariaPlugin", () => {
     // fallback is exercised.
     await plan.execute(
       { action: "create", title: "Symlink startup fallback plan", tasks: ["Task"] },
-      toolContext("coder", "symlink-startup-fallback-session", undefined, { directory: "/" }),
+      toolContext("planner", "symlink-startup-fallback-session", undefined, { directory: "/" }),
     );
     // The plan must be written to projectDir/.aria/rdc/TASKS.md, not to the
     // filesystem root via the symlink.
@@ -1089,13 +1027,13 @@ describe("ariaPlugin", () => {
     // Seed a plan at the plugin-startup root.
     await plan.execute(
       { action: "create", title: "Startup plan", tasks: ["Startup task"] },
-      toolContext("coder", "startup-session", undefined, { directory: startupDir }),
+      toolContext("planner", "startup-session", undefined, { directory: startupDir }),
     );
 
     // Seed a different plan at the per-invocation root.
     await plan.execute(
       { action: "create", title: "Invocation plan", tasks: ["Invocation task"] },
-      toolContext("coder", "invocation-session", undefined, { directory: invocationDir }),
+      toolContext("planner", "invocation-session", undefined, { directory: invocationDir }),
     );
 
     // `get` invoked with the invocation context must return the invocation-root plan.
@@ -1136,7 +1074,7 @@ describe("ariaPlugin", () => {
       // Create must also reject under the same empty context.
       const createResult = await plan.execute(
         { action: "create", title: "Should not exist", tasks: ["Task"] },
-        toolContext("coder", "empty-context-create", undefined, { worktree: "", directory: "" }),
+      toolContext("planner", "empty-context-create", undefined, { worktree: "", directory: "" }),
       );
       expect(outputOf(createResult)).toMatch(/meaningful OpenCode directory/);
       expect(titleOf(createResult)).toBe("Error");
@@ -1168,7 +1106,7 @@ describe("ariaPlugin", () => {
       // invocationDir, not cwdDir or startupDir.
       await plan.execute(
         { action: "create", title: "Process cwd isolation plan", tasks: ["Task"] },
-        toolContext("coder", "cwd-isolation-session", undefined, { directory: invocationDir }),
+        toolContext("planner", "cwd-isolation-session", undefined, { directory: invocationDir }),
       );
       expect(
         await readFile(join(invocationDir, ".aria/rdc", "TASKS.md"), "utf8"),
@@ -1181,7 +1119,7 @@ describe("ariaPlugin", () => {
       // Get must also read from the invocation root, not process.cwd().
       const getResult = await plan.execute(
         { action: "get" },
-        toolContext("coder", "cwd-isolation-get", undefined, { directory: invocationDir }),
+        toolContext("planner", "cwd-isolation-get", undefined, { directory: invocationDir }),
       );
       expect(outputOf(getResult)).toContain("Plan: Process cwd isolation plan");
     } finally {
@@ -1212,7 +1150,7 @@ describe("ariaPlugin", () => {
     // directory back to the legacy location.
     await plan.execute(
       { action: "create", title: "Legacy invocation plan", tasks: ["Legacy task"] },
-      toolContext("coder", "legacy-seed-session", undefined, { directory: invocationDir }),
+      toolContext("planner", "legacy-seed-session", undefined, { directory: invocationDir }),
     );
     // Move canonical -> legacy to simulate a pre-migration state.
     const invocationCanonicalDir = join(invocationDir, ".aria", "rdc");
@@ -1231,7 +1169,7 @@ describe("ariaPlugin", () => {
     // the legacy plan from the invocation root.
     const getResult = await plan.execute(
       { action: "get" },
-      toolContext("coder", "legacy-read-session", undefined, { directory: invocationDir }),
+      toolContext("planner", "legacy-read-session", undefined, { directory: invocationDir }),
     );
     expect(outputOf(getResult)).toContain("Plan: Legacy invocation plan");
 
@@ -1254,11 +1192,11 @@ describe("ariaPlugin", () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Stale test", tasks: ["Task"] },
-      coder("coder-create"),
+      planner("planner-create"),
     );
     const planID = planIDOf(outputOf(created));
     const initialRevision = revisionOf(outputOf(created));
@@ -1271,7 +1209,7 @@ describe("ariaPlugin", () => {
         taskID: "T001",
         status: "completed",
       },
-      coder("coder-wrong-id"),
+      planner("planner-wrong-id"),
     );
     expect(outputOf(wrongID)).toMatch(/plan id conflict/);
     expect(titleOf(wrongID)).toBe("Error");
@@ -1279,31 +1217,31 @@ describe("ariaPlugin", () => {
     // approve first, then update
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: initialRevision },
-      coder("coder-approve"),
+      planner("planner-approve"),
     );
     const approvedRevision = revisionOf(outputOf(approved));
 
     const advanced = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: approvedRevision, taskID: "T001", status: "completed", evidence: "done" },
-      coder("coder-advance"),
+      planner("planner-advance"),
     );
     const advancedRevision = revisionOf(outputOf(advanced));
 
     const staleRevision = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: approvedRevision, taskID: "T001", status: "in_progress" },
-      coder("coder-stale"),
+      planner("planner-stale"),
     );
     expect(outputOf(staleRevision)).toMatch(/revision conflict/);
     expect(titleOf(staleRevision)).toBe("Error");
     expect(advancedRevision).toBe(approvedRevision + 1);
   });
 
-  it("replaces the plan title and tasks through the architect", async () => {
+  it("replaces the plan title and tasks through Planner after Reviewer QA", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
     const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
-    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
+    const reviewer = (session: string) => toolContext("reviewer", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Old title", tasks: ["Old task"] },
@@ -1320,7 +1258,7 @@ describe("ariaPlugin", () => {
         title: "New titled plan",
         tasks: ["New task A", "New task B"],
       },
-      architect("architect-replace"),
+      planner("planner-replace"),
     );
     const replacedText = outputOf(replaced);
     expect(replacedText).toContain("Plan: New titled plan");
@@ -1338,7 +1276,6 @@ describe("ariaPlugin", () => {
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
     const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
-    const architect = (session: string) => toolContext("architect", session, undefined, { directory: root });
     const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
 
     const created = await plan.execute(
@@ -1354,19 +1291,19 @@ describe("ariaPlugin", () => {
 
     const replaced = await plan.execute(
       { action: "replace", expectedPlanID: planID, expectedRevision: initialRevision, title: "Dashboard v2", tasks: ["Build UI"] },
-      architect("architect-replace"),
+      planner("planner-replace"),
     );
     expect(titleOf(replaced)).toBe("Replace plan · Dashboard v2");
 
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: initialRevision + 1 },
-      coder("coder-approve"),
+      planner("planner-approve"),
     );
     expect(titleOf(approved)).toBe("Approve plan");
 
     const updated = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: initialRevision + 2, taskID: "T001", status: "in_progress" },
-      coder("coder-update"),
+      planner("planner-update"),
     );
     expect(titleOf(updated)).toBe("Mark T001 in progress");
   });
@@ -1375,25 +1312,25 @@ describe("ariaPlugin", () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Add gate", tasks: ["Task"] },
-      coder("create"),
+      planner("create"),
     );
     let currentRevision = revisionOf(outputOf(created));
     const planID = planIDOf(outputOf(created));
 
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("approve"),
+      planner("approve"),
     );
     expect(outputOf(approved)).toContain("Approval: approved");
     currentRevision = revisionOf(outputOf(approved));
 
     const added = await plan.execute(
       { action: "add", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["New scope"] },
-      coder("add"),
+      planner("add"),
     );
     expect(outputOf(added)).toContain("Approval: pending");
     currentRevision = revisionOf(outputOf(added));
@@ -1401,14 +1338,14 @@ describe("ariaPlugin", () => {
     // cannot update until re-approved
     const blocked = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID: "T001", status: "in_progress" },
-      coder("update"),
+      planner("update"),
     );
     expect(outputOf(blocked)).toMatch(/must be approved/);
 
     // re-approve
     const reApproved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("re-approve"),
+      planner("re-approve"),
     );
     expect(outputOf(reApproved)).toContain("Approval: approved");
   });
@@ -1417,30 +1354,30 @@ describe("ariaPlugin", () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Remediate", tasks: ["Task"] },
-      coder("create"),
+      planner("create"),
     );
     let currentRevision = revisionOf(outputOf(created));
     const planID = planIDOf(outputOf(created));
 
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("approve"),
+      planner("approve"),
     );
     currentRevision = revisionOf(outputOf(approved));
 
     const completed = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID: "T001", status: "completed", evidence: "done" },
-      coder("complete"),
+      planner("complete"),
     );
     currentRevision = revisionOf(outputOf(completed));
 
     const remediated = await plan.execute(
       { action: "remediate", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Fix bug"] },
-      coder("remediate"),
+      planner("remediate"),
     );
     expect(outputOf(remediated)).toContain("Approval: approved");
     expect(outputOf(remediated)).toContain("Fix bug");
@@ -1450,11 +1387,11 @@ describe("ariaPlugin", () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Remediate guards", tasks: ["A", "B"] },
-      coder("create"),
+      planner("create"),
     );
     let currentRevision = revisionOf(outputOf(created));
     const planID = planIDOf(outputOf(created));
@@ -1462,52 +1399,52 @@ describe("ariaPlugin", () => {
     // unapproved
     const unapproved = await plan.execute(
       { action: "remediate", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Fix"] },
-      coder("remediate-unapproved"),
+      planner("remediate-unapproved"),
     );
     expect(outputOf(unapproved)).toMatch(/must be approved/);
 
     // approved but incomplete
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("approve"),
+      planner("approve"),
     );
     currentRevision = revisionOf(outputOf(approved));
     const incomplete = await plan.execute(
       { action: "remediate", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Fix"] },
-      coder("remediate-incomplete"),
+      planner("remediate-incomplete"),
     );
     expect(outputOf(incomplete)).toMatch(/All existing tasks must be completed/);
   });
 
-  it("remediates the plan through the coder after review", async () => {
+  it("remediates the plan through Planner after review", async () => {
     const root = await project();
     const plugin = await load({ directory: root } as never);
     const plan = plugin.tool!.plan!;
-    const coder = (session: string) => toolContext("coder", session, undefined, { directory: root });
+    const planner = (session: string) => toolContext("planner", session, undefined, { directory: root });
 
     const created = await plan.execute(
       { action: "create", title: "Remediate flow", tasks: ["Task"] },
-      coder("create"),
+      planner("create"),
     );
     let currentRevision = revisionOf(outputOf(created));
     const planID = planIDOf(outputOf(created));
 
     const approved = await plan.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("approve"),
+      planner("approve"),
     );
     currentRevision = revisionOf(outputOf(approved));
 
     const completed = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID: "T001", status: "completed", evidence: "done" },
-      coder("complete"),
+      planner("complete"),
     );
     currentRevision = revisionOf(outputOf(completed));
 
     // remediation
     const remediated = await plan.execute(
       { action: "remediate", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Fix blocking issue"] },
-      coder("remediate"),
+      planner("remediate"),
     );
     expect(outputOf(remediated)).toContain("Fix blocking issue");
     expect(outputOf(remediated)).toContain("Approval: approved");
@@ -1515,14 +1452,14 @@ describe("ariaPlugin", () => {
 
     const fixDone = await plan.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID: "T002", status: "completed", evidence: "verified fix" },
-      coder("complete-fix"),
+      planner("complete-fix"),
     );
     currentRevision = revisionOf(outputOf(fixDone));
 
     // close
     const closed = await plan.execute(
       { action: "close", expectedPlanID: planID, expectedRevision: currentRevision },
-      coder("close"),
+      planner("close"),
     );
     expect(outputOf(closed)).toMatch(/Archived to/);
   });

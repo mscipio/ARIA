@@ -22,7 +22,7 @@ import type { ResolvedAriaConfig, RoleName, RoleOverride } from "./types.js";
  * owns the model+variant pair atomically. A model without a variant clears
  * the inherited variant; there is no variant-only project field. Absent
  * `agents` / absent `model` retains the resolved defaults. Unknown agent IDs
- * (user agents) are ignored; only the eleven canonical ARIA roles overlay.
+ * (user agents) are ignored; only the ten canonical ARIA roles overlay.
  *
  * Runtime application is a narrow post-load patch (`agent.update` for
  * model/variant only). Nothing here regenerates or writes global agent files;

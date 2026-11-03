@@ -6,12 +6,12 @@
 
 - **Conversational coder** — answers questions directly; creates plans only for non-trivial implementation requests
 - **Specialized roles** — coding specialists plus opt-in Wiki, scientific/professional writing, and scientific-authority specialists, each with focused authority
-- **Architect plan review** — QA before implementation: `READY` or `REVISED` with the smallest corrections needed
+- **Reviewer plan QA** — read-only QA before implementation: `READY` or `REVISION_REQUIRED` with the smallest corrections needed
 - **Explicit human approval** — the coder summarizes the plan and **stops and waits** for the user to approve before any code is written
 - **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
 - **Optional adversarial review** — after normal review passes, the reviewer may run a second adversarial pass that attacks plausible counterexamples, hidden assumptions, and hostile edge/error/security/ordering paths; risk-based invocation, not universal
 - **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
-- **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
+- **Renewed approval for material scope changes** — if review reveals work outside the approved scope, Reviewer assesses it, Planner adds approved scope via `add` (invalidating approval), and the workflow stops for renewed approval
 - **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki, writer, and scientist remain intentionally isolated
 - **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, explicit evidence-level/uncertainty reporting, claim-level citation verification of source identity and claim-source support, and chat-first tutoring/guided reading of an identified library paper
 - **Bounded scientist authority** — `mode: all` scientific authority for question specification, methodology, and result interpretation, with deny-by-default code/shell/MCP/evidence/persistence authority; delegates evidence to `researcher`, prose to `writer`, and computation to `coder`
@@ -21,15 +21,15 @@
 1. At the start of every turn, the coder calls `plan` action `get` to read `.aria/rdc/TASKS.md`. If an active plan exists, work continues it instead of planning again.
 2. For non-trivial new work, the coder tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
 3. The planner calls `plan` `get` then `create` to persist a title and an actionable, ordered task list; each task integrates its acceptance criteria and the relevant tests. The planner does not implement.
-4. The architect always runs as QA of the plan: it calls `plan` `get`, and replies `READY` if the plan is correct, or `plan` `replace` (with `expectedPlanID`/`revision`) to correct it and replies `REVISED` with the changes. Any `replace` invalidates previous approval.
-5. The coder re-reads the plan, summarizes the title, tasks, and any architect changes to the user, and **stops and waits for explicit user approval**.
-6. Only after the user approves, the coder calls `plan` action `approve` to persist the approval. Tasks cannot enter implementation until the current plan revision is approved.
-7. The implementer completes tasks and runs the relevant checks; the coder records evidence by updating tasks.
+4. Reviewer always performs read-only QA of the active plan with `get`, replying `READY` or `REVISION_REQUIRED` with the smallest corrections. Planner alone applies corrections with `replace`; each replacement invalidates prior approval. Reviewer rechecks the resulting revision.
+5. The coder re-reads the plan, summarizes its title, tasks, and revision to the user, and **stops and waits for explicit user approval**.
+6. Only after the user approves the exact Plan ID and revision does the coder task Planner to record approval. Tasks cannot enter implementation until that revision is approved.
+7. The implementer completes tasks and runs the relevant checks; Planner records task status and evidence when directed by the coder.
 8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
-9. If reviewer reports blocking findings for tasks within approved scope, the coder uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews. After any substantive adversarial-origin fix, normal review runs again before adversarial re-review.
+9. If Reviewer reports blocking findings for tasks within approved scope, the coder tasks Planner to use `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews. After any substantive adversarial-origin fix, normal review runs again before adversarial re-review.
 10. Optionally, after normal review passes, the coder may invoke adversarial review based on risk signals (permissions, mutation, security, migration, concurrency, public API, architecture). Adversarial review attacks the apparently correct implementation and follows the same remediation/re-review cycle. Both normal and adversarial review must pass after the last substantive change.
-11. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
-12. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
+11. If review reveals a material scope change, the coder tasks Reviewer for a post-review scope assessment. For `SCOPE_CHANGE`, the coder tasks Planner to use `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
+12. Planner alone performs Plan mutations (`create`, `replace`, `update`, `add`, `remediate`, `approve`, `cancel`, and `close`). Coder and Reviewer may read with `get`; the coder coordinates execution and conveys user decisions but does not mutate the Plan. A clean, completed plan is archived under `.aria/rdc/plans/` via Planner's `close` action.
 
 The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace directory, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
 
@@ -37,13 +37,12 @@ The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace direc
 
 | Agent | Responsibility | Default model | Strength |
 |---|---|---|---|
-| coder (`all`) | Coordinates work and maintains the shared plan | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
+| coder (`all`) | Coordinates work and conveys user decisions; does not mutate the shared Plan | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
 | explorer | Maps code, tests, and dependencies | `opencode-go/muse-spark-1.3-contributor` | `high` |
 | visualizer | Interprets screenshots and diagrams | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
-| planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-6-luna` | `xhigh` |
-| architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-6.1-sol` | `high` |
+| planner | Owns all Plan mutations and persists executable plans with integrated acceptance/tests | `openai/gpt-6-luna` | `xhigh` |
 | implementer | Edits code and runs relevant checks | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
-| reviewer | Finds regressions, risks, and missing verification | `openai/gpt-6.1-sol` | `medium` |
+| reviewer | Read-only plan QA, independent implementation verification, scope assessment, and optional adversarial review | `openai/gpt-6.1-sol` | `medium` |
 | researcher (`all`) | Direct or delegated external literature and evidence research | `openai/gpt-6.1-sol` | `medium` |
 | archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/muse-spark-1.3-contributor` | `high` |
 | writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-6-luna` | `xhigh` |
@@ -51,7 +50,7 @@ The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace direc
 
 Only implementer and visualizer can use OpenCode's edit tool for application code, with identical effective edit/shell decisions: both allow ordinary development shell commands and gate protected `.env` files, except destructive removal and package publishing commands, which remain blocked. Coder remains shell-denied and receives only the bounded native `git_read`, `aria_ship`, and `aria_release` tools. Workspace/scratch instructions confine transient/generated artifacts, not intentional authorized repo edits; scratch artifacts are never staged, and staging authorized source changes requires human-authorized Git operations (editing alone is not authorization). RDC approvals remain required but are not OS-level sandbox enforcement: the Unix account can still write outside those locations, and confinement is enforced only where ARIA controls paths/environment. Reviewer has unrestricted shell access for inspection and verification.
 
-The six RDC coding specialists — explorer, visualizer, planner, architect, implementer, reviewer — run through OpenCode's native `task` tool. The five durable roles — `coder`, `researcher`, `archivist`, `writer`, and `scientist` — run with OpenCode `mode: all` and are available both directly and through `task`. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose). Mode availability is not authority: every role's tools are deny-by-default except what is explicitly granted, and `scientist` in particular has no unrestricted code, shell, MCP, evidence, or persistence authority.
+The five RDC coding specialists — explorer, visualizer, planner, implementer, and reviewer — run through OpenCode's native `task` tool. The five durable roles — `coder`, `researcher`, `archivist`, `writer`, and `scientist` — run with OpenCode `mode: all` and are available both directly and through `task`. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose). Mode availability is not authority: every role's tools are deny-by-default except what is explicitly granted, and `scientist` in particular has no unrestricted code, shell, MCP, evidence, or persistence authority.
 
 ## Agent and Skill Architecture
 
@@ -68,9 +67,8 @@ Examples:
 - coder → `aria-grill-me` when requirements need a focused challenge and clarification pass
 - visualizer → `aria-qt-ui` for Qt-specific work
 - planner → `rdc-implementation-planning` + `rdc-testing-discipline`
-- architect → `rdc-plan-review` or `rdc-scope-assessment`
+- reviewer → `rdc-plan-review`, `rdc-implementation-review`, `rdc-scope-assessment`, or optional `rdc-adversarial-review`
 - implementer → `rdc-code-implementation` + proportional testing guidance
-- reviewer → `rdc-implementation-review` + `rdc-adversarial-review` (optional, after normal PASS) + proportional testing guidance
 - archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
 - writer → `aria-document-design`, `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
 - researcher → `aria-research-evidence` (discovery/verification) or `aria-zotero-tutor` (tutoring an identified paper)
@@ -96,10 +94,10 @@ Schema v3 fields:
 
 Approval lifecycle:
 - `create` produces a plan with `approval: pending`
-- `approve` (coder only) sets `approval: approved` and increments revision
-- `replace` (architect only) resets `approval: pending` (invalidates any previous approval)
-- `add` (coder only) resets `approval: pending` (scope changes require re-approval)
-- `remediate` (coder only) preserves `approval: approved` (autonomous remediation loop)
+- `approve` (Planner only, after explicit human approval is conveyed by the coder) sets `approval: approved` and increments revision
+- `replace` (Planner only) resets `approval: pending` (invalidates any previous approval)
+- `add` (Planner only) resets `approval: pending` (scope changes require re-approval)
+- `remediate` (Planner only) preserves `approval: approved` (autonomous remediation loop)
 - `update`, `close` require `approval: approved`
 
 ```md
@@ -123,13 +121,12 @@ Revision: **4**
 
 ## Plan Tool ACL
 
-Only the `coder`, planning specialists, and reviewer can call `plan`; every other agent has `plan: deny`.
+The `coder`, `planner`, and `reviewer` can call `plan`; execution authorization limits Coder and Reviewer to `get`, while Planner alone can mutate. Every other agent has `plan: deny`.
 
 | Agent | Allowed `plan` actions |
 |---|---|
-| coder | `get`, `create`, `update`, `add`, `remediate`, `approve`, `close` |
-| planner | `get`, `create` |
-| architect | `get`, `replace` |
+| coder | `get` |
+| planner | all actions (`get`, `create`, `replace`, `update`, `add`, `remediate`, `approve`, `cancel`, `close`) |
 | reviewer | `get` |
 | researcher | none |
 | explorer | none |
@@ -139,22 +136,22 @@ Only the `coder`, planning specialists, and reviewer can call `plan`; every othe
 
 - `get` returns the active plan (or `No active plan.`).
 - `create` writes a new plan with `approval: pending` and returns the initial `revision` (`1`); rejected when an active plan already exists.
-- `approve` accepts the current `expectedPlanID` and `expectedRevision`, sets `approval: approved`, and increments the revision. Only the coder may approve.
-- `replace` accepts the current `expectedPlanID` and `expectedRevision` plus the corrected `title` and `tasks`, produces a new revision, and resets `approval: pending`. Used only by the architect before implementation starts.
+- Every mutation accepts the current `expectedPlanID` and `expectedRevision`; only Planner may perform mutations.
+- `approve` sets `approval: approved` and increments the revision only after the coder confirms explicit human approval of that exact plan revision.
+- `replace` accepts the corrected `title` and `tasks`, produces a new revision, and resets `approval: pending`. Reviewer requests corrections during read-only QA; Planner applies them.
 - `update`, `add`, `remediate`, and `close` require both `expectedPlanID` and `expectedRevision` to detect conflicts.
 - `update` requires `approval: approved`.
 - `add` resets `approval: pending` (scope changes require renewed approval).
 - `remediate` requires `approval: approved` and all existing tasks completed; preserves `approval: approved` (autonomous remediation loop).
 - `close` requires `approval: approved` and all tasks completed; archives the plan.
 
-The coder is the only agent allowed to approve, update plan status, add remediation tasks, and archive. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
+Planner is the only role allowed to mutate the Plan. The coder coordinates and conveys explicit user decisions; Reviewer performs read-only QA and verification. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
 
 ## Plan Ownership
 
-- **Planner** owns plan creation: it turns evidence into an actionable, ordered task list with integrated acceptance/tests and persists it with `create`.
-- **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes). Replace invalidates any previous approval. After review, the architect performs scope assessment: `SCOPE_CHANGE` or `WITHIN_SCOPE`.
-- **Coder** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
-- **Reviewer** independently reads the plan via `get` and evaluates each approved requirement against the actual implementation as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
+- **Planner** owns all Plan mutations: it creates executable plans, applies Reviewer-requested corrections, records approved human decisions conveyed by the coder, tracks task status/evidence, adds remediation or approved scope, and closes/cancels plans as explicitly directed.
+- **Reviewer** owns read-only plan correctness checks (`READY` or `REVISION_REQUIRED`), post-review scope assessment (`SCOPE_CHANGE` or `WITHIN_SCOPE`), and independent implementation verification (`PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`).
+- **Coder** coordinates the lifecycle: it summarizes plans for explicit human approval, conveys user decisions to Planner, delegates implementation/review, and never mutates the Plan itself.
 
 ## Workspace execution policy
 
@@ -193,13 +190,13 @@ For transition compatibility, ARIA still reads the legacy `~/.config/opencode/re
 {
   "roles": {
     "planner": { "model": "openai/gpt-6-luna", "variant": "xhigh" },
-    "architect": { "model": "openai/gpt-6.1-sol" },
+    "reviewer": { "model": "openai/gpt-6.1-sol" },
     "explorer": { "variant": "xhigh" }
   }
 }
 ```
 
-Every model identifier must use `provider/model` format. Variant is optional.
+Every model identifier must use `provider/model` format. Variant is optional. For migration compatibility, a legacy `roles.architect` override maps to Reviewer when that same config file has no `roles.reviewer` entry. If both keys occur in one file, the canonical Reviewer override wins unchanged and the Architect entry is retired without merging; separate project and global layers retain the usual per-field precedence. Reviewer keeps its built-in `openai/gpt-6.1-sol` / `medium` route when no override applies. Setup archives only intact ARIA-managed `architect.md` files; user-owned or ambiguous legacy files are preserved and reported.
 
 ### Per-field resolution
 
@@ -272,7 +269,7 @@ Setup never creates or overwrites project `aria.json`, commits, pushes, or intro
 
 ### `aria models --config`
 
-`aria models --config` is the v1.1.x public configuration surface: an interactive role-model configuration pass with no plugin registration and no dependency install. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the eleven configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`, `scientist`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
+`aria models --config` is the v1.1.x public configuration surface: an interactive role-model configuration pass with no plugin registration and no dependency install. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the ten configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`, `scientist`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
 
 From the top-level menu you may:
 
@@ -349,7 +346,6 @@ coder  opencode-go/muse-spark-1.3-contributor  xhigh
 explorer  opencode-go/muse-spark-1.3-contributor  high
 visualizer  opencode-go/muse-spark-1.3-contributor  xhigh
 planner  openai/gpt-6-luna  xhigh
-architect  openai/gpt-6.1-sol  high
 implementer  opencode-go/muse-spark-1.3-contributor  xhigh
 reviewer  openai/gpt-6.1-sol  medium
 researcher  openai/gpt-6.1-sol  medium

@@ -17,7 +17,6 @@ export const ROLES: RoleName[] = [
   "explorer",
   "visualizer",
   "planner",
-  "architect",
   "implementer",
   "reviewer",
   "researcher",
@@ -29,6 +28,7 @@ const ROLE_SET = new Set<string>(ROLES);
 const LEGACY_ROLE_ALIASES: Record<string, RoleName> = {
   director: "coder",
   "wiki-compiler": "archivist",
+  architect: "reviewer",
 };
 const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
 
@@ -104,6 +104,9 @@ export function parseOverrides(raw: unknown, filePath = "aria.json"): AriaProjec
 
   const roles: Partial<Record<RoleName, RoleOverride>> = {};
   for (const [key, value] of Object.entries(rolesValue)) {
+    // Keep legacy Architect-only configs working, but a canonical Reviewer
+    // override always wins when both keys are present. Do not merge fields.
+    if (key === "architect" && Object.prototype.hasOwnProperty.call(rolesValue, "reviewer")) continue;
     const role = ROLE_SET.has(key) ? key as RoleName : LEGACY_ROLE_ALIASES[key];
     if (!role) fail(filePath, `roles.${key}`, key, "valid role");
     if (roles[role]) {

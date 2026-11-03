@@ -34,12 +34,12 @@ describe("ARIA overrides", () => {
       expect(parseOverrides({
         roles: {
           planner: { model: "openai/gpt-5.6-terra", variant: "xhigh" },
-          architect: { model: "openai/gpt-5.6-sol" },
+          reviewer: { model: "openai/gpt-5.6-sol" },
         },
       })).toEqual({
         roles: {
           planner: { model: "openai/gpt-5.6-terra", variant: "xhigh" },
-          architect: { model: "openai/gpt-5.6-sol" },
+          reviewer: { model: "openai/gpt-5.6-sol" },
         },
       });
     });
@@ -153,7 +153,7 @@ describe("ARIA overrides", () => {
 
     it("injects fail-closed unauthorized-plan guidance into every ARIA role prompt", () => {
       const config = resolveAriaConfig(tmpdir());
-      for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
+      for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
         const prompt = config.roles[role].promptText;
         expect(prompt).toContain("do not retry that action");
         expect(prompt).toContain("real delegation/tool permission path");
@@ -164,7 +164,7 @@ describe("ARIA overrides", () => {
 
     it("injects universal local scratch guidance without task allocation prerequisites", () => {
       const config = resolveAriaConfig(tmpdir());
-      for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
+      for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"] as const) {
         const prompt = config.roles[role].promptText;
         expect(prompt).toContain("./scratch/YYYY-MM-DD/HHMMSS-title/");
         expect(prompt).toContain("no task ID, approved Plan, or `scratch_task` allocation is required");
@@ -206,8 +206,8 @@ describe("ARIA overrides", () => {
       const config = resolveAriaConfig(root);
       expect(config.roles.planner.model).toBe("openai/gpt-5.4-mini");
       expect(config.roles.planner.variant).toBe("high");
-      expect(config.roles.architect.model).toBe("openai/gpt-5.6-sol");
-      expect(config.roles.architect.variant).toBeUndefined();
+      expect(config.roles.reviewer.model).toBe("openai/gpt-5.6-sol");
+      expect(config.roles.reviewer.variant).toBeUndefined();
     });
 
     it("empty role override inherits defaults", async () => {
@@ -265,13 +265,55 @@ describe("ARIA overrides", () => {
       expect(config.roles.archivist.model).toBe("opencode-go/legacy-archivist");
     });
 
-    it("rejects duplicate canonical and legacy overrides for the same role", () => {
+    it("maps a legacy Architect model override to Reviewer", async () => {
+      const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-"));
+      tempDirs.push(root);
+      await writeFile(resolve(root, "aria.json"), JSON.stringify({
+        roles: { architect: { model: "openai/gpt-5.6-sol", variant: "high" } },
+      }));
+      const config = resolveAriaConfig(root);
+      expect(config.roles.reviewer.model).toBe("openai/gpt-5.6-sol");
+      expect(config.roles.reviewer.variant).toBe("high");
+      expect(config.roles).not.toHaveProperty("architect");
+    });
+
+    it("uses an isolated global Reviewer override when legacy Architect also exists", async () => {
+      const root = await mkdtemp(resolve(tmpdir(), "aria-overrides-global-"));
+      tempDirs.push(root);
+      const globalDir = resolve(root, "opencode");
+      await mkdir(globalDir, { recursive: true });
+      await writeFile(resolve(globalDir, "aria.json"), JSON.stringify({
+        roles: {
+          architect: { model: "openai/legacy-architect", variant: "high" },
+          reviewer: { model: "opencode-go/isolated-reviewer", variant: "low" },
+        },
+      }));
+
+      const previousXdg = process.env.XDG_CONFIG_HOME;
+      try {
+        process.env.XDG_CONFIG_HOME = root;
+        const config = resolveAriaConfig(tmpdir(), { skipProject: true });
+        expect(config.roles.reviewer.model).toBe("opencode-go/isolated-reviewer");
+        expect(config.roles.reviewer.variant).toBe("low");
+      } finally {
+        if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+        else process.env.XDG_CONFIG_HOME = previousXdg;
+      }
+    });
+
+    it("rejects duplicate canonical and legacy overrides except retired Architect collisions", () => {
       expect(() => parseOverrides({
         roles: {
           coder: { model: "opencode-go/coder" },
           director: { model: "opencode-go/legacy-coder" },
         },
       })).toThrow(/duplicated via alias/);
+      expect(parseOverrides({
+        roles: {
+          reviewer: { model: "openai/gpt-6.1-sol" },
+          architect: { model: "openai/gpt-5.6-sol" },
+        },
+      })).toEqual({ roles: { reviewer: { model: "openai/gpt-6.1-sol" } } });
     });
 
     it("injects resolved routing into coder prompt", () => {
@@ -280,7 +322,7 @@ describe("ARIA overrides", () => {
       expect(config.roles.coder.promptText).toContain("coder: `coder` → opencode-go/muse-spark-1.3-contributor [xhigh]");
       expect(config.roles.coder.promptText).toContain("explorer: `explorer` → opencode-go/muse-spark-1.3-contributor [high]");
       expect(config.roles.coder.promptText).toContain("planner: `planner` → openai/gpt-6-luna [xhigh]");
-      expect(config.roles.coder.promptText).toContain("architect: `architect` → openai/gpt-6.1-sol [high]");
+      expect(config.roles.coder.promptText).not.toContain("architect:");
       expect(config.roles.coder.promptText).toContain("implementer: `implementer` → opencode-go/muse-spark-1.3-contributor [xhigh]");
       expect(config.roles.coder.promptText).toContain("reviewer: `reviewer` → openai/gpt-6.1-sol [medium]");
       expect(config.roles.coder.promptText).toContain("researcher: `researcher` → openai/gpt-6.1-sol [medium]");

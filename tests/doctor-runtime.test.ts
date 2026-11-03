@@ -57,7 +57,7 @@ function baseExecutor(opencodeVersion = "opencode 2.0.23"): Executor {
   };
 }
 
-/** Worktree whose eleven routes resolve to one discovered probe model. */
+/** Worktree whose ten routes resolve to one discovered probe model. */
 async function baseOptions(executor?: Executor): Promise<DoctorOptions & { worktree: string; agentsDir: string }> {
   const worktree = await mkdtemp(resolve(tmpdir(), "aria-doctor-runtime-wt-"));
   const agentsDir = await mkdtemp(resolve(tmpdir(), "aria-doctor-runtime-ag-"));
@@ -135,8 +135,8 @@ describe("T008 doctor V2 runtime truth", () => {
     const report = await runDoctor({ ...(await baseOptions()), v2: healthySnapshot() });
 
     expect(runtimeFinding(report, "plugin aria")?.severity).toBe("PASS");
-    expect(runtimeFinding(report, "agents (11)")?.severity).toBe("PASS");
-    expect(runtimeFinding(report, "agents (11)")?.detail).toContain("11 of 11");
+    expect(runtimeFinding(report, "agents (10)")?.severity).toBe("PASS");
+    expect(runtimeFinding(report, "agents (10)")?.detail).toContain("10 of 10");
     expect(runtimeFinding(report, "skills (24 live)")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "plan tool")?.severity).toBe("PASS");
     expect(runtimeFinding(report, "plan tool")?.detail).toContain("exactly once");
@@ -178,7 +178,7 @@ describe("T008 doctor V2 runtime truth", () => {
     snapshot.skills = ARIA_SKILL_NAMES.slice(1).map((name) => ({ id: name, name }));
     const report = await runDoctor({ ...(await baseOptions()), v2: snapshot });
 
-    const agents = runtimeFinding(report, "agents (11)");
+    const agents = runtimeFinding(report, "agents (10)");
     expect(agents?.severity).toBe("FAIL");
     expect(agents?.detail).toContain("missing: scientist");
     expect(agents?.detail).toContain("bash");
@@ -190,7 +190,7 @@ describe("T008 doctor V2 runtime truth", () => {
   it("skips runtime truth outside a live session with documented gaps", async () => {
     const report = await runDoctor(await baseOptions());
 
-    for (const title of ["plugin aria", "agents (11)", "skills (24 live)", "plan tool", "coexistence"]) {
+    for (const title of ["plugin aria", "agents (10)", "skills (24 live)", "plan tool", "coexistence"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
     }
@@ -209,7 +209,7 @@ describe("T008 doctor V2 runtime truth", () => {
     const matching = await runDoctor(options);
     const pass = matching.findings.find((finding) => finding.area === "config" && finding.title === "managed agent files");
     expect(pass?.severity).toBe("PASS");
-    expect(pass?.detail).toContain("11 of 11 match");
+    expect(pass?.detail).toContain("10 of 10 match");
 
     await writeFile(join(options.agentsDir, "coder.md"), "hand-edited\n");
     const drifted = await runDoctor(options);
@@ -309,7 +309,7 @@ describe("T004 OpenCode runtime compatibility", () => {
   it("words standalone runtime SKIP as absent live runtime evidence, not version inequality", async () => {
     const report = await runDoctor(await baseOptions(await compatExecutor("opencode 2.0.23")));
 
-    for (const title of ["plugin aria", "agents (11)", "skills (24 live)", "plan tool"]) {
+    for (const title of ["plugin aria", "agents (10)", "skills (24 live)", "plan tool"]) {
       const finding = runtimeFinding(report, title);
       expect(finding?.severity).toBe("SKIP");
       expect(finding?.detail).toContain("no live OpenCode runtime evidence observed");

@@ -198,7 +198,7 @@ describe("T002 setup identity gate", () => {
     expect(written["mcp"]).toEqual({ other: { type: "local" } });
     expect(JSON.parse(globalBefore)).not.toEqual(written);
     expect(await readFile(projectAriaPath, "utf8")).toBe(before);
-    expect(result.setup!.agents!.written).toBe(11);
+    expect(result.setup!.agents!.written).toBe(10);
   });
 
   it("allows an idempotent re-run when the checkout already matches", async () => {

@@ -10,7 +10,6 @@ export const ROLES: RoleName[] = [
   "explorer",
   "visualizer",
   "planner",
-  "architect",
   "implementer",
   "reviewer",
   "researcher",
@@ -27,7 +26,7 @@ export interface ResolvedRoute {
 }
 
 /**
- * Defaults-ordered eleven-role route derivation. The layer precedence and
+ * Defaults-ordered ten-role route derivation. The layer precedence and
  * model/variant pair resolution live in `resolveAriaConfig`; this helper is
  * the single canonical derivation shared by `aria models` and doctor.
  */

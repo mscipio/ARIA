@@ -7,7 +7,6 @@ export const ROLES = [
     "explorer",
     "visualizer",
     "planner",
-    "architect",
     "implementer",
     "reviewer",
     "researcher",
@@ -19,11 +18,9 @@ const ROLE_SET = new Set(ROLES);
 const LEGACY_ROLE_ALIASES = {
     director: "coder",
     "wiki-compiler": "archivist",
+    architect: "reviewer",
 };
 const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
-// Keep prompt tool guidance aligned with the narrow grants in permissions.ts
-// and register.ts; the other roles cannot invoke this tool.
-const SCRATCH_TASK_ROLES = new Set(["coder", "implementer", "visualizer", "reviewer"]);
 const SHARED_MCP_GUIDANCE = `## MCP Guidance
 
 Use any available MCP whenever it materially improves the evidence; these are preferred evidence sources, not exclusive routing. Do not force unnecessary calls.
@@ -32,18 +29,14 @@ Use any available MCP whenever it materially improves the evidence; these are pr
 - Engram provides durable semantic/project memory for prior decisions, investigations, conventions, history, continuity, and useful durable discoveries or decisions. Use it only within the selected role's explicit permissions and boundaries.
 - Engram is not authoritative transactional workflow state. It must not approve plans, change task status or scope, replace .aria/rdc/TASKS.md, or bypass the Plan tool's CAS/revision/approval checks. .aria/rdc/TASKS.md and the Plan tool remain authoritative for active plan, task, scope, and approval state.
 - If the Plan tool rejects an action as unauthorized, do not retry that action. Report the exact attempted action and the authorized role(s) named by the error. Before a single handoff, verify the candidate role is actually authorized for that exact action and that a real delegation/tool permission path exists in the current workflow. If no supported candidate exists, report the blocker to the caller/coordinator and stop. Never impersonate a role or bypass authority; delegation does not grant permission.
-- Workspace execution policy (canonical: \`src/scratch.ts\` via \`src/paths.ts\` guards): keep ARIA-controlled transient/generated task artifacts (temporary files, test fixtures/results, logs, builds, runtime/experiment outputs, captures, and caches) under \`<worktree>/scratch/\`. This does not restrict intentional edits to authorized repository code, tests, configuration, or documentation. Persistent project data, existing output paths/history, project and global configuration, and the authoritative \`.aria/rdc/TASKS.md\` plan stay at their established locations; never redirect or copy them into scratch. Never stage scratch artifacts. Staging explicitly approved source changes is permitted only during human-authorized Git operations; editing does not itself authorize staging. Subagents inherit these same source-edit, scratch, staging, and human-authorization distinctions; delegation cannot expand authorization, and there is no bypass by asking another agent. Reuse the canonical helper, never duplicate path checks; preserve HOME/XDG/global config; approvals are required, not an OS sandbox.`;
-const SCRATCH_TASK_GUIDANCE = `## Task scratch allocation
-
-Before creating ARIA-controlled temporary or generated task output, invoke the native \`scratch_task\` tool with the approved task's \`taskId\` and a concise descriptive \`taskName\`. Use the returned \`taskDir\` and exact returned \`dirs\` paths; do not reconstruct paths from \`process.cwd()\`, the date, or a guessed scratch root. Place temporary files in \`tmp\`, fixtures/results in \`testFixtures\`/\`testResults\`, logs in \`logs\`, captures in \`screenshots\`/\`videos\`, build and run outputs in \`builds\`/\`runtime\`/\`experiments\`, environments in \`environments\`, and package/Python caches in \`npmCache\`/\`pipCache\`/\`pythonCache\`; use \`taskDir\` for other task-local transient files. If task identity, project location, or allocation is unavailable, fail closed and report the limitation rather than inventing an output path. This does not move persistent source, project/configuration data, existing outputs/history, or the plan from its authoritative location.`;
-function withMcpGuidance(promptText, role) {
+-- Workspace execution policy (canonical: \`src/scratch.ts\` via \`src/paths.ts\` guards): every agent must keep ARIA-controlled transient/generated artifacts (temporary files, fixtures/results, logs, builds, runtime/experiment outputs, captures, and caches) under the worktree-local \`./scratch/YYYY-MM-DD/HHMMSS-title/\` path. Use a unique descriptive title; no task ID, approved Plan, or \`scratch_task\` allocation is required. This applies to all agents and survives delegation. It does not restrict intentional edits to authorized repository source, tests, configuration, or documentation. Persistent project data, existing output paths/history, project/global configuration, and the authoritative \`.aria/rdc/TASKS.md\` plan remain at established locations; never redirect or copy them into scratch. Never stage scratch artifacts. Staging explicitly approved source changes requires explicit human authorization for Git operations; editing alone is not authorization. Preserve HOME/XDG/global config; approvals remain required, not an OS sandbox.`;
+function withMcpGuidance(promptText) {
     const normalized = promptText.trimEnd();
     const returnMarker = "\nReturn:\n";
-    const roleGuidance = SCRATCH_TASK_ROLES.has(role) ? `\n\n${SCRATCH_TASK_GUIDANCE}` : "";
     if (normalized.includes(returnMarker)) {
-        return `${normalized.replace(returnMarker, `\n${SHARED_MCP_GUIDANCE}${roleGuidance}\n\nReturn:\n`)}\n`;
+        return `${normalized.replace(returnMarker, `\n${SHARED_MCP_GUIDANCE}\n\nReturn:\n`)}\n`;
     }
-    return `${normalized}\n\n${SHARED_MCP_GUIDANCE}${roleGuidance}\n`;
+    return `${normalized}\n\n${SHARED_MCP_GUIDANCE}\n`;
 }
 class ConfigValidationError extends Error {
     constructor(filePath, path, got, want) {
@@ -95,6 +88,10 @@ export function parseOverrides(raw, filePath = "aria.json") {
         fail(filePath, "roles", rolesValue, "object");
     const roles = {};
     for (const [key, value] of Object.entries(rolesValue)) {
+        // Keep legacy Architect-only configs working, but a canonical Reviewer
+        // override always wins when both keys are present. Do not merge fields.
+        if (key === "architect" && Object.prototype.hasOwnProperty.call(rolesValue, "reviewer"))
+            continue;
         const role = ROLE_SET.has(key) ? key : LEGACY_ROLE_ALIASES[key];
         if (!role)
             fail(filePath, `roles.${key}`, key, "valid role");
@@ -222,7 +219,7 @@ export function resolveAriaConfig(worktree, options = {}, metaUrl = import.meta.
                 ...roleDefaults,
                 model,
                 variant,
-                promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8"), role),
+                promptText: withMcpGuidance(readFileSync(resolve(packageRoot, "defaults", roleDefaults.promptFile), "utf8")),
             }];
     }));
     roles.coder.promptText = roles.coder.promptText.replace("{{routing}}", generateRouting({ roles }));

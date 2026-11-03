@@ -8,7 +8,7 @@ metadata:
 
 # RDC Pre-Implementation Plan Review
 
-Use this skill for the architect's pre-implementation QA mode.
+Use this skill for the reviewer's read-only pre-implementation Plan QA mode.
 
 ## Review the plan against these criteria
 
@@ -27,7 +27,7 @@ Use this skill for the architect's pre-implementation QA mode.
 
 ## Correction policy
 
-Be decisive. Correct only what is necessary.
+Be decisive. Recommend only corrections that are necessary. The Reviewer is read-only; report the smallest changes for the Planner to apply rather than editing or replacing the Plan.
 
 Remove:
 - scope creep,

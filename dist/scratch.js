@@ -75,6 +75,13 @@ export const SCRATCH_SUBDIRS = [
     "runtime",
     "experiments",
 ];
+function localDateTime(date) {
+    const pad = (value) => String(value).padStart(2, "0");
+    return {
+        date: `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+        time: `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`,
+    };
+}
 /** Resolve and verify the canonical scratch root for a worktree (fail closed). */
 export async function resolveScratchRoot(worktree) {
     if (typeof worktree !== "string" || worktree.trim().length === 0) {
@@ -148,6 +155,31 @@ export async function createUniqueScratchDir(worktree, scope, prefix) {
     assertContained(root, created, "Scratch directory");
     return created;
 }
+/** Create a timestamped, human-readable scratch directory for one output run. */
+export async function createScratchRunDir(worktree, title) {
+    const { root, scratch } = await resolveScratchRoot(worktree);
+    const { date, time } = localDateTime(new Date());
+    const dateDir = await resolveScratchDir(root, scratch, date, true);
+    const slug = taskSlug("run", title);
+    const base = `${time}-${slug}`;
+    const runDir = await withFileLock(dateDir, async () => {
+        for (let suffix = 0; suffix < 1000; suffix += 1) {
+            const candidate = join(dateDir, suffix === 0 ? base : `${base}-${suffix}`);
+            try {
+                await mkdir(candidate);
+                return candidate;
+            }
+            catch (error) {
+                if (error.code !== "EEXIST")
+                    throw error;
+            }
+            await ensureSafeDirectory(root, candidate, false);
+        }
+        throw new Error("Unable to allocate a unique scratch run directory");
+    });
+    assertContained(scratch, runDir, "Scratch run directory");
+    return runDir;
+}
 function validateTaskId(taskId) {
     if (typeof taskId !== "string" || taskId.trim().length === 0) {
         throw new Error("Scratch task id cannot be empty");
@@ -163,10 +195,10 @@ function taskSlug(taskId, taskName) {
     const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56).replace(/-+$/g, "");
     return slug || "task";
 }
-/** Date-scoped task directory. Repeated task IDs resolve to the same path only within the same UTC day. */
+/** Date-scoped task directory. Repeated task IDs resolve to the same path only within the same local calendar day. */
 async function resolveTaskDir(worktree, id, taskName) {
     const { root, scratch } = await resolveScratchRoot(worktree);
-    const date = new Date().toISOString().slice(0, 10); // UTC date is the deterministic date rule.
+    const { date } = localDateTime(new Date());
     const dateDir = await resolveScratchDir(root, scratch, date, true);
     const slug = taskSlug(id, taskName);
     const marker = ".aria-task-id";
@@ -201,7 +233,7 @@ async function resolveTaskDir(worktree, id, taskName) {
     assertContained(scratch, taskDir, "Scratch task directory");
     return { root, scratch, taskDir };
 }
-/** Per-day deterministic directory: `<scratch>/<UTC date>/<task name>/`; a new UTC day intentionally gets a new path. */
+/** Per-day deterministic directory: `<scratch>/<local date>/<task name>/`; a new local day intentionally gets a new path. */
 export async function createTaskScratch(worktree, taskId, taskName) {
     const id = validateTaskId(taskId);
     return (await resolveTaskDir(worktree, id, taskName)).taskDir;

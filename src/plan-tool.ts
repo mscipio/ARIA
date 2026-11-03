@@ -70,11 +70,10 @@ export type PlanToolAction = (typeof PLAN_TOOL_ACTIONS)[number];
 
 const PLAN_ACTION_SET = new Set<string>(PLAN_TOOL_ACTIONS);
 
-/** Role-scoped plan actions; cancellation is explicitly coder-only. */
+/** Planner owns plan mutations; Coder and Reviewer may read the active plan. */
 export const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>> = {
-  coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
-  planner: new Set(["get", "create"]),
-  architect: new Set(["get", "replace"]),
+  coder: new Set(["get"]),
+  planner: new Set(["get", "create", "replace", "update", "add", "remediate", "cancel", "close", "approve"]),
   reviewer: new Set(["get"]),
 };
 

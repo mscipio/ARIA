@@ -1,11 +1,11 @@
 export declare const PLAN_PREMISE_RECOVERY_TOOL_NAME = "plan_premise_recovery";
-/** Roles without authority to mutate the shared plan may request a one-shot coder handoff. */
+/** Roles without authority to mutate the shared plan may request a one-shot Planner handoff. */
 export declare const PLAN_PREMISE_RECOVERY_ROLES: readonly ["explorer", "visualizer", "implementer", "reviewer", "researcher", "archivist", "writer", "scientist"];
 export declare const planPremiseRecoveryInputSchema: Record<string, unknown>;
 export interface PlanPremiseRecoverySessionApi {
     create(input: {
         parentID: string;
-        agent: "coder";
+        agent: "planner";
         title: string;
     }): Promise<{
         id?: unknown;
@@ -33,7 +33,7 @@ type ToolResult = {
         title: string;
     };
 };
-/** Build a single-purpose native tool that validates, then asks coder to recover one premise. */
+/** Build a single-purpose native tool that validates, then asks Planner to recover one premise. */
 export declare function createPlanPremiseRecoveryTool(planRoot: string, sessions: PlanPremiseRecoverySessionApi): {
     name: string;
     description: string;

@@ -81,9 +81,8 @@ function pluginOptions(options) {
     return configPath ? { configPath } : {};
 }
 const PLAN_ACTIONS_BY_ROLE = {
-    coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
-    planner: new Set(["get", "create"]),
-    architect: new Set(["get", "replace"]),
+    coder: new Set(["get"]),
+    planner: new Set(["get", "create", "replace", "update", "add", "remediate", "cancel", "close", "approve"]),
     reviewer: new Set(["get"]),
 };
 function authorizePlan(context, action) {
@@ -97,6 +96,7 @@ function authorizePlan(context, action) {
 }
 const BASE_PERMISSION = {
     "*": "deny",
+    "playwright_*": "deny",
     read: "deny",
     edit: "deny",
     glob: "deny",
@@ -104,7 +104,7 @@ const BASE_PERMISSION = {
     list: "deny",
     bash: "deny",
     task: "deny",
-    external_directory: "deny",
+    external_directory: "allow",
     todowrite: "deny",
     question: "deny",
     webfetch: "deny",
@@ -126,6 +126,30 @@ const PROTECTED_EDIT = {
     "*.env": "ask",
     "*.env.*": "ask",
     "*.env.example": "allow",
+    "/**": "deny",
+};
+const SCRATCH_EDIT = {
+    "*": "deny",
+    "scratch": "allow",
+    "scratch/**": "allow",
+    "/**": "deny",
+    "scratch/*.env": "ask",
+    "scratch/*.env.*": "ask",
+    "scratch/*.env.example": "allow",
+    "scratch/**/*.env": "ask",
+    "scratch/**/*.env.*": "ask",
+    "scratch/**/*.env.example": "allow",
+};
+const IMPLEMENTER_SCRATCH_EDIT = {
+    "scratch": "allow",
+    "scratch/**": "allow",
+    "/**": "deny",
+    "scratch/*.env": "ask",
+    "scratch/*.env.*": "ask",
+    "scratch/*.env.example": "allow",
+    "scratch/**/*.env": "ask",
+    "scratch/**/*.env.*": "ask",
+    "scratch/**/*.env.example": "allow",
 };
 const CODE_READ = {
     ...BASE_PERMISSION,
@@ -193,38 +217,34 @@ const ROLE_PERMISSIONS = {
     explorer: {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
+        edit: SCRATCH_EDIT,
         ...planPremiseRecoveryPermission("explorer"),
         skill: skillAccess("rdc-code-exploration"),
     },
     visualizer: {
         ...BASE_PERMISSION,
         ...REQUIRED_MCP_PERMISSION,
+        "playwright_*": "allow",
         ...planPremiseRecoveryPermission("visualizer"),
         read: PROTECTED_READ,
+        edit: { ...PROTECTED_EDIT, ...IMPLEMENTER_SCRATCH_EDIT },
         scratch_task: "allow",
         skill: skillAccess("aria-qt-ui"),
     },
     planner: {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
+        edit: SCRATCH_EDIT,
         webfetch: "allow",
         websearch: "allow",
         skill: skillAccess("rdc-implementation-planning", "rdc-testing-discipline"),
-        plan: "allow",
-    },
-    architect: {
-        ...CODE_READ,
-        ...REQUIRED_MCP_PERMISSION,
-        webfetch: "allow",
-        websearch: "allow",
-        skill: skillAccess("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
         plan: "allow",
     },
     implementer: {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
         ...planPremiseRecoveryPermission("implementer"),
-        edit: PROTECTED_EDIT,
+        edit: { ...PROTECTED_EDIT, ...IMPLEMENTER_SCRATCH_EDIT },
         scratch_task: "allow",
         bash: {
             "*": "allow",
@@ -246,16 +266,18 @@ const ROLE_PERMISSIONS = {
         ...CODE_READ,
         ...REQUIRED_MCP_PERMISSION,
         ...planPremiseRecoveryPermission("reviewer"),
+        edit: SCRATCH_EDIT,
         scratch_task: "allow",
         bash: "allow",
         webfetch: "allow",
         websearch: "allow",
-        skill: skillAccess("rdc-implementation-review", "rdc-adversarial-review", "rdc-testing-discipline"),
+        skill: skillAccess("rdc-plan-review", "rdc-implementation-review", "rdc-scope-assessment", "rdc-adversarial-review", "rdc-testing-discipline"),
         plan: "allow",
     },
     researcher: {
         ...BASE_PERMISSION,
         ...planPremiseRecoveryPermission("researcher"),
+        edit: SCRATCH_EDIT,
         read: PROTECTED_READ,
         glob: "allow",
         grep: "allow",
@@ -288,18 +310,24 @@ const ROLE_PERMISSIONS = {
     "archivist": {
         ...BASE_PERMISSION,
         ...planPremiseRecoveryPermission("archivist"),
-        read: { "*": "deny" },
-        edit: { "*": "deny" },
+        read: {
+            "*": "allow",
+            "*.env": "ask",
+            "*.env.*": "ask",
+            "*.env.example": "allow",
+        },
+        edit: { ...SCRATCH_EDIT },
         glob: "deny",
         grep: "deny",
         list: "deny",
         bash: { "*": "deny" },
         skill: skillAccess("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
-        external_directory: "deny",
+        external_directory: "allow",
     },
     writer: {
         ...BASE_PERMISSION,
         ...planPremiseRecoveryPermission("writer"),
+        edit: SCRATCH_EDIT,
         read: PROTECTED_READ,
         skill: skillAccess("aria-academic-writing", "aria-writing-anti-ai", "aria-review-response", "aria-paper-self-review", "aria-document-design"),
         task: {
@@ -312,6 +340,7 @@ const ROLE_PERMISSIONS = {
     scientist: {
         ...BASE_PERMISSION,
         ...planPremiseRecoveryPermission("scientist"),
+        edit: SCRATCH_EDIT,
         read: PROTECTED_READ,
         glob: "allow",
         grep: "allow",
@@ -339,11 +368,14 @@ function buildArchivistPermissions(worktree) {
     // OpenCode evaluates read/edit permissions against paths relative to the
     // active worktree, even when the tool was called with an absolute path.
     const readScope = {
-        "*": "deny",
+        "*": "allow",
         [wikiRelative]: "allow",
         [`${wikiRelative}/**`]: "allow",
         [pipelineRelative]: "allow",
         [`${pipelineRelative}/**`]: "allow",
+        "*.env": "ask",
+        "*.env.*": "ask",
+        "*.env.example": "allow",
     };
     const editScope = {
         "*": "deny",
@@ -352,9 +384,7 @@ function buildArchivistPermissions(worktree) {
     };
     // external_directory is evaluated against absolute filesystem paths.
     const externalDirScope = {
-        "*": "deny",
-        [`${wikiDir}/**`]: "allow",
-        [`${pipelineRoot}/**`]: "allow",
+        "*": "allow",
     };
     return {
         ...BASE_PERMISSION,
@@ -362,7 +392,7 @@ function buildArchivistPermissions(worktree) {
         grep: "deny",
         list: "deny",
         read: readScope,
-        edit: editScope,
+        edit: { ...editScope, ...IMPLEMENTER_SCRATCH_EDIT },
         bash: {
             "*": "deny",
             [`python ${pipelineRun} archive-opencode`]: "allow",
@@ -378,7 +408,7 @@ function buildArchivistPermissions(worktree) {
 const NON_CODER_ROLES = Object.keys(ROLE_PERMISSIONS);
 /**
  * Coder task permissions: the coder coordinates the other roles via the task
- * tool, which is denied by default and allowed for the six RDC specialists
+ * tool, which is denied by default and allowed for the five RDC specialists
  * plus researcher, archivist, and scientist.
  */
 const TASK_PERMISSIONS = {
@@ -386,7 +416,6 @@ const TASK_PERMISSIONS = {
     explorer: "allow",
     visualizer: "allow",
     planner: "allow",
-    architect: "allow",
     implementer: "allow",
     reviewer: "allow",
     researcher: "allow",
@@ -406,7 +435,8 @@ const TASK_PERMISSIONS = {
 function coderPermission() {
     return {
         ...REQUIRED_MCP_PERMISSION,
-        edit: "deny",
+        "playwright_*": "deny",
+        edit: SCRATCH_EDIT,
         bash: "deny",
         scratch_task: "allow",
         task: TASK_PERMISSIONS,

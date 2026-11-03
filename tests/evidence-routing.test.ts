@@ -55,7 +55,7 @@ describe("T004 pre-planning evidence routing", () => {
   });
 
   it("keeps permission boundaries unchanged with no new agent or shell grant", () => {
-    expect(Object.keys(loadDefaultConfig().roles)).toHaveLength(11);
+    expect(Object.keys(loadDefaultConfig().roles)).toHaveLength(10);
     // Explorer: content tools allow, shell denied, no delegation.
     expect(evaluatePermission(getPermissionsForRole("explorer"), "shell", "git status")).toBe("deny");
     expect(evaluatePermission(getPermissionsForRole("explorer"), "read", "src/app.ts")).toBe("allow");

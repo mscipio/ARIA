@@ -331,7 +331,7 @@ async function main() {
         }
       }
 
-      // Managed agent files (T008): eleven deterministic files.
+      // Managed agent files (T008): ten deterministic files.
       if (agents) {
         if (agents.detail) {
           console.error(`Agents: [FAIL] ${agents.detail}`);

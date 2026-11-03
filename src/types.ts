@@ -3,7 +3,6 @@ export type RoleName =
   | "explorer"
   | "visualizer"
   | "planner"
-  | "architect"
   | "implementer"
   | "reviewer"
   | "researcher"

@@ -114,86 +114,52 @@ describe("T006 native V2 plan tool", () => {
     expect(tool.description).toContain(".aria/rdc/TASKS.md");
   });
 
-  it("enforces ToolContext authorization per role with sessionID required", async () => {
+  it("enforces Planner-only Plan mutations with sessionID required", async () => {
     const root = await project();
     const tool = createPlanTool(root);
+    const planner = (session: string) => toolContext("planner", session);
     const coder = (session: string) => toolContext("coder", session);
-    const created = await tool.execute({ action: "create", title: "ACL plan", tasks: ["Task"] }, coder("coder-create"));
+    const reviewer = (session: string) => toolContext("reviewer", session);
+    const created = await tool.execute({ action: "create", title: "ACL plan", tasks: ["Task"] }, planner("planner-create"));
     const planID = planIDOf(contentOf(created));
     const revision = revisionOf(contentOf(created));
 
-    // planner: get + create allowed, mutations rejected
+    // Planner reads, creates, and revises plan content.
     const plannerGet = await tool.execute({ action: "get" }, toolContext("planner", "planner-get"));
     expect(contentOf(plannerGet)).toContain("Plan: ACL plan");
     expect(plannerGet.metadata.title).toBe("Check active plan");
-    for (const args of [
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "X", tasks: ["T"] },
-      { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "completed" },
-      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
-      { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix"] },
-      { action: "approve", expectedPlanID: planID, expectedRevision: revision },
-      { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "not authorized" },
-    ]) {
-      const denied = await tool.execute(args, toolContext("planner", `planner-${args.action}`));
-      expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
-      expect(denied.metadata.title).toBe("Error");
-    }
-
-    // architect: get + replace allowed; cancellation and other coder mutations are rejected
-    const architectGet = await tool.execute({ action: "get" }, toolContext("architect", "architect-get"));
-    expect(contentOf(architectGet)).toContain("Plan: ACL plan");
     const replaced = await tool.execute(
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "Architect fix", tasks: ["Task"] },
-      toolContext("architect", "architect-replace"),
+      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "Planner revision", tasks: ["Task"] },
+      planner("planner-replace"),
     );
-    expect(contentOf(replaced)).toContain("Architect fix");
-    expect(replaced.metadata.title).toBe("Replace plan · Architect fix");
-    for (const args of [
-      { action: "create", title: "Arch", tasks: ["T"] },
-      {
-        action: "update",
-        expectedPlanID: planID,
-        expectedRevision: revision,
-        taskID: "T001",
-        status: "completed",
-      },
-      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
-      { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "not authorized" },
-    ]) {
-      const denied = await tool.execute(args, toolContext("architect", `architect-${args.action}`));
-      expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
-      expect(denied.metadata.title).toBe("Error");
-    }
+    expect(contentOf(replaced)).toContain("Planner revision");
+    expect(replaced.metadata.title).toBe("Replace plan · Planner revision");
+    const currentRevision = revisionOf(contentOf(replaced));
 
-    // reviewer: get allowed, every mutation rejected
+    // Coder and Reviewer are read-only.
     const reviewerGet = await tool.execute({ action: "get" }, toolContext("reviewer", "reviewer-get"));
-    expect(contentOf(reviewerGet)).toContain("Plan: Architect fix");
-    for (const args of [
-      { action: "create", title: "R", tasks: ["T"] },
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "R", tasks: ["T"] },
-      { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "completed" },
-      { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Extra"] },
-      { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix"] },
-      { action: "approve", expectedPlanID: planID, expectedRevision: revision },
-      { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "not authorized" },
-    ]) {
-      const denied = await tool.execute(args, toolContext("reviewer", `reviewer-${args.action}`));
-      expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
+    expect(contentOf(reviewerGet)).toContain("Plan: Planner revision");
+    const mutations = [
+      { action: "create", title: "Rejected", tasks: ["T"] },
+      { action: "replace", expectedPlanID: planID, expectedRevision: currentRevision, title: "Rejected", tasks: ["T"] },
+      { action: "update", expectedPlanID: planID, expectedRevision: currentRevision, taskID: "T001", status: "completed" },
+      { action: "add", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Extra"] },
+      { action: "remediate", expectedPlanID: planID, expectedRevision: currentRevision, tasks: ["Fix"] },
+      { action: "approve", expectedPlanID: planID, expectedRevision: currentRevision },
+      { action: "cancel", expectedPlanID: planID, expectedRevision: currentRevision, reason: "not authorized" },
+      { action: "close", expectedPlanID: planID, expectedRevision: currentRevision },
+    ];
+    for (const actor of [coder, reviewer]) {
+      for (const args of mutations) {
+        const denied = await tool.execute(args, actor(`${String(args.action)}-denied`));
+        expect(contentOf(denied)).toMatch(new RegExp(`may not ${args.action}`));
+      }
     }
 
-    // coder: full V1 set allowed (replace stays architect-only), unknown roles rejected
     const coderGet = await tool.execute({ action: "get" }, coder("coder-get"));
-    expect(contentOf(coderGet)).toContain("Plan: Architect fix");
-    const coderReplace = await tool.execute(
-      { action: "replace", expectedPlanID: planID, expectedRevision: revision, title: "X", tasks: ["T"] },
-      coder("coder-replace"),
-    );
-    expect(contentOf(coderReplace)).toContain("Role coder may not replace the plan. Authorized role(s) for replace: architect.");
+    expect(contentOf(coderGet)).toContain("Plan: Planner revision");
     expect(contentOf(await tool.execute({ action: "get" }, toolContext("researcher", "researcher-get")))).toMatch(
-      /Role researcher may not get the plan\. Authorized role\(s\) for get: coder, planner, architect, reviewer\./,
+      /Role researcher may not get the plan\. Authorized role\(s\) for get: coder, planner, reviewer\./,
     );
     const missingSession = await tool.execute({ action: "get" }, toolContext("coder", ""));
     expect(contentOf(missingSession)).toMatch(/sessionID is required/);
@@ -203,19 +169,19 @@ describe("T006 native V2 plan tool", () => {
   it("fails unauthorized premise edits closed and preserves plan history at the approval boundary", async () => {
     const root = await scratchProject("t007-premise-recovery");
     const tool = createPlanTool(root);
-    const coder = (session: string) => toolContext("coder", session);
+    const planner = (session: string) => toolContext("planner", session);
     const created = await tool.execute(
       { action: "create", title: "Premise recovery", tasks: ["Verified completed work", "Questioned premise"] },
-      coder("create"),
+      planner("create"),
     );
     const planID = planIDOf(contentOf(created));
     let revision = revisionOf(contentOf(created));
-    const approved = await tool.execute({ action: "approve", expectedPlanID: planID, expectedRevision: revision }, coder("approve"));
+    const approved = await tool.execute({ action: "approve", expectedPlanID: planID, expectedRevision: revision }, planner("approve"));
     revision = revisionOf(contentOf(approved));
 
     const started = await tool.execute(
       { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID: "T001", status: "in_progress" },
-      coder("start-completed-work"),
+      planner("start-completed-work"),
     );
     revision = revisionOf(contentOf(started));
     const completed = await tool.execute(
@@ -227,13 +193,11 @@ describe("T006 native V2 plan tool", () => {
         status: "completed",
         evidence: "verified before premise review",
       },
-      coder("complete-work"),
+      planner("complete-work"),
     );
     revision = revisionOf(contentOf(completed));
-    // There is no native delegate-candidate dispatch interface here. The
-    // registered role/action contract is the supported boundary: non-coders
-    // cannot mutate, and rejected calls do not alter the active plan.
-    for (const agent of ["planner", "architect", "reviewer"]) {
+    // Plan mutations are Planner-only; rejected calls do not alter the active plan.
+    for (const agent of ["coder", "reviewer", "implementer"]) {
       const denied = await tool.execute(
         {
           action: "update",
@@ -248,18 +212,18 @@ describe("T006 native V2 plan tool", () => {
       expect(contentOf(denied)).toContain(`Role ${agent} may not update the plan`);
       expect(denied.metadata.title).toBe("Error");
     }
-    const unchanged = await tool.execute({ action: "get" }, coder("verify-denial"));
+    const unchanged = await tool.execute({ action: "get" }, planner("verify-denial"));
     expect(planIDOf(contentOf(unchanged))).toBe(planID);
     expect(revisionOf(contentOf(unchanged))).toBe(revision);
     expect(contentOf(unchanged)).toContain("Approval: approved");
     expect(contentOf(unchanged)).toContain("- [x] T001 Verified completed work");
 
-    // One explicitly authorized coder action adds factual correction tasks
+    // One explicitly authorized Planner action adds factual correction tasks
     // without erasing completed work or changing approval. A scope addition
     // remains a separate action and resets approval for renewed review.
     const corrected = await tool.execute(
       { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Correct false premise"] },
-      coder("authorized-remediation"),
+      planner("authorized-remediation"),
     );
     revision = revisionOf(contentOf(corrected));
     expect(planIDOf(contentOf(corrected))).toBe(planID);
@@ -269,7 +233,7 @@ describe("T006 native V2 plan tool", () => {
 
     const scopeChange = await tool.execute(
       { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Expand scope"] },
-      coder("scope-change"),
+      planner("scope-change"),
     );
     expect(planIDOf(contentOf(scopeChange))).toBe(planID);
     expect(revisionOf(contentOf(scopeChange))).toBe(revision + 1);
@@ -280,8 +244,8 @@ describe("T006 native V2 plan tool", () => {
   it("rejects stale plan id and revision (app-owned CAS)", async () => {
     const root = await project();
     const tool = createPlanTool(root);
-    const coder = (session: string) => toolContext("coder", session);
-    const created = await tool.execute({ action: "create", title: "Stale test", tasks: ["Task"] }, coder("create"));
+    const planner = (session: string) => toolContext("planner", session);
+    const created = await tool.execute({ action: "create", title: "Stale test", tasks: ["Task"] }, planner("create"));
     const planID = planIDOf(contentOf(created));
     const initialRevision = revisionOf(contentOf(created));
 
@@ -293,14 +257,14 @@ describe("T006 native V2 plan tool", () => {
         taskID: "T001",
         status: "completed",
       },
-      coder("wrong-id"),
+      planner("wrong-id"),
     );
     expect(contentOf(wrongID)).toMatch(/plan id conflict/);
     expect(wrongID.metadata.title).toBe("Error");
 
     const approved = await tool.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: initialRevision },
-      coder("approve"),
+      planner("approve"),
     );
     const approvedRevision = revisionOf(contentOf(approved));
     const advanced = await tool.execute(
@@ -312,7 +276,7 @@ describe("T006 native V2 plan tool", () => {
         status: "completed",
         evidence: "done",
       },
-      coder("advance"),
+      planner("advance"),
     );
     const advancedRevision = revisionOf(contentOf(advanced));
     expect(advancedRevision).toBe(approvedRevision + 1);
@@ -325,31 +289,31 @@ describe("T006 native V2 plan tool", () => {
         taskID: "T001",
         status: "in_progress",
       },
-      coder("stale"),
+      planner("stale"),
     );
     expect(contentOf(stale)).toMatch(/revision conflict/);
     expect(stale.metadata.title).toBe("Error");
   });
 
-  it("allows coder-directed cancellation only with a reason and current CAS, then permits a new plan", async () => {
+  it("allows Planner cancellation only with a reason and current CAS, then permits a new plan", async () => {
     const root = await project();
     const tool = createPlanTool(root);
-    const coder = (session: string) => toolContext("coder", session);
-    const created = await tool.execute({ action: "create", title: "Old", tasks: ["Work"] }, coder("create-old"));
+    const planner = (session: string) => toolContext("planner", session);
+    const created = await tool.execute({ action: "create", title: "Old", tasks: ["Work"] }, planner("create-old"));
     const planID = planIDOf(contentOf(created));
     const revision = revisionOf(contentOf(created));
     const missingReason = await tool.execute(
-      { action: "cancel", expectedPlanID: planID, expectedRevision: revision }, coder("missing-reason"),
+      { action: "cancel", expectedPlanID: planID, expectedRevision: revision }, planner("missing-reason"),
     );
     expect(contentOf(missingReason)).toMatch(/reason is required/);
     const stale = await tool.execute(
       { action: "cancel", expectedPlanID: planID, expectedRevision: revision + 1, reason: "User directed" },
-      coder("stale-cancel"),
+      planner("stale-cancel"),
     );
     expect(contentOf(stale)).toMatch(/revision conflict/);
     const cancelled = await tool.execute(
       { action: "cancel", expectedPlanID: planID, expectedRevision: revision, reason: "User directed replacement" },
-      coder("cancel"),
+      planner("cancel"),
     );
     expect(cancelled.metadata.title).toBe("Cancel plan");
     expect(contentOf(cancelled)).toContain(`Cancelled plan ${planID}`);
@@ -358,7 +322,7 @@ describe("T006 native V2 plan tool", () => {
     expect(archive).toContain(`Revision: **${revision + 1}**`);
     expect(archive).toContain("Outcome: cancelled");
     expect(archive).toContain("Reason: User directed replacement");
-    const next = await tool.execute({ action: "create", title: "New", tasks: ["New work"] }, coder("create-new"));
+    const next = await tool.execute({ action: "create", title: "New", tasks: ["New work"] }, planner("create-new"));
     expect(contentOf(next)).toContain("Approval: pending");
   });
 
@@ -379,19 +343,19 @@ describe("T006 native V2 plan tool", () => {
     try {
       process.chdir(cwdDir);
       const emptyTool = createPlanTool("");
-      const getResult = await emptyTool.execute({ action: "get" }, toolContext("coder", "empty-get"));
+      const getResult = await emptyTool.execute({ action: "get" }, toolContext("planner", "empty-get"));
       expect(contentOf(getResult)).toMatch(/meaningful OpenCode directory/);
       expect(getResult.metadata.title).toBe("Error");
       const createResult = await emptyTool.execute(
         { action: "create", title: "Should not exist", tasks: ["Task"] },
-        toolContext("coder", "empty-create"),
+        toolContext("planner", "empty-create"),
       );
       expect(contentOf(createResult)).toMatch(/meaningful OpenCode directory/);
       await expect(readFile(join(cwdDir, ".aria/rdc", "TASKS.md"), "utf8")).rejects.toThrow();
       await expect(readFile(join(parse(resolve("/tmp/x")).root, ".aria", "rdc", "TASKS.md"), "utf8")).rejects.toThrow();
 
       const rootTool = createPlanTool(parse(resolve(symlinkDir)).root);
-      const rootResult = await rootTool.execute({ action: "get" }, toolContext("coder", "root-get"));
+      const rootResult = await rootTool.execute({ action: "get" }, toolContext("planner", "root-get"));
       expect(contentOf(rootResult)).toMatch(/meaningful OpenCode directory/);
     } finally {
       process.chdir(originalCwd);
@@ -401,69 +365,61 @@ describe("T006 native V2 plan tool", () => {
   it("rejects invalid input with the preserved V1 messages", async () => {
     const root = await project();
     const tool = createPlanTool(root);
-    const coder = (session: string) => toolContext("coder", session);
-    const architectCtx = (session: string) => toolContext("architect", session);
-    const created = await tool.execute({ action: "create", title: "Invalid", tasks: ["Task"] }, coder("create"));
+    const planner = (session: string) => toolContext("planner", session);
+    const created = await tool.execute({ action: "create", title: "Invalid", tasks: ["Task"] }, planner("create"));
     const planID = planIDOf(contentOf(created));
     const revision = revisionOf(contentOf(created));
 
-    const cases: Array<{ args: Record<string, unknown>; message: RegExp; role: "coder" | "architect" }> = [
-      { role: "coder", args: { action: "create", title: "No tasks" }, message: /title and tasks are required for create/ },
-      { role: "coder", args: { action: "create", tasks: ["No title"] }, message: /title and tasks are required for create/ },
-      { role: "architect", args: { action: "replace", title: "X", tasks: ["T"] }, message: /expectedPlanID is required for replace/ },
+    const cases: Array<{ args: Record<string, unknown>; message: RegExp }> = [
+      { args: { action: "create", title: "No tasks" }, message: /title and tasks are required for create/ },
+      { args: { action: "create", tasks: ["No title"] }, message: /title and tasks are required for create/ },
+      { args: { action: "replace", title: "X", tasks: ["T"] }, message: /expectedPlanID is required for replace/ },
       {
-        role: "architect",
         args: { action: "replace", expectedPlanID: planID, title: "X", tasks: ["T"] },
         message: /expectedRevision is required for replace/,
       },
       {
-        role: "architect",
         args: { action: "replace", expectedPlanID: planID, expectedRevision: revision },
         message: /title and tasks are required for replace/,
       },
-      { role: "coder", args: { action: "add", expectedRevision: revision, tasks: ["T"] }, message: /expectedPlanID is required for add/ },
-      { role: "coder", args: { action: "add", expectedPlanID: planID, tasks: ["T"] }, message: /expectedRevision is required for add/ },
+      { args: { action: "add", expectedRevision: revision, tasks: ["T"] }, message: /expectedPlanID is required for add/ },
+      { args: { action: "add", expectedPlanID: planID, tasks: ["T"] }, message: /expectedRevision is required for add/ },
       {
-        role: "coder",
         args: { action: "add", expectedPlanID: planID, expectedRevision: revision },
         message: /tasks are required for add/,
       },
       {
-        role: "coder",
         args: { action: "update", expectedRevision: revision, taskID: "T001", status: "completed" },
         message: /expectedPlanID is required for update/,
       },
       {
-        role: "coder",
         args: { action: "update", expectedPlanID: planID, taskID: "T001", status: "completed" },
         message: /expectedRevision is required for update/,
       },
       {
-        role: "coder",
         args: { action: "update", expectedPlanID: planID, expectedRevision: revision },
         message: /taskID and status are required for update/,
       },
-      { role: "coder", args: { action: "approve", expectedRevision: revision }, message: /expectedPlanID is required for approve/ },
-      { role: "coder", args: { action: "approve", expectedPlanID: planID }, message: /expectedRevision is required for approve/ },
-      { role: "coder", args: { action: "close", expectedRevision: revision }, message: /expectedPlanID is required for close/ },
-      { role: "coder", args: { action: "close", expectedPlanID: planID }, message: /expectedRevision is required for close/ },
+      { args: { action: "approve", expectedRevision: revision }, message: /expectedPlanID is required for approve/ },
+      { args: { action: "approve", expectedPlanID: planID }, message: /expectedRevision is required for approve/ },
+      { args: { action: "close", expectedRevision: revision }, message: /expectedPlanID is required for close/ },
+      { args: { action: "close", expectedPlanID: planID }, message: /expectedRevision is required for close/ },
     ];
-    for (const { args, message, role } of cases) {
-      const ctx = role === "architect" ? architectCtx(`invalid-${String(args.action)}`) : coder(`invalid-${String(args.action)}`);
-      const result = await tool.execute(args, ctx);
+    for (const { args, message } of cases) {
+      const result = await tool.execute(args, planner(`invalid-${String(args.action)}`));
       expect(contentOf(result), JSON.stringify(args)).toMatch(message);
       expect(result.metadata.title).toBe("Error");
     }
-    const unknown = await tool.execute({ action: "nope" }, coder("unknown"));
+    const unknown = await tool.execute({ action: "nope" }, planner("unknown"));
     expect(contentOf(unknown)).toMatch(/Unknown plan action|may not nope/);
   });
 
-  it("runs the eight-action happy path through planner, architect, and coder", async () => {
+  it("runs the Plan lifecycle through Planner, Coder, and Reviewer", async () => {
     const root = await project();
     const tool = createPlanTool(root);
     const planner = (session: string) => toolContext("planner", session);
-    const architect = (session: string) => toolContext("architect", session);
     const coder = (session: string) => toolContext("coder", session);
+    const reviewer = (session: string) => toolContext("reviewer", session);
 
     // create (planner) + get
     const created = await tool.execute(
@@ -475,20 +431,20 @@ describe("T006 native V2 plan tool", () => {
     expect(revisionOf(contentOf(created))).toBe(1);
     const planID = planIDOf(contentOf(created));
 
-    // replace (architect) + get
+    // replace (Planner after read-only Reviewer QA) + get
     const replaced = await tool.execute(
       { action: "replace", expectedPlanID: planID, expectedRevision: 1, title: "Revised plan", tasks: ["Define schema", "Build UI"] },
-      architect("architect-replace"),
+      planner("planner-replace"),
     );
     expect(contentOf(replaced)).toContain("Plan: Revised plan");
     expect(revisionOf(contentOf(replaced))).toBe(2);
-    const afterReplaceGet = await tool.execute({ action: "get" }, coder("coder-read"));
+    const afterReplaceGet = await tool.execute({ action: "get" }, reviewer("reviewer-read"));
     expect(contentOf(afterReplaceGet)).toContain("Plan: Revised plan");
 
     // approve (coder)
     const approved = await tool.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: 2 },
-      coder("coder-approve"),
+      planner("planner-approve"),
     );
     expect(approved.metadata.title).toBe("Approve plan");
     expect(contentOf(approved)).toContain("Approval: approved");
@@ -497,14 +453,14 @@ describe("T006 native V2 plan tool", () => {
     // add (coder) resets approval to pending, then re-approve
     const added = await tool.execute(
       { action: "add", expectedPlanID: planID, expectedRevision: revision, tasks: ["Review"] },
-      coder("coder-add"),
+      planner("planner-add"),
     );
     expect(added.metadata.title).toBe("Add plan tasks");
     expect(contentOf(added)).toContain("Approval: pending");
     revision = revisionOf(contentOf(added));
     const reApproved = await tool.execute(
       { action: "approve", expectedPlanID: planID, expectedRevision: revision },
-      coder("coder-re-approve"),
+      planner("planner-re-approve"),
     );
     revision = revisionOf(contentOf(reApproved));
 
@@ -512,7 +468,7 @@ describe("T006 native V2 plan tool", () => {
     for (const taskID of ["T001", "T002", "T003"]) {
       const started = await tool.execute(
         { action: "update", expectedPlanID: planID, expectedRevision: revision, taskID, status: "in_progress" },
-        coder(`coder-start-${taskID}`),
+        planner(`planner-start-${taskID}`),
       );
       expect(started.metadata.title).toBe(`Mark ${taskID} in progress`);
       revision = revisionOf(contentOf(started));
@@ -525,7 +481,7 @@ describe("T006 native V2 plan tool", () => {
           status: "completed",
           evidence: `verified ${taskID}`,
         },
-        coder(`coder-done-${taskID}`),
+        planner(`planner-done-${taskID}`),
       );
       revision = revisionOf(contentOf(done));
     }
@@ -533,7 +489,7 @@ describe("T006 native V2 plan tool", () => {
     // remediate (coder) preserves approval, then complete the remediation task
     const remediated = await tool.execute(
       { action: "remediate", expectedPlanID: planID, expectedRevision: revision, tasks: ["Fix blocking issue"] },
-      coder("coder-remediate"),
+      planner("planner-remediate"),
     );
     expect(remediated.metadata.title).toBe("Add remediation tasks");
     expect(contentOf(remediated)).toContain("Approval: approved");
@@ -549,14 +505,14 @@ describe("T006 native V2 plan tool", () => {
         status: "completed",
         evidence: "verified fix",
       },
-      coder("coder-fix-done"),
+      planner("planner-fix-done"),
     );
     revision = revisionOf(contentOf(fixDone));
 
     // close (coder) archives and removes the active file
     const closed = await tool.execute(
       { action: "close", expectedPlanID: planID, expectedRevision: revision },
-      coder("coder-close"),
+      planner("planner-close"),
     );
     expect(closed.metadata.title).toBe("Archive plan");
     expect(contentOf(closed)).toMatch(/Archived to/);

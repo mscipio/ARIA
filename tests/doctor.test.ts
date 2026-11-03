@@ -150,7 +150,7 @@ async function snapshotDir(root: string): Promise<Record<string, string>> {
 // ---------------------------------------------------------------------------
 
 describe("runDoctor", () => {
-  it("reports a defaults-ordered eleven-role healthy report with exit 0", async () => {
+  it("reports a defaults-ordered ten-role healthy report with exit 0", async () => {
     const options = await healthyOptions();
     const report = await runDoctor(options);
 
@@ -654,10 +654,10 @@ describe("package capability inventory (derived from canonical permission tables
       "aria-qt-ui",
       "rdc-implementation-planning",
       "rdc-testing-discipline",
-      "rdc-plan-review",
-      "rdc-scope-assessment",
       "rdc-code-implementation",
+      "rdc-plan-review",
       "rdc-implementation-review",
+      "rdc-scope-assessment",
       "rdc-adversarial-review",
       "aria-research-evidence",
       "aria-zotero-tutor",
@@ -676,7 +676,7 @@ describe("package capability inventory (derived from canonical permission tables
 
   it("derives the coding roles and accepts the canonical role requirements", () => {
     expect([...CODING_ROLES]).toEqual([
-      "coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer",
+      "coder", "explorer", "visualizer", "planner", "implementer", "reviewer",
     ]);
     expect(roleRequirementIssues()).toEqual([]);
   });
@@ -1081,7 +1081,7 @@ describe("runDoctor severity separation", () => {
 });
 
 describe("formatDoctorReport", () => {
-  it("renders plain output with literal PASS labels and all eleven roles", async () => {
+  it("renders plain output with literal PASS labels and all ten roles", async () => {
     const options = await healthyOptions();
     const report = await runDoctor(options);
     const text = formatDoctorReport(report);

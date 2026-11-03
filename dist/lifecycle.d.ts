@@ -43,7 +43,7 @@ export interface SetupResult {
 /**
  * T008 file-phase outcomes: global `opencode.json(c)` (exact plugin URI,
  * single skills root, depth default 3; unrelated user keys preserved,
- * backup before replace, idempotent) and the eleven managed agent files
+ * backup before replace, idempotent) and the ten managed agent files
  * (via T003 `installAgentFiles`, resolved project-neutral). T002 discovery
  * selects which of `opencode.json` / `opencode.jsonc` is the target and
  * `path` always reports the resolved file.

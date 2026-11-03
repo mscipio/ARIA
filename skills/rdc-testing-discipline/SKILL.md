@@ -39,7 +39,7 @@ Require additional verification when an important approved behavior would otherw
 ## Role-specific application
 
 - **Planner:** state the behavior that must be demonstrated, not how the test must be implemented.
-- **Architect:** remove redundant/combinatorial verification requirements and reject test-driven scope creep.
+- **Planner and Reviewer:** keep verification proportional; remove redundant/combinatorial requirements and reject test-driven scope creep.
 - **Implementer:** choose the smallest practical test implementation and run the narrowest relevant checks first.
 - **Reviewer:** block on material issues—concrete defects, unmet approved criteria, regressions, or violations of explicit protections—not optional preferences, speculative complexity, or hypothetical coverage gaps. Verification duties and the normal review gate are unchanged.
 

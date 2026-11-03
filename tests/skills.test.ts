@@ -146,9 +146,9 @@ describe("package-owned ARIA skills", () => {
     expect(adversarial).toContain("does not reset or extend");
     expect(adversarial).toContain("still-unused");
     // Out-of-scope handling: NON-BLOCKING future work; materially required work
-    // needs architect scope assessment and renewed approval.
+    // needs Reviewer scope assessment and renewed approval.
     expect(adversarial).toContain("NON-BLOCKING");
-    expect(adversarial).toContain("architect scope assessment and renewed approval");
+    expect(adversarial).toContain("Reviewer scope assessment and renewed approval");
     // Exact five-field BLOCKING finding format.
     expect(adversarial).toContain("Invariant");
     expect(adversarial).toContain("Attack scenario/counterexample");

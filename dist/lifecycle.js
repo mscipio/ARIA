@@ -632,7 +632,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn, o
         backupPath: configState.backupPath,
     };
     // -----------------------------------------------------------------------
-    // Phase 1c — Managed agent files (T008): the eleven deterministic files
+    // Phase 1c — Managed agent files (T008): the ten deterministic files
     // via T003 `installAgentFiles` (ownership markers, user-agent backups,
     // atomic writes). Resolution is project-neutral (defaults plus global
     // overrides only) so CWD project models never bake into global files
@@ -653,7 +653,7 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn, o
         // exposed as `partialResult`) must be rolled back here too. Config
         // rollback below stays mandatory; both passes are best-effort.
         const partial = error?.partialResult;
-        if (partial && (partial.written.length > 0 || Object.keys(partial.backups ?? {}).length > 0)) {
+        if (partial && (partial.written.length > 0 || Object.keys(partial.backups ?? {}).length > 0 || partial.retiredFiles?.length)) {
             await rollbackAgentInstall(agentsDir, partial).catch(() => undefined);
         }
         await rollbackSetupConfigFile(configState.path, configState).catch(() => undefined);
@@ -673,6 +673,11 @@ export async function setup(binaryUrl, executor = defaultExecutor, depsSyncFn, o
         version: installed.version,
         written: installed.written.length,
         unchanged: installed.unchanged.length,
+        ...(installed.legacyArchitectWarning
+            ? { detail: installed.legacyArchitectWarning }
+            : installed.retiredFiles.length > 0
+                ? { detail: `Archived the obsolete Architect agent at ${installed.retiredFiles[0].backupPath}` }
+                : {}),
     };
     try {
         await installCommandFiles({ dir: filesOptions.commandsDir ?? (filesOptions.globalConfigPath ? resolve(dirname(filesOptions.globalConfigPath), "commands") : defaultCommandsDir()), version: installed.version });

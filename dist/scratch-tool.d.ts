@@ -6,7 +6,7 @@ type ScratchTaskToolResult = {
         title: string;
     };
 };
-/** Build a native V2 tool for allocating a task scope under the startup project. */
+/** Build a native V2 tool for allocating a named output run under the startup project. */
 export declare function createScratchTaskTool(projectDirectory: string | undefined): {
     name: string;
     description: string;

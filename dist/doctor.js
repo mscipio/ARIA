@@ -7,11 +7,12 @@ import { discoverAvailableModels } from "./model-config.js";
 import { agentFileName, defaultAgentsDir, generateAgentFiles, parseManagedHeader, readPackageVersion, } from "./agents.js";
 import { defaultCommandsDir, generateCommandFiles, parseManagedHeader as parseCommandManagedHeader } from "./commands.js";
 import { PLAN_TOOL_NAME } from "./plan-tool.js";
-import { CODING_ROLES, PACKAGE_SKILL_NAMES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
+import { CODING_ROLES, roleRequirementIssues, validateZotPilotPolicy, } from "./register.js";
 import { deriveRoutes, ROLES } from "./routes.js";
 import { defaultGlobalConfigPath, isSameLocalPluginIdentity, resolveSetupAriaConfig } from "./setup-config.js";
 import { classifyAriaRegistration, normalizeIdentityVersion, parsePluginList, pluginSpecTagVersion } from "./lifecycle.js";
 import { ARIA_SKILL_NAMES, areEquivalentSkillsPaths, isAriaPackageSkillsPath, resolveDurableAriaSkillsRoot } from "./skills.js";
+import { PLAYWRIGHT_MCP_VERSION } from "./playwright.js";
 const defaultFileOps = {
     readText: (path) => readFile(path, "utf8"),
     stat: (path) => fsStat(path),
@@ -375,7 +376,7 @@ function agentEntryIssues(role, entry) {
 }
 function agentsRuntimeFinding(agents) {
     if (agents === undefined) {
-        return { severity: "SKIP", area: "runtime", title: "agents (11)", detail: RUNTIME_LIST_GAP };
+        return { severity: "SKIP", area: "runtime", title: `agents (${ROLES.length})`, detail: RUNTIME_LIST_GAP };
     }
     const counts = new Map();
     for (const agent of agents)
@@ -399,18 +400,18 @@ function agentsRuntimeFinding(agents) {
             problems.push(...agentEntryIssues(role, entry));
     }
     if (problems.length > 0) {
-        return { severity: "FAIL", area: "runtime", title: "agents (11)", detail: problems.join("; ") };
+        return { severity: "FAIL", area: "runtime", title: `agents (${ROLES.length})`, detail: problems.join("; ") };
     }
     return {
         severity: "PASS",
         area: "runtime",
-        title: "agents (11)",
-        detail: "11 of 11 roles listed exactly once with explicit mode/model/permissions (V2 shell/subagent names)",
+        title: `agents (${ROLES.length})`,
+        detail: `${ROLES.length} of ${ROLES.length} roles listed exactly once with explicit mode/model/permissions (V2 shell/subagent names)`,
     };
 }
 function skillsRuntimeFinding(skills) {
     if (skills === undefined) {
-        return { severity: "SKIP", area: "runtime", title: "skills (22 live)", detail: RUNTIME_LIST_GAP };
+        return { severity: "SKIP", area: "runtime", title: "skills (24 live)", detail: RUNTIME_LIST_GAP };
     }
     const names = skills
         .map((skill) => (typeof skill.name === "string" && skill.name.length > 0 ? skill.name : skill.id))
@@ -423,13 +424,13 @@ function skillsRuntimeFinding(skills) {
     if (duplicated.length > 0)
         problems.push(`listed more than once: ${duplicated.join(", ")}`);
     if (problems.length > 0) {
-        return { severity: "FAIL", area: "runtime", title: "skills (22 live)", detail: problems.join("; ") };
+        return { severity: "FAIL", area: "runtime", title: "skills (24 live)", detail: problems.join("; ") };
     }
     return {
         severity: "PASS",
         area: "runtime",
-        title: "skills (22 live)",
-        detail: "22 of 22 packaged skills listed exactly once",
+        title: "skills (24 live)",
+        detail: "24 of 24 packaged skills listed exactly once",
     };
 }
 function planToolRuntimeFinding(tools) {
@@ -737,7 +738,7 @@ function openCodeFinding(opencode, v2) {
     };
 }
 function dependencyFindings(deps, v2) {
-    return [
+    const findings = [
         openCodeFinding(deps.opencode, v2),
         {
             severity: deps.engram.found && deps.engram.connected ? "PASS" : "FAIL",
@@ -770,6 +771,16 @@ function dependencyFindings(deps, v2) {
                     : `${deps.codegraph.version ?? "version unknown"} (${FRESH_CLI_OBSERVATION})`,
         },
     ];
+    if (deps.playwright) {
+        const ready = deps.playwright.installedVersion === PLAYWRIGHT_MCP_VERSION && deps.playwright.registered && deps.playwright.browserReady;
+        findings.push({
+            severity: ready ? "PASS" : "WARN",
+            area: "dependencies",
+            title: "Playwright browser MCP",
+            detail: `${deps.playwright.installedVersion ? `package ${deps.playwright.installedVersion} installed` : "package missing"}; ${deps.playwright.registered ? "registered" : "not registered"}; ${deps.playwright.browserReady ? "Chromium executable and inspected libraries present" : "Chromium executable/libraries missing or unverified"}; ${ready ? "statically usable" : "not statically usable"}; browser launch/navigation not demonstrated${deps.playwright.detail ? ` (${deps.playwright.detail})` : ""}`,
+        });
+    }
+    return findings;
 }
 // ---------------------------------------------------------------------------
 // T001 ARIA identity: running CLI vs registered plugin (read-only)
@@ -1133,7 +1144,7 @@ function parseSkillFrontmatter(text) {
 async function collectSkillFindings(packageRoot, fileOps) {
     const findings = [];
     const failures = [];
-    for (const name of PACKAGE_SKILL_NAMES) {
+    for (const name of ARIA_SKILL_NAMES) {
         const skillPath = resolve(packageRoot, "skills", name, "SKILL.md");
         try {
             const text = await fileOps.readText(skillPath);
@@ -1157,7 +1168,7 @@ async function collectSkillFindings(packageRoot, fileOps) {
             severity: "PASS",
             area: "skills",
             title: "packaged skills",
-            detail: `${PACKAGE_SKILL_NAMES.length} of ${PACKAGE_SKILL_NAMES.length} validated (matching name, metadata.owner: aria)`,
+            detail: `${ARIA_SKILL_NAMES.length} of ${ARIA_SKILL_NAMES.length} validated (matching name, metadata.owner: aria)`,
         });
     }
     else {
@@ -1369,7 +1380,7 @@ function rolePolicyFindings() {
 // Managed agent files: installed bytes match version + resolved config
 // ---------------------------------------------------------------------------
 /**
- * Read-only verification that the eleven managed agent files setup installs
+ * Read-only verification that the canonical managed agent files setup installs
  * match what the current install would generate (package version plus
  * project-neutral resolved config: defaults + global overrides). A fully
  * absent install is SKIP (setup has not run; `aria setup` generates them);
@@ -1421,7 +1432,7 @@ async function collectAgentFileFindings(worktree, agentsDir, fileOps) {
                 severity: "SKIP",
                 area: "config",
                 title: "managed agent files",
-                detail: `not installed in ${agentsDir}; run aria setup to generate the 11 managed files`,
+                detail: `not installed in ${agentsDir}; run aria setup to generate the ${ROLES.length} managed files`,
             }];
     }
     const problems = [
@@ -1440,7 +1451,7 @@ async function collectAgentFileFindings(worktree, agentsDir, fileOps) {
             severity: "PASS",
             area: "config",
             title: "managed agent files",
-            detail: `11 of 11 match version ${version} and resolved config`,
+            detail: `${ROLES.length} of ${ROLES.length} match version ${version} and resolved config`,
         }];
 }
 async function collectCommandFileFindings(commandsDir, fileOps) {

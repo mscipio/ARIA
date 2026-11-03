@@ -65,7 +65,7 @@ function effectiveDecision(permission: Record<string, unknown>, action: string, 
 describe("T022 native scratch task permissions", () => {
   it("allows edits under scratch for every role without widening ordinary edits", () => {
     const roles: RoleName[] = [
-      "coder", "explorer", "visualizer", "planner", "architect", "implementer",
+      "coder", "explorer", "visualizer", "planner", "implementer",
       "reviewer", "researcher", "archivist", "writer", "scientist",
     ];
 
@@ -112,7 +112,6 @@ describe("T022 native scratch task permissions", () => {
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",
@@ -161,7 +160,7 @@ describe("plan premise recovery permissions", () => {
       "writer",
       "scientist",
     ]);
-    expect(ROLES.filter((role) => !authorizedRoles.has(role))).toEqual(["coder", "planner", "architect"]);
+    expect(ROLES.filter((role) => !authorizedRoles.has(role))).toEqual(["coder", "planner"]);
 
     const generated = generateAgentFiles(resolveAriaConfig(process.cwd()), "9.9.9");
     for (const role of ROLES) {
@@ -220,10 +219,15 @@ describe("T002 Visualizer Playwright permissions", () => {
 });
 
 describe("T004 permission/model/delegation parity", () => {
-  it("authorizes plan cancellation for coder only", () => {
-    expect(authorizePlan({ sessionID: "test", agent: "coder" }, "cancel")).toBeNull();
-    for (const agent of ["planner", "architect", "reviewer"]) {
-      expect(authorizePlan({ sessionID: "test", agent }, "cancel")).not.toBeNull();
+  it("authorizes all Plan mutations for Planner while Coder and Reviewer remain read-only", () => {
+    const mutations = ["create", "replace", "update", "add", "remediate", "approve", "cancel", "close"];
+    for (const action of mutations) {
+      expect(authorizePlan({ sessionID: "test", agent: "planner" }, action)).toBeNull();
+      expect(authorizePlan({ sessionID: "test", agent: "coder" }, action)).not.toBeNull();
+      expect(authorizePlan({ sessionID: "test", agent: "reviewer" }, action)).not.toBeNull();
+    }
+    for (const agent of ["coder", "planner", "reviewer"]) {
+      expect(authorizePlan({ sessionID: "test", agent }, "get")).toBeNull();
     }
   });
 
@@ -233,7 +237,6 @@ describe("T004 permission/model/delegation parity", () => {
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",
@@ -393,7 +396,6 @@ describe("T004 permission/model/delegation parity", () => {
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",
@@ -509,7 +511,6 @@ describe("T004 permission/model/delegation parity", () => {
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",

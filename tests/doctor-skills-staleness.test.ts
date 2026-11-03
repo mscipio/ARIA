@@ -42,7 +42,7 @@ function stubExecutor(): Executor {
   };
 }
 
-/** Worktree whose eleven routes resolve to one discovered probe model. */
+/** Worktree whose ten routes resolve to one discovered probe model. */
 async function baseOptions(): Promise<DoctorOptions & { worktree: string; agentsDir: string }> {
   const worktree = await mkdtemp(resolve(tmpdir(), "aria-doctor-skills-wt-"));
   const agentsDir = await mkdtemp(resolve(tmpdir(), "aria-doctor-skills-ag-"));

@@ -151,7 +151,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
         experimental: { subagent_depth: 3 },
       }),
     );
-    // Pre-install the 11 managed files so the repeat reports written=0.
+    // Pre-install the 10 managed files so the repeat reports written=0.
     const preCalls: Array<{ command: string; args: string[] }> = [];
     const pre = mockExecutor(
       {
@@ -168,7 +168,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
     expect(first.ok).toBe(true);
     expect(first.setup!.registration.action).toBe("already registered");
     expect(first.setup!.config!.changed).toBe(false);
-    expect(first.setup!.agents!.written).toBe(11);
+    expect(first.setup!.agents!.written).toBe(10);
     // No CLI mutation beyond the read-only list.
     expect(preCalls.map((c) => c.args.join(" "))).toEqual(["plugin list"]);
     const stored = JSON.parse(await readFile(configPath, "utf8")) as { plugins?: unknown };
@@ -192,7 +192,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
     expect(second.setup!.registration.action).toBe("already registered");
     expect(second.setup!.config!.changed).toBe(false);
     expect(second.setup!.agents!.written).toBe(0);
-    expect(second.setup!.agents!.unchanged).toBe(11);
+    expect(second.setup!.agents!.unchanged).toBe(10);
     expect(repeatCalls.map((c) => c.args.join(" "))).toEqual(["plugin list"]);
     expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(JSON.parse(await readFile(configPath, "utf8")));
     expect(pluginUri.startsWith("file://")).toBe(true);
@@ -252,7 +252,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
       files: { globalConfigPath: configPath, agentsDir, skillsRoot: SKILLS_ROOT },
     });
     expect(first.ok).toBe(true);
-    expect(first.setup!.agents!.written).toBe(11);
+    expect(first.setup!.agents!.written).toBe(10);
 
     const secondCalls: Array<{ command: string; args: string[] }> = [];
     const secondExecutor = mockExecutor(
@@ -271,7 +271,7 @@ describe("T008 local path/file-URI equivalence (narrow)", () => {
     expect(second.setup!.registration.action).toBe("already registered");
     expect(second.setup!.config!.changed).toBe(false);
     expect(second.setup!.agents!.written).toBe(0);
-    expect(second.setup!.agents!.unchanged).toBe(11);
+    expect(second.setup!.agents!.unchanged).toBe(10);
     expect(secondCalls.map((c) => c.args.join(" "))).toEqual(["plugin list"]);
     const stored = JSON.parse(await readFile(configPath, "utf8")) as { plugins?: unknown[] };
     expect(stored.plugins?.filter((e) => typeof e === "string" && isSameLocalPluginIdentity(e, pluginUri))).toHaveLength(1);

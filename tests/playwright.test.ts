@@ -51,7 +51,7 @@ describe("accepted Playwright integration boundaries", () => {
     process.env.WIKI_DIR = join(REPO_ROOT, "wiki");
     try {
       const roles = [
-        "coder", "explorer", "visualizer", "planner", "architect", "implementer",
+        "coder", "explorer", "visualizer", "planner", "implementer",
         "reviewer", "researcher", "archivist", "writer", "scientist",
       ] as const;
       for (const action of ["playwright_browser_navigate", "playwright_browser_take_screenshot"]) {

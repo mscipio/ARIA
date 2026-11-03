@@ -52,8 +52,9 @@ import { defaultExecutor, detectContext7, syncContext7 } from "./deps.js";
 import { detectEngramState, ensureEngram } from "./engram.js";
 import { checkQuotaUpgrade, upgradeQuota } from "./quota.js";
 import { detectZotpilotState, ensureZotpilot } from "./zotpilot.js";
+import { setupPlaywright, syncPlaywrightConfig, upgradePlaywright } from "./playwright.js";
 /** Bootstrap-stack component names (ARIA self-upgrade is separate, T011). */
-export const DEPENDENCY_COMPONENTS = ["engram", "codegraph", "zotpilot", "quota", "context7"];
+export const DEPENDENCY_COMPONENTS = ["engram", "codegraph", "zotpilot", "quota", "context7", "playwright"];
 function completed(component, detail, mutated) {
     return { component, status: "completed", detail, mutated };
 }
@@ -202,7 +203,7 @@ export function formatDependenciesReport(outcomes) {
  * Shared lifecycle: detect → discover latest upstream → install if missing
  * OR update if safely owned/outdated → normalize/configure → validate.
  *
- * Runs the five bootstrap-stack adapters directly (no ARIA self-upgrade,
+ * Runs the bootstrap-stack adapters directly (no ARIA self-upgrade,
  * no handoff, no version database). Each adapter owns its validation and
  * snapshot rollback; this orchestration serializes config mutations (like
  * `depsSync`) and continues through failures so the report carries every
@@ -334,6 +335,21 @@ export async function runSetupDependencies(executor, options = {}) {
             mutated: false,
         });
     }
+    try {
+        const installed = await setupPlaywright(executor);
+        if (!installed.ok) {
+            outcomes.push({ component: "playwright", status: "unresolved", detail: installed.detail, mutated: installed.mutated });
+        }
+        else {
+            const config = await syncPlaywrightConfig(options.configDir);
+            outcomes.push(config.action === "configured" || config.action === "already-configured"
+                ? completed("playwright", `${installed.detail}; MCP registration ${config.action}`, installed.mutated || config.action === "configured")
+                : skipped("playwright", config.error ?? "Playwright MCP registration is ambiguous; left untouched"));
+        }
+    }
+    catch (error) {
+        outcomes.push({ component: "playwright", status: "unresolved", detail: `Playwright lifecycle failed: ${error instanceof Error ? error.message : String(error)}`, mutated: false });
+    }
     const ok = outcomes.every((outcome) => outcome.status === "completed" || outcome.status === "skipped");
     return { ok, outcomes, report: formatDependenciesReport(outcomes) };
 }
@@ -376,6 +392,23 @@ export async function runDepsUpgrades(executor = defaultExecutor, options = {}) 
             detail: `Engram upgrade threw (${error instanceof Error ? error.message : String(error)}); no state is positively confirmed`,
             mutated: false,
         });
+    }
+    try {
+        const upgraded = await upgradePlaywright(executor);
+        if (!upgraded.ok) {
+            outcomes.push(upgraded.mutated
+                ? { component: "playwright", status: "unresolved", detail: upgraded.detail, mutated: true }
+                : skipped("playwright", upgraded.detail));
+        }
+        else {
+            const config = await syncPlaywrightConfig(options.configDir);
+            outcomes.push(config.action === "configured" || config.action === "already-configured"
+                ? completed("playwright", `${upgraded.detail}; MCP registration ${config.action}`, upgraded.mutated || config.action === "configured")
+                : skipped("playwright", config.error ?? "Playwright MCP registration is ambiguous; left untouched"));
+        }
+    }
+    catch (error) {
+        outcomes.push({ component: "playwright", status: "unresolved", detail: `Playwright upgrade failed: ${error instanceof Error ? error.message : String(error)}`, mutated: false });
     }
     try {
         const initial = await detectCodegraphState(executor, options.configDir);

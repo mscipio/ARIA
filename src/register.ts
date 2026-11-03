@@ -108,9 +108,8 @@ function pluginOptions(options: unknown): AriaPluginOptions {
 }
 
 const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>> = {
-  coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
-  planner: new Set(["get", "create"]),
-  architect: new Set(["get", "replace"]),
+  coder: new Set(["get"]),
+  planner: new Set(["get", "create", "replace", "update", "add", "remediate", "cancel", "close", "approve"]),
   reviewer: new Set(["get"]),
 };
 
@@ -285,15 +284,6 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     skill: skillAccess("rdc-implementation-planning", "rdc-testing-discipline"),
     plan: "allow",
   },
-  architect: {
-    ...CODE_READ,
-    ...REQUIRED_MCP_PERMISSION,
-    edit: SCRATCH_EDIT,
-    webfetch: "allow",
-    websearch: "allow",
-    skill: skillAccess("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
-    plan: "allow",
-  },
   implementer: {
     ...CODE_READ,
     ...REQUIRED_MCP_PERMISSION,
@@ -325,7 +315,13 @@ const ROLE_PERMISSIONS: Record<NonCoderRole, AgentPermission> = {
     bash: "allow",
     webfetch: "allow",
     websearch: "allow",
-    skill: skillAccess("rdc-implementation-review", "rdc-adversarial-review", "rdc-testing-discipline"),
+    skill: skillAccess(
+      "rdc-plan-review",
+      "rdc-implementation-review",
+      "rdc-scope-assessment",
+      "rdc-adversarial-review",
+      "rdc-testing-discipline",
+    ),
     plan: "allow",
   },
   researcher: {
@@ -479,7 +475,7 @@ const NON_CODER_ROLES = Object.keys(ROLE_PERMISSIONS) as NonCoderRole[];
 
 /**
  * Coder task permissions: the coder coordinates the other roles via the task
- * tool, which is denied by default and allowed for the six RDC specialists
+ * tool, which is denied by default and allowed for the five RDC specialists
  * plus researcher, archivist, and scientist.
  */
 const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
@@ -487,7 +483,6 @@ const TASK_PERMISSIONS: Record<string, "allow" | "deny"> = {
   explorer: "allow",
   visualizer: "allow",
   planner: "allow",
-  architect: "allow",
   implementer: "allow",
   reviewer: "allow",
   researcher: "allow",

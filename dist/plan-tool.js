@@ -46,11 +46,10 @@ export const PLAN_TOOL_ACTIONS = [
     "close",
 ];
 const PLAN_ACTION_SET = new Set(PLAN_TOOL_ACTIONS);
-/** Role-scoped plan actions; cancellation is explicitly coder-only. */
+/** Planner owns plan mutations; Coder and Reviewer may read the active plan. */
 export const PLAN_ACTIONS_BY_ROLE = {
-    coder: new Set(["get", "create", "update", "add", "remediate", "cancel", "close", "approve"]),
-    planner: new Set(["get", "create"]),
-    architect: new Set(["get", "replace"]),
+    coder: new Set(["get"]),
+    planner: new Set(["get", "create", "replace", "update", "add", "remediate", "cancel", "close", "approve"]),
     reviewer: new Set(["get"]),
 };
 function stringField(value, key) {

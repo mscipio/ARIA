@@ -162,7 +162,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
     const withoutWiki = resolveSetupAriaConfig(worktree);
     const first = generateAgentFiles(withWiki, version);
     const second = generateAgentFiles(withoutWiki, version);
-    expect(Object.keys(first)).toHaveLength(11);
+    expect(Object.keys(first)).toHaveLength(10);
     for (const role of ROLES) {
       expect(second[role], `${role} identical across WIKI_DIR`).toBe(first[role]);
       expect(sha256(second[role]!), `${role} checksum stable`).toBe(sha256(first[role]!));
@@ -271,7 +271,7 @@ describe("v1.0.14 T009 deterministic isolated verification", () => {
       (finding) => finding.area === "config" && finding.title === "managed agent files",
     );
     expect(managed?.severity).toBe("PASS");
-    expect(managed?.detail).toContain("11 of 11");
+    expect(managed?.detail).toContain("10 of 10");
     const skills = report.findings.find(
       (finding) => finding.area === "skills" && finding.title === "configured skills",
     );

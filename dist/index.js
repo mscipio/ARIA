@@ -2,6 +2,10 @@ import { Plugin } from "@opencode/plugin";
 import { createPlanTool, resolvePlanRootFromLocation } from "./plan-tool.js";
 import { createPlanPremiseRecoveryTool } from "./plan-premise-recovery-tool.js";
 import { createScratchTaskTool } from "./scratch-tool.js";
+import { createGitReadTool } from "./git-tool.js";
+import { createShipTool } from "./ship.js";
+import { createReleaseTool } from "./release.js";
+import { getPackageRoot } from "./defaults.js";
 import { ROLES, resolveAriaConfig } from "./overrides.js";
 import { applyArchivistRuntimeTransform, applyProjectModelTransforms, readProjectAgentModelOverrides, } from "./project-overrides.js";
 /**
@@ -28,8 +32,8 @@ import { applyArchivistRuntimeTransform, applyProjectModelTransforms, readProjec
  * `WIKI_DIR` is set). No files are written; other roles are untouched except
  * via the T005 overlay above.
  *
- * T006/T021/T007 production wiring: native plan, task-scratch, and the
- * one-shot plan-premise recovery tool are registered via
+  * T006/T021/T007/T002/T003 production wiring: native plan, task-scratch,
+  * Git-read, scoped ship/release, and one-shot plan-premise recovery tools are registered via
  * `ctx.tool.transform(editor => editor.add(...))` — no command workaround or
  * MCP sidecar. Plan persistence and recovery use the setup-time `ctx.location`
  * root; scratch uses that location as well. Missing location evidence never
@@ -67,6 +71,9 @@ const aria = Plugin.define({
             await toolDomain.transform((editor) => {
                 editor.add(createPlanTool(planRoot));
                 editor.add(createScratchTaskTool(worktree));
+                editor.add(createGitReadTool(worktree));
+                editor.add(createShipTool(getPackageRoot(), worktree));
+                editor.add(createReleaseTool(getPackageRoot(), worktree));
                 // Native @opencode/plugin session APIs are runtime-owned. Keep the
                 // session domain in this setup closure and expose recovery only when
                 // the host supplies it (real V2 plugin hosts always do).

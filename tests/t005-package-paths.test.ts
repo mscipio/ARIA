@@ -39,7 +39,7 @@ describe("T005 packaged paths resolve from the installed package", () => {
     const installedRoot = getPackageRoot();
     // Packaged assets load from the running install itself.
     const defaults = loadDefaultConfig();
-    expect(Object.keys(defaults.roles)).toHaveLength(11);
+    expect(Object.keys(defaults.roles)).toHaveLength(10);
     const version = readPackageVersion();
     const raw = JSON.parse(await readFile(resolve(installedRoot, "package.json"), "utf8")) as { version?: unknown };
     expect(version).toBe(raw.version);

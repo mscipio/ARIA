@@ -87,7 +87,7 @@ async function worktree(): Promise<string> {
 }
 
 describe("T003 agent installation", () => {
-  it("generates exactly the eleven canonical agents with preserved modes/models/variants", async () => {
+  it("generates exactly the ten canonical agents with preserved modes/models/variants", async () => {
     const resolved = resolveAriaConfig(await worktree());
     const files = generateAgentFiles(resolved, FIXTURE_VERSION);
 
@@ -96,7 +96,6 @@ describe("T003 agent installation", () => {
       "explorer",
       "visualizer",
       "planner",
-      "architect",
       "implementer",
       "reviewer",
       "researcher",
@@ -214,7 +213,7 @@ describe("T003 agent installation", () => {
     expect(guidance).toMatch(/(?:single|only once|one) handoff/);
     expect(guidance).toMatch(/no .*candidate.*(?:blocker|blocked).*caller.*stop/);
     expect(guidance).toMatch(/approved.scope corrections?.*`remediate`/);
-    expect(guidance).toMatch(/never substitute.*architect.only `replace`/);
+    expect(guidance).toMatch(/planner alone performs every plan mutation/);
   });
 
   it("installs idempotently and never touches unrelated user agents", async () => {
@@ -228,9 +227,58 @@ describe("T003 agent installation", () => {
     // Unrelated user agent present before regeneration.
     await writeFile(join(dir, "my-helper.md"), "user content\n");
     const second = await installAgentFiles(resolved, { dir, version: "0.6.0" });
-    expect(second.unchanged).toHaveLength(11);
+    expect(second.unchanged).toHaveLength(10);
     expect(second.written).toHaveLength(0);
     expect(await readFile(join(dir, "my-helper.md"), "utf8")).toBe("user content\n");
+  });
+
+  it("archives an intact managed legacy Architect file without deleting its bytes", async () => {
+    const resolved = resolveAriaConfig(await worktree());
+    const dir = resolve(await worktree(), "agents");
+    await mkdir(dir, { recursive: true });
+    const oldManaged = generateAgentFile("reviewer", resolved.roles.reviewer, FIXTURE_VERSION);
+    await writeFile(join(dir, "architect.md"), oldManaged);
+
+    const installed = await installAgentFiles(resolved, { dir, version: FIXTURE_VERSION });
+
+    expect(installed.retiredFiles).toHaveLength(1);
+    expect(installed.retiredFiles[0]?.path).toBe(join(dir, "architect.md"));
+    expect(await readFile(installed.retiredFiles[0]!.backupPath, "utf8")).toBe(oldManaged);
+    await expect(readFile(join(dir, "architect.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves and reports user-owned or edited legacy Architect files", async () => {
+    const resolved = resolveAriaConfig(await worktree());
+    const dir = resolve(await worktree(), "agents");
+    await mkdir(dir, { recursive: true });
+    const userOwned = "user-owned architect agent\n";
+    await writeFile(join(dir, "architect.md"), userOwned);
+
+    const installed = await installAgentFiles(resolved, { dir, version: FIXTURE_VERSION });
+
+    expect(installed.retiredFiles).toEqual([]);
+    expect(installed.legacyArchitectWarning).toMatch(/Preserved .*architect\.md: file has no ARIA ownership marker/);
+    expect(await readFile(join(dir, "architect.md"), "utf8")).toBe(userOwned);
+  });
+
+  it("strict reconciliation fails closed on an unmanaged legacy Architect file", async () => {
+    const resolved = resolveAriaConfig(await worktree());
+    const dir = resolve(await worktree(), "agents");
+    await mkdir(dir, { recursive: true });
+    const generated = generateAgentFiles(resolved, FIXTURE_VERSION);
+    for (const role of ROLES) await writeFile(join(dir, agentFileName(role)), generated[role]);
+    const userOwned = "user-owned architect agent\n";
+    await writeFile(join(dir, "architect.md"), userOwned);
+    const originals = Object.fromEntries(
+      await Promise.all(ROLES.map(async (role) => [role, await readFile(join(dir, agentFileName(role)), "utf8")] as const)),
+    ) as Record<RoleName, string>;
+
+    await expect(reconcileManagedAgents(resolved, { dir, version: FIXTURE_VERSION })).rejects.toMatchObject({
+      conflicts: [expect.objectContaining({ role: "architect", kind: "unowned" })],
+    });
+
+    expect(await readFile(join(dir, "architect.md"), "utf8")).toBe(userOwned);
+    for (const role of ROLES) expect(await readFile(join(dir, agentFileName(role)), "utf8")).toBe(originals[role]);
   });
 
   it("backs up unmanaged incumbents instead of overwriting and rolls back", async () => {
@@ -241,7 +289,7 @@ describe("T003 agent installation", () => {
 
     const installed = await installAgentFiles(resolved, { dir, version: "0.6.0" });
     expect(installed.written).toContain("coder");
-    expect(installed.written).toHaveLength(11);
+    expect(installed.written).toHaveLength(10);
     expect(installed.unchanged).toHaveLength(0);
     const backupPath = installed.backups.coder;
     expect(backupPath).toBeDefined();
@@ -258,13 +306,16 @@ describe("T003 agent installation", () => {
     await mkdir(dir, { recursive: true });
     const originalCoder = "user-owned coder agent\n";
     await writeFile(join(dir, "coder.md"), originalCoder);
+    const originalArchitect = generateAgentFile("reviewer", resolved.roles.reviewer, FIXTURE_VERSION);
+    await writeFile(join(dir, "architect.md"), originalArchitect);
     // explorer.md as a directory makes the second install step throw after
-    // coder was already replaced + backed up.
+    // the obsolete Architect was archived and coder was already replaced + backed up.
     await mkdir(join(dir, "explorer.md"), { recursive: true });
 
     await expect(installAgentFiles(resolved, { dir, version: "0.6.0" })).rejects.toThrow();
     // Accumulated change rolled back, including the backup-moved case.
     expect(await readFile(join(dir, "coder.md"), "utf8")).toBe(originalCoder);
+    expect(await readFile(join(dir, "architect.md"), "utf8")).toBe(originalArchitect);
     expect((await readdir(dir)).some((entry) => entry.includes(".aria-backup-"))).toBe(false);
   });
 
@@ -441,7 +492,7 @@ describe("T003 agent installation", () => {
     const dir = resolve(await worktree(), "agents");
 
     const oldInstall = await installAgentFiles(resolved, { dir, version: "0.6.0" });
-    expect(oldInstall.written).toHaveLength(11);
+    expect(oldInstall.written).toHaveLength(10);
     expect(oldInstall.previousContents).toEqual({});
     const oldContents = Object.fromEntries(
       await Promise.all(
@@ -450,7 +501,7 @@ describe("T003 agent installation", () => {
     ) as Record<RoleName, string>;
 
     const upgrade = await installAgentFiles(resolved, { dir, version: "0.6.1" });
-    expect(upgrade.written).toHaveLength(11);
+    expect(upgrade.written).toHaveLength(10);
     expect(upgrade.unchanged).toHaveLength(0);
     // Replaced managed files retain their prior bytes on the result.
     for (const role of ROLES) {

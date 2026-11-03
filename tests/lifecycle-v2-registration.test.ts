@@ -137,7 +137,7 @@ describe("T008 V2 pristine and repeat idempotence (B, C)", () => {
     expect(firstResult.ok).toBe(true);
     expect(firstResult.setup!.registration.action).toBe("registered");
     expect(firstResult.setup!.config!.changed).toBe(true);
-    expect(firstResult.setup!.agents!.written).toBe(11);
+    expect(firstResult.setup!.agents!.written).toBe(10);
     expect(firstResult.setup!.agents!.unchanged).toBe(0);
 
     // Repeat: list shows the checkout path; no `plugin add` response is
@@ -154,7 +154,7 @@ describe("T008 V2 pristine and repeat idempotence (B, C)", () => {
     expect(second.executor).toBeDefined();
     expect(secondResult.setup!.config!.changed).toBe(false);
     expect(secondResult.setup!.agents!.written).toBe(0);
-    expect(secondResult.setup!.agents!.unchanged).toBe(11);
+    expect(secondResult.setup!.agents!.unchanged).toBe(10);
   });
 });
 

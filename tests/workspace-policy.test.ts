@@ -31,11 +31,11 @@ describe("T004 workspace execution policy integration", () => {
   it("survives generation: shared guidance reaches every MCP-role agent file", async () => {
     const worktree = await scratchWorktree("policy-gen");
     const resolved = resolveAriaConfig(worktree);
-    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"] as const) {
+    for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer"] as const) {
       expect(resolved.roles[role].promptText, `${role} prompt carries the policy`).toContain("src/scratch.ts");
     }
     const files = generateAgentFiles(resolved, "9.9.9");
-    for (const role of ["coder", "explorer", "visualizer", "planner", "architect", "implementer", "reviewer"] as const) {
+    for (const role of ["coder", "explorer", "visualizer", "planner", "implementer", "reviewer"] as const) {
       expect(files[role], `${role} generated file carries the policy`).toContain("src/scratch.ts");
     }
     const effectiveInstructions = `${resolved.roles.implementer.promptText}\n${files.implementer}`;

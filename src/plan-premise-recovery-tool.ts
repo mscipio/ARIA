@@ -3,7 +3,7 @@ import { requirePlanRoot } from "./plan-tool.js";
 
 export const PLAN_PREMISE_RECOVERY_TOOL_NAME = "plan_premise_recovery";
 
-/** Roles without authority to mutate the shared plan may request a one-shot coder handoff. */
+/** Roles without authority to mutate the shared plan may request a one-shot Planner handoff. */
 export const PLAN_PREMISE_RECOVERY_ROLES = [
   "explorer",
   "visualizer",
@@ -32,7 +32,7 @@ export const planPremiseRecoveryInputSchema: Record<string, unknown> = {
 };
 
 export interface PlanPremiseRecoverySessionApi {
-  create(input: { parentID: string; agent: "coder"; title: string }): Promise<{
+  create(input: { parentID: string; agent: "planner"; title: string }): Promise<{
     id?: unknown;
     parentID?: unknown;
     agent?: unknown;
@@ -137,14 +137,14 @@ function sameTask(left: SharedPlan["tasks"][number], right: SharedPlan["tasks"][
 }
 
 function verifyCorrection(before: SharedPlan, after: SharedPlan, input: RecoveryInput): string | undefined {
-  if (after.id !== before.id) return "The coder changed the plan identity";
+  if (after.id !== before.id) return "The planner changed the plan identity";
   if (after.title !== before.title || after.createdAt !== before.createdAt) {
-    return "The coder changed plan history metadata";
+    return "The planner changed plan history metadata";
   }
   if (after.revision !== input.expectedRevision + 1) return "The plan did not receive exactly one CAS-protected state change";
   if (after.status !== "active") return "The active plan is no longer active";
   if (after.tasks.length < before.tasks.length) return "Existing task history was removed";
-  if (after.tasks.length > before.tasks.length + 1) return "The coder added more than one recovery task";
+  if (after.tasks.length > before.tasks.length + 1) return "The planner added more than one recovery task";
 
   for (let index = 0; index < before.tasks.length; index += 1) {
     const oldTask = before.tasks[index];
@@ -186,10 +186,10 @@ function verifyCorrection(before: SharedPlan, after: SharedPlan, input: Recovery
     return "The appended recovery task does not contain the corrected premise and supplied evidence";
   }
   if (before.approval === "approved" && after.approval !== "approved" && after.approval !== "pending") {
-    return "The coder changed plan approval unexpectedly";
+    return "The planner changed plan approval unexpectedly";
   }
   if (before.approval === "pending" && after.approval !== "pending") {
-    return "The coder changed plan approval unexpectedly";
+    return "The planner changed plan approval unexpectedly";
   }
   return undefined;
 }
@@ -199,7 +199,7 @@ function assistantResult(messages: readonly unknown[]): string | undefined {
     const message = messages[index];
     if (!message || typeof message !== "object") continue;
     const record = message as { type?: unknown; agent?: unknown; content?: unknown };
-    if (record.type !== "assistant" || record.agent !== "coder" || !Array.isArray(record.content)) continue;
+    if (record.type !== "assistant" || record.agent !== "planner" || !Array.isArray(record.content)) continue;
     const text = record.content
       .filter((part): part is { type: string; text: string } =>
         !!part && typeof part === "object" && (part as { type?: unknown }).type === "text" &&
@@ -212,9 +212,9 @@ function assistantResult(messages: readonly unknown[]): string | undefined {
   return undefined;
 }
 
-function coderPrompt(input: RecoveryInput): string {
+function plannerPrompt(input: RecoveryInput): string {
   return [
-    "You are the authorized coder for one validated ARIA plan-premise recovery. This is a single handoff, not permission to delegate or launch another recovery.",
+    "You are the authorized Planner for one validated ARIA plan-premise recovery. This is a single handoff, not permission to delegate or launch another recovery.",
     `First verify the active plan is still ID ${input.expectedPlanID} at revision ${input.expectedRevision}. Use exactly that ID and revision in any plan mutation. If either differs, stop and report the stale CAS; do not rebase, retry, or mutate another revision.`,
     "For an in-scope factual correction, use the plan tool's update action to record the corrected premise and evidence on the affected non-completed task, or remediate to append one correction task while preserving completed/history. For a material scope change only, use add; it resets approval and you must report renewed approval is required.",
     "Do not use create, replace, cancel, approve, or close. Do not edit existing task text or completed task history. Make at most one plan mutation. Then report what action was taken, the resulting revision/approval, and any CAS failure.",
@@ -237,7 +237,7 @@ function planSummary(plan: SharedPlan | undefined): Record<string, unknown> {
     : { planID: null, revision: null, status: null, approval: null };
 }
 
-/** Build a single-purpose native tool that validates, then asks coder to recover one premise. */
+/** Build a single-purpose native tool that validates, then asks Planner to recover one premise. */
 export function createPlanPremiseRecoveryTool(
   planRoot: string,
   sessions: PlanPremiseRecoverySessionApi,
@@ -249,7 +249,7 @@ export function createPlanPremiseRecoveryTool(
 } {
   return {
     name: PLAN_PREMISE_RECOVERY_TOOL_NAME,
-    description: "Validate one stale plan premise and request a one-shot correction by the authorized coder.",
+    description: "Validate one stale plan premise and request a one-shot correction by the authorized Planner.",
     input: planPremiseRecoveryInputSchema,
     async execute(rawInput, context) {
       const authError = authorizeRecovery(context ?? {});
@@ -271,12 +271,12 @@ export function createPlanPremiseRecoveryTool(
         if (!active) return toolError("No active plan exists for premise recovery");
         before = active.plan;
         if (before.status !== "active") return toolError("Premise recovery requires an active plan");
-        if (before.id !== input.expectedPlanID) return toolError("Plan ID conflict; no coder handoff was made");
-        if (before.revision !== input.expectedRevision) return toolError("Plan revision conflict; no coder handoff was made");
+        if (before.id !== input.expectedPlanID) return toolError("Plan ID conflict; no Planner handoff was made");
+        if (before.revision !== input.expectedRevision) return toolError("Plan revision conflict; no Planner handoff was made");
         const task = before.tasks.find((candidate) => candidate.id === input.taskID);
-        if (!task) return toolError(`Task ${input.taskID} was not found; no coder handoff was made`);
+        if (!task) return toolError(`Task ${input.taskID} was not found; no Planner handoff was made`);
         if (!task.text.includes(input.stalePremise) && !task.evidence?.includes(input.stalePremise)) {
-          return toolError("The exact stale premise does not occur in the selected task text or evidence; no coder handoff was made");
+          return toolError("The exact stale premise does not occur in the selected task text or evidence; no Planner handoff was made");
         }
       } catch (error) {
         return toolError(error instanceof Error ? error.message : String(error));
@@ -287,20 +287,20 @@ export function createPlanPremiseRecoveryTool(
       try {
         const child = await sessions.create({
           parentID: parentSessionID,
-          agent: "coder",
+          agent: "planner",
           title: `Plan premise recovery · ${input.taskID}`,
         });
         if (typeof child.id !== "string" || child.id.trim().length === 0 || child.id === parentSessionID) {
           throw new Error("OpenCode did not return a valid child session ID");
         }
         childSessionID = child.id;
-        if (child.parentID !== parentSessionID || child.agent !== "coder") {
+        if (child.parentID !== parentSessionID || child.agent !== "planner") {
           throw new Error("OpenCode child-session parent or authorized agent did not match the recovery request");
         }
-        await sessions.prompt({ sessionID: childSessionID, text: coderPrompt(input) });
+        await sessions.prompt({ sessionID: childSessionID, text: plannerPrompt(input) });
         await sessions.wait({ sessionID: childSessionID });
         childResponse = assistantResult(await sessions.context({ sessionID: childSessionID }));
-        if (!childResponse) throw new Error("The coder child session returned no assistant response");
+        if (!childResponse) throw new Error("The Planner child session returned no assistant response");
 
         const active = await readActivePlan(root);
         const after = active?.plan;

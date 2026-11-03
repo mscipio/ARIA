@@ -258,14 +258,13 @@ export async function discoverAvailableModels(worktree) {
     }
     return { models };
 }
-// The eleven configurable roles are fixed; discovery reports which models are
+// The ten configurable roles are fixed; discovery reports which models are
 // available, never which roles exist.
 const ROLES = [
     "coder",
     "explorer",
     "visualizer",
     "planner",
-    "architect",
     "implementer",
     "reviewer",
     "researcher",
@@ -371,7 +370,7 @@ function ansiBold(text, tty) {
 function ansiRed(text, tty) {
     return ansiEnabled(tty) ? `${ANSI_RED}${text}${ANSI_RESET}` : text;
 }
-/** Fixed-width rule separating role blocks in the eleven-role overview. */
+/** Fixed-width rule separating role blocks in the ten-role overview. */
 const ROLE_SEPARATOR = `  ${"-".repeat(60)}`;
 /** Four-layer precedence display for one role. */
 function renderRoleLayers(role, resolved, defaults, models, globalOverrides, projectOverrides, tty) {
@@ -388,7 +387,7 @@ function renderRoleLayers(role, resolved, defaults, models, globalOverrides, pro
     ];
 }
 /**
- * Eleven-role overview: one four-layer block per role, separated by a fixed
+ * Ten-role overview: one four-layer block per role, separated by a fixed
  * 60-hyphen rule between blocks (never after the final role).
  */
 function renderRoleSummary(resolved, defaults, models, globalOverrides, projectOverrides, tty) {
@@ -716,7 +715,7 @@ export async function reconcileManagedAgents(worktree, options = {}) {
  * Lightweight interactive model configuration for `aria models --config`.
  *
  * Discovers the models the installed `opencode` CLI reports once per run and
- * shows the eleven configurable roles with their four-layer precedence
+ * shows the ten configurable roles with their four-layer precedence
  * (packaged default, global override, project override, resolved route),
  * annotating resolved models the CLI did not list (purely diagnostic — no
  * fallback routing is added). The user may keep the current configuration
@@ -802,7 +801,7 @@ export async function configureModels(worktree, options = {}) {
         return { status: "unchanged", message: "Keeping current configuration; existing global overrides are preserved." };
     }
     output("");
-    output("Roles available: coder, explorer, visualizer, planner, architect, implementer, reviewer, researcher, archivist, writer");
+    output("Roles available: coder, explorer, visualizer, planner, implementer, reviewer, researcher, archivist, writer, scientist");
     const rolesResult = await ask(input, output, "Which roles to configure (comma-separated): ", parseRoleSelection);
     if ("cancelled" in rolesResult) {
         return { status: "unchanged", message: "Model configuration cancelled; nothing was written." };
@@ -852,7 +851,10 @@ export async function configureModels(worktree, options = {}) {
     if (result.status !== "configured")
         return result;
     try {
-        await regenerateManagedAgents(worktree);
+        const installed = await regenerateManagedAgents(worktree);
+        if (installed.legacyArchitectWarning) {
+            return { ...result, message: `${result.message} ${installed.legacyArchitectWarning}` };
+        }
     }
     catch (error) {
         return {

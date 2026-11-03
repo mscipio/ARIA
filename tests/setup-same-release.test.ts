@@ -254,7 +254,7 @@ describe("T003 setup same-release identity", () => {
       dependenciesFn: installOnlyDependencies([]),
     });
     expect(first.ok).toBe(true);
-    expect(first.setup!.agents!.written).toBe(11);
+    expect(first.setup!.agents!.written).toBe(10);
     const completeRaw = await readFile(files.globalConfigPath, "utf8");
     const completeAgents = await readFile(join(files.agentsDir, "coder.md"), "utf8").catch(() => null);
     expect(completeAgents).not.toBeNull();
@@ -274,7 +274,7 @@ describe("T003 setup same-release identity", () => {
     expect(second.setup!.config!.changed).toBe(false);
     expect(second.setup!.config!.backupPath).toBeUndefined();
     expect(second.setup!.agents!.written).toBe(0);
-    expect(second.setup!.agents!.unchanged).toBe(11);
+    expect(second.setup!.agents!.unchanged).toBe(10);
     // Byte-identical config; no stray backup from the no-op run.
     expect(await readFile(files.globalConfigPath, "utf8")).toBe(completeRaw);
     const entries = await readdir(join(files.globalConfigPath, ".."));

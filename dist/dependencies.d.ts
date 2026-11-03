@@ -1,7 +1,7 @@
 import { type DependencyFileOps, type Executor } from "./deps.js";
 import type { ComponentContext, ComponentUpgradeOutcome } from "./upgrade.js";
 /** Bootstrap-stack component names (ARIA self-upgrade is separate, T011). */
-export declare const DEPENDENCY_COMPONENTS: readonly ["engram", "codegraph", "zotpilot", "quota", "context7"];
+export declare const DEPENDENCY_COMPONENTS: readonly ["engram", "codegraph", "zotpilot", "quota", "context7", "playwright"];
 export type DependencyComponentName = (typeof DEPENDENCY_COMPONENTS)[number];
 export type DependencyStatus = "completed" | "rolled-back" | "unresolved" | "skipped";
 export interface DependencyOutcome {
@@ -61,7 +61,7 @@ export declare function formatDependenciesReport(outcomes: DependencyOutcome[]):
  * Shared lifecycle: detect → discover latest upstream → install if missing
  * OR update if safely owned/outdated → normalize/configure → validate.
  *
- * Runs the five bootstrap-stack adapters directly (no ARIA self-upgrade,
+ * Runs the bootstrap-stack adapters directly (no ARIA self-upgrade,
  * no handoff, no version database). Each adapter owns its validation and
  * snapshot rollback; this orchestration serializes config mutations (like
  * `depsSync`) and continues through failures so the report carries every

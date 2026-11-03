@@ -556,7 +556,7 @@ describe("T008 setup lifecycle file phases", () => {
     expect(first.ok).toBe(true);
     expect(first.stage).toBe("complete");
     expect(first.setup?.config?.changed).toBe(true);
-    expect(first.setup?.agents?.written).toBe(11);
+    expect(first.setup?.agents?.written).toBe(10);
     expect(first.setup?.agents?.unchanged).toBe(0);
 
     const written = JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown>;
@@ -571,7 +571,7 @@ describe("T008 setup lifecycle file phases", () => {
     expect(second.ok).toBe(true);
     expect(second.setup?.config?.changed).toBe(false);
     expect(second.setup?.agents?.written).toBe(0);
-    expect(second.setup?.agents?.unchanged).toBe(11);
+    expect(second.setup?.agents?.unchanged).toBe(10);
   });
 
   it("fresh setup applies the coder default_agent and the production baseline agent routes", async () => {
@@ -688,7 +688,7 @@ describe("T008 setup lifecycle file phases", () => {
       files: { globalConfigPath: join(dir, "opencode.json"), agentsDir, skillsRoot: SKILLS_ROOT },
     });
     expect(result.ok).toBe(true);
-    expect(result.setup?.agents?.written).toBe(11);
+    expect(result.setup?.agents?.written).toBe(10);
     expect((await readdir(agentsDir)).some((entry) => entry.startsWith("coder.md.aria-backup-"))).toBe(true);
     // Canonical generation path stays intact (installAgentFiles owns bytes).
     const resolved = resolveSetupAriaConfig(worktree);

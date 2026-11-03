@@ -32,7 +32,7 @@ export declare const PLAN_TOOL_NAME = "plan";
 export declare const PLAN_TOOL_DESCRIPTION = "Read or update the shared project plan in .aria/rdc/TASKS.md.";
 export declare const PLAN_TOOL_ACTIONS: readonly ["create", "get", "replace", "add", "remediate", "cancel", "update", "approve", "close"];
 export type PlanToolAction = (typeof PLAN_TOOL_ACTIONS)[number];
-/** Role-scoped plan actions; cancellation is explicitly coder-only. */
+/** Planner owns plan mutations; Coder and Reviewer may read the active plan. */
 export declare const PLAN_ACTIONS_BY_ROLE: Record<string, ReadonlySet<string>>;
 /** V1 `authorizePlan` preserved verbatim (sessionID required, role auth). */
 export declare function authorizePlan(context: unknown, action: string): string | null;

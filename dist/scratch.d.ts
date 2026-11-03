@@ -97,7 +97,9 @@ export declare function ensureScratchDirs(worktree: string, subdirs?: readonly s
  * verified scratch root; symlink escapes fail closed.
  */
 export declare function createUniqueScratchDir(worktree: string, scope: string, prefix: string): Promise<string>;
-/** Per-day deterministic directory: `<scratch>/<UTC date>/<task name>/`; a new UTC day intentionally gets a new path. */
+/** Create a timestamped, human-readable scratch directory for one output run. */
+export declare function createScratchRunDir(worktree: string, title: string): Promise<string>;
+/** Per-day deterministic directory: `<scratch>/<local date>/<task name>/`; a new local day intentionally gets a new path. */
 export declare function createTaskScratch(worktree: string, taskId: string, taskName?: string): Promise<string>;
 /** Concurrent-safe unique run directory under the per-task directory. */
 export declare function createTaskRunDir(worktree: string, taskId: string, prefix?: string, taskName?: string): Promise<string>;

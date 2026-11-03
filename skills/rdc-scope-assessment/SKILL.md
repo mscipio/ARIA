@@ -8,7 +8,7 @@ metadata:
 
 # RDC Post-Review Scope Assessment
 
-Use this skill only when the architect is asked to classify a reviewer finding after implementation.
+Use this skill only when the reviewer is asked to classify an implementation finding after review.
 
 ## Method
 
@@ -19,5 +19,6 @@ Use this skill only when the architect is asked to classify a reviewer finding a
    - **SCOPE_CHANGE** when it adds materially new behavior, architecture, compatibility obligations, dependencies, migration work, or another requirement the user did not approve.
 4. Prefer the smallest defensible classification.
 5. Do not turn a possible enhancement or theoretical edge case into a scope change unless it is genuinely required for correctness, security, data integrity, or supported compatibility.
+6. Remain read-only. The Planner applies any approved Plan mutation; material scope additions require renewed human approval.
 
 If it is a scope change, identify only the smallest concrete additional task(s) required.

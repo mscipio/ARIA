@@ -50,7 +50,6 @@ const AGENT_DESCRIPTIONS: Record<RoleName, string> = {
   explorer: "explorer coding specialist for ARIA Review-Driven Coding.",
   visualizer: "Framework-agnostic UI/UX Engineer for ARIA Review-Driven Coding (Qt UI/UX Engineer and modern web UX specialist): accessibility, responsive workflows, approved-scope implementation, and honest capture→inspect→refine→verify validation.",
   planner: "planner coding specialist for ARIA Review-Driven Coding.",
-  architect: "architect coding specialist for ARIA Review-Driven Coding.",
   implementer: "implementer coding specialist for ARIA Review-Driven Coding.",
   reviewer: "reviewer coding specialist for ARIA Review-Driven Coding.",
   researcher: "Direct or delegated specialist for external literature and evidence research.",
@@ -151,7 +150,7 @@ function renderManagedAgentFile(input: {
   return `${lines.join("\n")}${input.body}`;
 }
 
-/** Render all eleven managed agent files in canonical role order. */
+/** Render all ten managed agent files in canonical role order. */
 export function generateAgentFiles(resolved: ResolvedAriaConfig, version: string): Record<RoleName, string> {
   return Object.fromEntries(
     ROLES.map((role) => [role, generateAgentFile(role, resolved.roles[role], version)]),
@@ -218,6 +217,10 @@ export interface AgentInstallResult {
    * a replaced managed file.
    */
   previousContents: Partial<Record<RoleName, string>>;
+  /** Intact obsolete Architect agent files moved aside without deletion. */
+  retiredFiles: Array<{ path: string; backupPath: string }>;
+  /** Explanation when an obsolete Architect file was preserved as user-owned or ambiguous. */
+  legacyArchitectWarning?: string;
 }
 
 /**
@@ -241,6 +244,57 @@ async function readExisting(path: string): Promise<string | undefined> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
+}
+
+type LegacyArchitectInspection =
+  | { status: "absent" }
+  | { status: "managed"; path: string }
+  | { status: "unowned" | "ambiguous"; path: string; reason: string };
+
+/** Positively classify the obsolete Architect path before any migration. */
+async function inspectLegacyArchitect(dir: string): Promise<LegacyArchitectInspection> {
+  const path = join(dir, "architect.md");
+  let stat: Awaited<ReturnType<typeof lstat>>;
+  try {
+    stat = await lstat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { status: "absent" };
+    const reason = error instanceof Error ? error.message : String(error);
+    return { status: "ambiguous", path, reason: `could not inspect file (${reason})` };
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    return { status: "ambiguous", path, reason: "path is not a regular file" };
+  }
+  let content: string;
+  try {
+    content = await readFile(path, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return { status: "ambiguous", path, reason: `could not read file (${reason})` };
+  }
+  if (!isAriaManaged(content)) {
+    return { status: "unowned", path, reason: "file has no ARIA ownership marker" };
+  }
+  if (!verifyManagedContent(content)) {
+    return { status: "ambiguous", path, reason: "ARIA ownership checksum/layout is invalid or the file was edited" };
+  }
+  return { status: "managed", path };
+}
+
+/** Archive only a checksum-verified obsolete Architect file; never overwrite it. */
+async function archiveLegacyArchitect(
+  dir: string,
+  result: AgentInstallResult,
+): Promise<void> {
+  const inspection = await inspectLegacyArchitect(dir);
+  if (inspection.status === "absent") return;
+  if (inspection.status !== "managed") {
+    result.legacyArchitectWarning = `Preserved ${inspection.path}: ${inspection.reason}; review or remove it manually if appropriate.`;
+    return;
+  }
+  const backupPath = `${inspection.path}.aria-backup-${backupStamp()}-${randomUUID()}`;
+  await rename(inspection.path, backupPath);
+  result.retiredFiles.push({ path: inspection.path, backupPath });
 }
 
 /** Recompute the embedded checksum from a managed file's own fields. */
@@ -327,7 +381,7 @@ async function writeFileAtomic(path: string, content: string): Promise<void> {
 }
 
 /**
- * Install (or regenerate) the eleven managed agent files.
+ * Install (or regenerate) the ten managed agent files.
  *
  * Safe regeneration: byte-identical managed files are left untouched;
  * managed files are regenerated in place with their prior bytes retained on
@@ -358,8 +412,10 @@ export async function installAgentFiles(
     tampered: [],
     backups: {},
     previousContents: {},
+    retiredFiles: [],
   };
   try {
+    await archiveLegacyArchitect(dir, result);
     for (const role of ROLES) {
       const path = join(dir, agentFileName(role));
       const wanted = files[role];
@@ -453,12 +509,32 @@ export async function rollbackAgentInstall(dir: string, result: AgentInstallResu
       await unlink(path).catch(() => undefined);
     }
   }
+  for (const retired of result.retiredFiles ?? []) {
+    try {
+      const live = await readExisting(retired.path);
+      if (live !== undefined) {
+        throw new Error(`Cannot restore retired agent because ${retired.path} now exists`);
+      }
+      await rename(retired.backupPath, retired.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        try {
+          const live = await readExisting(retired.path);
+          if (live !== undefined) continue;
+        } catch {
+          // Fall through to fail-closed below.
+        }
+      }
+      hasPending = true;
+      pending = error;
+    }
+  }
   if (hasPending) throw pending;
 }
 
 /**
  * Strict managed-agent reconciliation (post-handoff): positive classification
- * of the eleven expected role paths with fail-closed conflicts.
+ * of the ten expected role paths, plus the obsolete Architect path, with fail-closed conflicts.
  *
  * Classification reuses the generated definitions plus the managed
  * header/version/checksum metadata above:
@@ -472,7 +548,7 @@ export async function rollbackAgentInstall(dir: string, result: AgentInstallResu
  * - role path that is not a regular file (directory, symlink, anything
  *   else) or cannot be read → `ambiguous` conflict.
  *
- * Preflight inspects all eleven role paths BEFORE any write/rename, so an
+ * Preflight inspects all ten canonical role paths and the obsolete Architect path BEFORE any write/rename, so an
  * unowned or ambiguous conflict throws with an actionable error while every
  * original file is still preserved — nothing is created, modified, renamed,
  * or backed up. Only the exact `<role>.md` paths are inspected; unrelated
@@ -487,7 +563,7 @@ export async function rollbackAgentInstall(dir: string, result: AgentInstallResu
  * writes, same `partialResult` on error).
  */
 export interface AgentFileConflict {
-  role: RoleName;
+  role: RoleName | "architect";
   path: string;
   kind: "unowned" | "ambiguous";
   detail: string;
@@ -567,6 +643,15 @@ export async function reconcileManagedAgents(
     const conflict = await preflightRolePath(dir, role, files[role]);
     if (conflict) conflicts.push(conflict);
   }
+  const legacyArchitect = await inspectLegacyArchitect(dir);
+  if (legacyArchitect.status === "unowned" || legacyArchitect.status === "ambiguous") {
+    conflicts.push({
+      role: "architect",
+      path: legacyArchitect.path,
+      kind: legacyArchitect.status,
+      detail: `${legacyArchitect.reason}; refusing to retire an unowned or ambiguous legacy agent`,
+    });
+  }
   if (conflicts.length > 0) throw new AgentReconciliationError(conflicts, dir);
 
   await mkdir(dir, { recursive: true });
@@ -582,8 +667,21 @@ export async function reconcileManagedAgents(
     tampered: [],
     backups: {},
     previousContents: {},
+    retiredFiles: [],
   };
   try {
+    await archiveLegacyArchitect(dir, result);
+    if (result.legacyArchitectWarning) {
+      throw new AgentReconciliationError(
+        [{
+          role: "architect",
+          path: join(dir, "architect.md"),
+          kind: "ambiguous",
+          detail: result.legacyArchitectWarning,
+        }],
+        dir,
+      );
+    }
     for (const role of ROLES) {
       const path = join(dir, agentFileName(role));
       const wanted = files[role];

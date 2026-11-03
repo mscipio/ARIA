@@ -14,7 +14,7 @@ export declare function agentFileChecksum(description: string, model: string, mo
  * globally managed files.
  */
 export declare function generateAgentFile(role: RoleName, resolved: ResolvedRoleConfig, version: string): string;
-/** Render all eleven managed agent files in canonical role order. */
+/** Render all ten managed agent files in canonical role order. */
 export declare function generateAgentFiles(resolved: ResolvedAriaConfig, version: string): Record<RoleName, string>;
 export declare function agentFileName(role: RoleName): string;
 /** Global V2 agent location (`$XDG_CONFIG_HOME/opencode/agents/` or `~/.config/opencode/agents/`). */
@@ -47,6 +47,13 @@ export interface AgentInstallResult {
      * a replaced managed file.
      */
     previousContents: Partial<Record<RoleName, string>>;
+    /** Intact obsolete Architect agent files moved aside without deletion. */
+    retiredFiles: Array<{
+        path: string;
+        backupPath: string;
+    }>;
+    /** Explanation when an obsolete Architect file was preserved as user-owned or ambiguous. */
+    legacyArchitectWarning?: string;
 }
 /**
  * Partial install state carried on a thrown `installAgentFiles` error so
@@ -58,7 +65,7 @@ export interface AgentInstallPartialError extends Error {
     partialResult?: AgentInstallResult;
 }
 /**
- * Install (or regenerate) the eleven managed agent files.
+ * Install (or regenerate) the ten managed agent files.
  *
  * Safe regeneration: byte-identical managed files are left untouched;
  * managed files are regenerated in place with their prior bytes retained on
@@ -91,7 +98,7 @@ export declare function installAgentFiles(resolved: ResolvedAriaConfig, options?
 export declare function rollbackAgentInstall(dir: string, result: AgentInstallResult): Promise<void>;
 /**
  * Strict managed-agent reconciliation (post-handoff): positive classification
- * of the eleven expected role paths with fail-closed conflicts.
+ * of the ten expected role paths, plus the obsolete Architect path, with fail-closed conflicts.
  *
  * Classification reuses the generated definitions plus the managed
  * header/version/checksum metadata above:
@@ -105,7 +112,7 @@ export declare function rollbackAgentInstall(dir: string, result: AgentInstallRe
  * - role path that is not a regular file (directory, symlink, anything
  *   else) or cannot be read → `ambiguous` conflict.
  *
- * Preflight inspects all eleven role paths BEFORE any write/rename, so an
+ * Preflight inspects all ten canonical role paths and the obsolete Architect path BEFORE any write/rename, so an
  * unowned or ambiguous conflict throws with an actionable error while every
  * original file is still preserved — nothing is created, modified, renamed,
  * or backed up. Only the exact `<role>.md` paths are inspected; unrelated
@@ -120,7 +127,7 @@ export declare function rollbackAgentInstall(dir: string, result: AgentInstallRe
  * writes, same `partialResult` on error).
  */
 export interface AgentFileConflict {
-    role: RoleName;
+    role: RoleName | "architect";
     path: string;
     kind: "unowned" | "ambiguous";
     detail: string;

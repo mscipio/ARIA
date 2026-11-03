@@ -12,7 +12,7 @@ afterEach(async () => {
 });
 
 describe("formatRoutes", () => {
-  it("includes all eleven roles with their built-in defaults when no override file exists", async () => {
+  it("includes all ten roles with their built-in defaults when no override file exists", async () => {
     const root = await mkdtemp(resolve(tmpdir(), "aria-routes-"));
     tempDirs.push(root);
     const output = formatRoutes(root);
@@ -21,7 +21,6 @@ coder  opencode-go/muse-spark-1.3-contributor  xhigh
 explorer  opencode-go/muse-spark-1.3-contributor  high
 visualizer  opencode-go/muse-spark-1.3-contributor  xhigh
 planner  openai/gpt-6-luna  xhigh
-architect  openai/gpt-6.1-sol  high
 implementer  opencode-go/muse-spark-1.3-contributor  xhigh
 reviewer  openai/gpt-6.1-sol  medium
 researcher  openai/gpt-6.1-sol  medium
@@ -73,7 +72,7 @@ scientist  openai/gpt-6.1-sol  medium`);
     const output = formatRoutes(root);
     expect(output).toContain("planner  openai/gpt-5.4-mini  -");
     expect(output).not.toContain("planner  openai/gpt-5.4-mini  xhigh");
-    expect(output).toContain("architect  openai/gpt-6.1-sol  high");
+    expect(output).not.toContain("architect");
   });
 
   it("reflects variant override while inheriting model from defaults", async () => {

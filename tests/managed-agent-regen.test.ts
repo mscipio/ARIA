@@ -110,14 +110,14 @@ async function readBytes(dir: string, name: string): Promise<string> {
 }
 
 describe("T003 managed-agent regeneration", () => {
-  it("(a) regenerates all 11 stale v1.0.7 managed files to the current package version", async () => {
+  it("(a) regenerates all 10 stale v1.0.7 managed files to the current package version", async () => {
     const root = await tempRoot("aria-regen-a-");
     const worktree = join(root, "worktree");
     const dir = join(root, "agents");
     const resolved = resolveSetupAriaConfig(worktree);
     const current = FIXTURE_VERSION;
     const stale = await seedVersionedAgents(dir, worktree, STALE_VERSION);
-    expect(Object.keys(stale)).toHaveLength(11);
+    expect(Object.keys(stale)).toHaveLength(10);
 
     const result = await reconcileManagedAgents(resolved, { dir, version: current });
 
@@ -252,7 +252,7 @@ describe("T003 managed-agent regeneration", () => {
     // Seed exactly what the real phase resolves: packaged defaults plus the
     // supported global overlay anchored at the new release CWD.
     const stale = await seedVersionedAgents(agentsDir, process.cwd(), STALE_VERSION);
-    expect(Object.keys(stale)).toHaveLength(11);
+    expect(Object.keys(stale)).toHaveLength(10);
 
     const inventoryCalls: string[] = [];
     const inventoryDir = join(root, "inventory", "opencode");
@@ -379,7 +379,7 @@ describe("T003 managed-agent regeneration", () => {
     const resolved = resolveSetupAriaConfig(worktree);
     await seedVersionedAgents(agentsDir, worktree, STALE_VERSION);
     const reconciled = await reconcileManagedAgents(resolved, { dir: agentsDir, version: FIXTURE_VERSION });
-    expect(reconciled.written).toHaveLength(11);
+    expect(reconciled.written).toHaveLength(10);
     // Healthy doctor fixtures: global OpenCode config carries the Context7
     // remote MCP, and every packaged default route model is discoverable.
     const globalDir = openCodeGlobalDir();
@@ -400,7 +400,7 @@ describe("T003 managed-agent regeneration", () => {
       (finding) => finding.area === "config" && finding.title === "managed agent files",
     );
     expect(managed?.severity).toBe("PASS");
-    expect(managed?.detail).toContain("11 of 11");
+    expect(managed?.detail).toContain("10 of 10");
     expect(doctorExitCode(report.findings)).toBe(0);
   });
 });

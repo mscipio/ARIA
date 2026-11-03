@@ -539,7 +539,7 @@ function agentEntryIssues(role: string, entry: DoctorV2AgentEntry): string[] {
 
 function agentsRuntimeFinding(agents: DoctorV2AgentEntry[] | undefined): DoctorFinding {
   if (agents === undefined) {
-    return { severity: "SKIP", area: "runtime", title: "agents (11)", detail: RUNTIME_LIST_GAP };
+    return { severity: "SKIP", area: "runtime", title: `agents (${ROLES.length})`, detail: RUNTIME_LIST_GAP };
   }
   const counts = new Map<string, number>();
   for (const agent of agents) counts.set(agent.id, (counts.get(agent.id) ?? 0) + 1);
@@ -558,13 +558,13 @@ function agentsRuntimeFinding(agents: DoctorV2AgentEntry[] | undefined): DoctorF
     if (entry) problems.push(...agentEntryIssues(role, entry));
   }
   if (problems.length > 0) {
-    return { severity: "FAIL", area: "runtime", title: "agents (11)", detail: problems.join("; ") };
+    return { severity: "FAIL", area: "runtime", title: `agents (${ROLES.length})`, detail: problems.join("; ") };
   }
   return {
     severity: "PASS",
     area: "runtime",
-    title: "agents (11)",
-    detail: "11 of 11 roles listed exactly once with explicit mode/model/permissions (V2 shell/subagent names)",
+    title: `agents (${ROLES.length})`,
+    detail: `${ROLES.length} of ${ROLES.length} roles listed exactly once with explicit mode/model/permissions (V2 shell/subagent names)`,
   };
 }
 
@@ -1548,7 +1548,7 @@ function rolePolicyFindings(): DoctorFinding[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Read-only verification that the eleven managed agent files setup installs
+ * Read-only verification that the canonical managed agent files setup installs
  * match what the current install would generate (package version plus
  * project-neutral resolved config: defaults + global overrides). A fully
  * absent install is SKIP (setup has not run; `aria setup` generates them);
@@ -1601,7 +1601,7 @@ async function collectAgentFileFindings(
       severity: "SKIP",
       area: "config",
       title: "managed agent files",
-      detail: `not installed in ${agentsDir}; run aria setup to generate the 11 managed files`,
+      detail: `not installed in ${agentsDir}; run aria setup to generate the ${ROLES.length} managed files`,
     }];
   }
   const problems = [
@@ -1620,7 +1620,7 @@ async function collectAgentFileFindings(
     severity: "PASS",
     area: "config",
     title: "managed agent files",
-    detail: `11 of 11 match version ${version} and resolved config`,
+    detail: `${ROLES.length} of ${ROLES.length} match version ${version} and resolved config`,
   }];
 }
 

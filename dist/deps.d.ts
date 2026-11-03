@@ -110,6 +110,14 @@ export interface DepsStatus {
         found: boolean;
         connected: boolean;
     };
+    playwright?: {
+        installedVersion: string | null;
+        registered: boolean;
+        executable: string | null;
+        browserReady: boolean;
+        launchDemonstrated: false;
+        detail: string;
+    };
     /** Optional ZotPilot MCP presence/connectivity; absent when not listed. */
     zotpilot?: ZotPilotMcpPresence;
     /** True when `opencode mcp list` itself failed (no MCP status known). */
@@ -129,6 +137,10 @@ export interface SyncResult {
     codegraph: {
         action: string;
         version?: string;
+        error?: string;
+    };
+    playwright?: {
+        action: string;
         error?: string;
     };
     health?: DepsStatus;
