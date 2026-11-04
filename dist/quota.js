@@ -4,61 +4,134 @@ import { stripJsoncComments } from "./deps.js";
 import { defaultDelay, verifyPersistedThenConverge, } from "./list-convergence.js";
 import { openCodeGlobalDir } from "./paths.js";
 // ---------------------------------------------------------------------------
-// Quota 5 dual policy (T007) — upgrade-only single owner
+// OpenCode Quota 6 lifecycle policy (single owner for update decisions).
+//
+// - Install (consented, optional): `opencode plugin add` of the exact latest
+//   Quota 6 release, discovered from npm dist-tags (see bootstrap.ts).
+// - Update: targeted native `opencode plugin update @slkiser/opencode-quota`,
+//   only when the installed release is positively identified, the discovered
+//   latest is in the same major, and it is strictly newer. Never a bare plugin
+//   update (that would touch unrelated plugins) and never a downgrade.
+// - Gates: OpenCode >= 2.0.26 and Node.js >= 22.13 (Quota's terminal commands
+//   need it). ARIA declares Node >=20.19, so Quota operations are refused on
+//   older Node with the reason rather than failing silently.
+// - Rollback: a failed update restores the global config file bytes only. The
+//   installed plugin package is not reverted by ARIA.
+// - Quota 5 installs are observed and reported as outside the supported major;
+//   they are never migrated automatically.
 // ---------------------------------------------------------------------------
-//
-// Quota 5 stays optional: the setup bootstrap lifecycle (`ensureQuotaForLifecycle`
-// in `./dependencies.js`: absent → install-if-missing via `installQuotaIfMissing`
-// in `./bootstrap.js`; identified Quota 5 → gated update via `upgradeQuota` below)
-// may manage it under safety/ownership gates. The legacy `deps sync` path
-// (`depsSync` in `./deps.js`) remains non-version-chasing and does not
-// independently chase or install Quota (`SyncResult` carries no quota field,
-// and the setup file phases never write quota entries).
-// This module is the single upgrade-only owner, consumed by the future
-// `aria upgrade` orchestration (T010):
-//
-// - `checkQuotaUpgrade` is strictly read-only inventory (`opencode plugin
-//   list` plus the XDG-contained global config): installed spec/version plus
-//   a status. Unknown or unsafe targets report observed/unmanaged with zero
-//   mutation.
-// - `upgradeQuota` upgrades an already-installed Quota 5 ONLY when its
-//   installed npm target is positively identified as Quota 5 (exactly one
-//   distinct exact-semver `5.x` spec across the plugin list and the global
-//   config) AND the native `opencode-quota update --dry-run` preview exits
-//   cleanly for that target on OpenCode 2 with no downgrade risk.
-//   Each attempted upgrade is validated (the plugin list still carries the
-//   quota plugin exactly once and the global config still carries a quota
-//   entry with unrelated entries preserved — the TUI and server surfaces)
-//   and the snapshotted global config is rolled back where feasible.
-//
-// Failure anywhere before the apply leaves every file byte-identical. The
-// package-cache cleanup the updater performs after its own config
-// verification cannot be rolled back and is reported, never guessed.
-//
-// Evidence basis (read-only; no upstream installer was executed): Quota 5 is
-// an OpenCode V2 server plugin (`@slkiser/opencode-quota.server`, providing
-// the `quota_status` tool, slash commands, quota RPC for the TUI surfaces,
-// and session hooks) installed as an npm spec such as
-// `@slkiser/opencode-quota@5.0.2` in the global `plugins[]`. Its supported
-// update mechanism is its own `update` command (`--dry-run` previews without
-// writing; `--yes` applies only safe setting/cache work after the preview
-// and never moves or deletes secrets). Quota 5 needs OpenCode 2: on
-// OpenCode 1 the updater pins Quota to `@4`, so OpenCode 1 is an unsafe
-// target for a Quota 5 upgrade and stays report-only.
 /** npm package providing Quota. */
 export const QUOTA_PACKAGE_NAME = "@slkiser/opencode-quota";
 /** V2 server plugin ID registered by the Quota package. */
 export const QUOTA_PLUGIN_ID = "@slkiser/opencode-quota.server";
-/** Only this major is eligible for a managed Quota upgrade. */
-export const QUOTA_MAJOR = 5;
-/** Binary invoked for the native update preview/apply (never for setup/sync). */
-const QUOTA_UPDATE_BIN = "opencode-quota";
+/** Only this major is eligible for a managed Quota install or update. */
+export const QUOTA_MAJOR = 6;
+/** OpenCode release the Quota 6 plugin documents as its minimum. */
+export const QUOTA_MIN_OPENCODE = "2.0.26";
+/**
+ * Node.js floor for Quota's terminal commands (`engines` of the published
+ * package). ARIA declares Node >=20.19, so this is detected at runtime and
+ * refused with an explanation, never assumed.
+ */
+export const QUOTA_MIN_NODE = "22.13.0";
 /**
  * Moving tags the updater keeps as written (never positively versioned, so
  * never eligible as an identified upgrade target).
  */
 const QUOTA_MOVING_TAGS = new Set(["latest", "next", "4"]);
 const EXACT_SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+/** Compare dotted numeric versions (`a.b.c`); negative when a < b. */
+export function compareDotted(a, b) {
+    const left = a.split(".").map((part) => Number.parseInt(part, 10));
+    const right = b.split(".").map((part) => Number.parseInt(part, 10));
+    for (let index = 0; index < 3; index++) {
+        const delta = (left[index] ?? 0) - (right[index] ?? 0);
+        if (delta !== 0)
+            return delta;
+    }
+    return 0;
+}
+/** Positive node/opencode version text (`v24.18.0`, `2.2.5`) or null when unparseable. */
+function leadingVersion(text) {
+    const match = text.match(/v?(\d+\.\d+\.\d+)/);
+    return match?.[1] ?? null;
+}
+/** Runtime gate: the Node.js on PATH must meet the Quota terminal-command floor. */
+export async function quotaNodeGate(executor) {
+    try {
+        const result = await executor("node", ["--version"]);
+        const version = leadingVersion(result.stdout);
+        if (version === null)
+            return { ok: false, reason: "Node.js version not positively identified; Quota terminal commands need Node.js " + QUOTA_MIN_NODE + " or newer" };
+        if (compareDotted(version, QUOTA_MIN_NODE) < 0) {
+            return {
+                ok: false,
+                reason: `Node.js ${version} is older than the ${QUOTA_MIN_NODE} minimum that Quota ${QUOTA_MAJOR} requires; ARIA declares Node >=20.19 and refuses this Quota operation instead of failing silently`,
+            };
+        }
+        return { ok: true, version };
+    }
+    catch {
+        return { ok: false, reason: "Node.js could not be executed; Quota terminal-command compatibility is unknown" };
+    }
+}
+/** Runtime gate: the OpenCode release must meet Quota's documented minimum. */
+export async function quotaOpenCodeGate(executor) {
+    try {
+        const result = await executor("opencode", ["--version"]);
+        const version = leadingVersion(result.stdout);
+        if (version === null)
+            return { ok: false, reason: "OpenCode version not positively identified" };
+        if (compareDotted(version, QUOTA_MIN_OPENCODE) < 0) {
+            return { ok: false, reason: `OpenCode ${version} is older than the ${QUOTA_MIN_OPENCODE} minimum for Quota ${QUOTA_MAJOR}` };
+        }
+        return { ok: true };
+    }
+    catch {
+        return { ok: false, reason: "OpenCode version could not be read" };
+    }
+}
+/**
+ * Latest exact Quota release on npm, restricted to the supported major. Read
+ * with `npm view <pkg> dist-tags --json` (no install, no registry write).
+ */
+export async function discoverQuotaTarget(executor) {
+    try {
+        const result = await executor("npm", ["view", QUOTA_PACKAGE_NAME, "dist-tags", "--json"]);
+        // `npm view --json` wraps a single result in an array; accept both shapes.
+        const parsed = JSON.parse(result.stdout);
+        const tags = (Array.isArray(parsed) ? parsed[0] : parsed);
+        const version = typeof tags?.latest === "string" && EXACT_SEMVER_RE.test(tags.latest) ? tags.latest : null;
+        if (version === null)
+            return { ok: false, reason: `npm dist-tags for ${QUOTA_PACKAGE_NAME} carry no exact latest release` };
+        if (quotaMajor(version) !== QUOTA_MAJOR) {
+            return { ok: false, reason: `npm latest for ${QUOTA_PACKAGE_NAME} is ${version}; this policy installs and updates only Quota ${QUOTA_MAJOR}, leaving untouched` };
+        }
+        return { ok: true, version };
+    }
+    catch (error) {
+        return { ok: false, reason: `npm dist-tags for ${QUOTA_PACKAGE_NAME} unavailable: ${error instanceof Error ? error.message : String(error)}` };
+    }
+}
+/**
+ * Observed Quota specs. The plugin list's SOURCE column is unversioned for
+ * npm packages while its VERSION column is the runtime identity; an
+ * unversioned package spec is therefore pinned to the listed version so the
+ * runtime identity is positively used. A config spec pinned to a different
+ * version stays distinct and fails closed as ambiguous.
+ */
+export function observedQuotaSpecs(listEntries, configSpecs) {
+    const entries = listEntries ?? [];
+    const listVersion = entries.length === 1 && entries[0] !== undefined && EXACT_SEMVER_RE.test(entries[0].version)
+        ? entries[0].version
+        : null;
+    const pin = listVersion === null ? null : `${QUOTA_PACKAGE_NAME}@${listVersion}`;
+    const pinned = (spec) => (pin !== null && spec === QUOTA_PACKAGE_NAME ? pin : spec);
+    return {
+        listSpecs: entries.map((entry) => pinned(entry.target)),
+        configSpecs: configSpecs.map(pinned),
+    };
+}
 /**
  * True when the text names exactly the Quota package (npm spec, plugin ID,
  * or config entry). A fork such as `@slkiser/opencode-quota-extra` does not
@@ -283,18 +356,10 @@ async function runPluginList(executor) {
         return { ok: false };
     }
 }
-function parseOpenCodeMajor(output) {
-    const match = output.match(/(\d+)\.\d+\.\d+/);
-    const majorText = match?.[1];
-    if (majorText === undefined)
-        return null;
-    const major = Number.parseInt(majorText, 10);
-    return Number.isFinite(major) ? major : null;
-}
 /**
  * Strictly read-only Quota inventory for setup/sync reporting and the
  * future upgrade `--check` table: installed spec/version plus a status.
- * Never invokes the updater and never writes. Identified Quota 5 reports
+ * Never invokes the updater and never writes. Identified Quota 6 reports
  * `unmanaged-observed`: observed by this inventory while version action is
  * owned exclusively by the gated `upgradeQuota`/bootstrap lifecycle below,
  * and the legacy `deps sync` path performs no Quota installation or config
@@ -322,8 +387,8 @@ export async function checkQuotaUpgrade(executor, configDir) {
             detail: "plugin list unavailable and no global config observed; installed target not positively identified",
         };
     }
-    const listSpecs = listEntries === null ? [] : listEntries.map((entry) => entry.target);
-    const identified = identifyQuotaTarget(listSpecs, configState.kind === "single" ? configState.specs : []);
+    const observed = observedQuotaSpecs(listEntries, configState.kind === "single" ? configState.specs : []);
+    const identified = identifyQuotaTarget(observed.listSpecs, observed.configSpecs);
     if (identified.kind === "absent") {
         return { status: "skipped", installedSpec: null, installedVersion: null, detail: "no Quota installation observed; nothing to upgrade" };
     }
@@ -366,16 +431,12 @@ function multisetEqual(left, right) {
     return true;
 }
 /**
- * Gated Quota 5 upgrade for `aria upgrade` (T010 wires this; setup and sync
- * never call it). Inventory first: the installed target must be positively
- * identified as Quota 5. Safety second: OpenCode must be major 2 (on major 1
- * the native updater would pin Quota to `@4`, a downgrade) and the native
- * `opencode-quota update --dry-run` preview must exit cleanly. Only then
- * `opencode-quota update --yes` applies, followed by validation that the
- * TUI and server surfaces survived (plugin list still carries the quota
- * plugin exactly once; the global config still carries a quota entry with
- * unrelated entries preserved). Validation failure rolls the snapshotted
- * global config back where feasible.
+ * Native Quota 6 update: `opencode plugin update @slkiser/opencode-quota`
+ * (targeted; never the bare form, which updates every plugin). Preconditions:
+ * supported OpenCode and Node runtimes, an exact identified Quota 6 install,
+ * and a discovered target that is newer (never a downgrade). Afterwards the
+ * persisted config must keep every unrelated plugin entry byte-for-byte and
+ * the runtime list must converge on exactly one Quota entry at the target.
  */
 export async function upgradeQuota(executor, options = {}) {
     const configDir = options.configDir;
@@ -393,44 +454,47 @@ export async function upgradeQuota(executor, options = {}) {
     if (listEntries === null && configState.kind === "missing") {
         return reportOnly("unknown-target", null, null, "plugin list unavailable and no global config observed; installed target not positively identified");
     }
-    const listSpecs = listEntries === null ? [] : listEntries.map((entry) => entry.target);
-    const identified = identifyQuotaTarget(listSpecs, configState.kind === "single" ? configState.specs : []);
+    const observed = observedQuotaSpecs(listEntries, configState.kind === "single" ? configState.specs : []);
+    const identified = identifyQuotaTarget(observed.listSpecs, observed.configSpecs);
     if (identified.kind === "absent") {
         return reportOnly("skipped", null, null, "no Quota installation observed; nothing to upgrade");
     }
     if (identified.kind === "unknown-target" || identified.kind === "unsupported-ownership") {
         return reportOnly(identified.kind, null, null, identified.reason);
     }
-    // Safety gate 1: OpenCode major must be 2 for a Quota 5 upgrade.
-    let openCodeMajor = null;
-    try {
-        const probed = await executor("opencode", ["--version"]);
-        openCodeMajor = parseOpenCodeMajor(probed.stdout);
+    // Runtime gates: refuse with an explanation rather than fail silently.
+    const openCode = await quotaOpenCodeGate(executor);
+    if (!openCode.ok)
+        return reportOnly("unmanaged-observed", identified.spec, identified.version, `${openCode.reason}; leaving Quota untouched`);
+    const node = await quotaNodeGate(executor);
+    if (!node.ok)
+        return reportOnly("unmanaged-observed", identified.spec, identified.version, `${node.reason}; leaving Quota untouched`);
+    const target = await discoverQuotaTarget(executor);
+    if (!target.ok)
+        return reportOnly("unknown-target", identified.spec, identified.version, `${target.reason}; leaving Quota untouched`);
+    const ordering = compareDotted(identified.version, target.version);
+    if (ordering > 0) {
+        return reportOnly("unknown-target", identified.spec, identified.version, `installed Quota ${identified.version} is newer than the discovered release ${target.version}; never downgraded`);
     }
-    catch {
-        openCodeMajor = null;
-    }
-    if (openCodeMajor !== 2) {
-        return reportOnly("unmanaged-observed", identified.spec, identified.version, openCodeMajor === null
-            ? `Quota ${identified.version} identified (${identified.spec}) but the OpenCode version is not positively identified; native update safety cannot be demonstrated, leaving Quota untouched`
-            : `Quota ${identified.version} identified (${identified.spec}) but OpenCode major is ${openCodeMajor} (Quota 5 needs OpenCode 2; the native updater would pin @4); leaving Quota untouched`);
-    }
-    // Safety gate 2: the native read-only preview must exit cleanly.
-    try {
-        await executor(QUOTA_UPDATE_BIN, ["update", "--dry-run"]);
-    }
-    catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        return reportOnly("unmanaged-observed", identified.spec, identified.version, `Quota ${identified.version} identified (${identified.spec}) but the native update preview failed (${reason}); leaving Quota untouched`);
+    if (ordering === 0) {
+        return {
+            status: "already-current",
+            installedSpec: identified.spec,
+            installedVersion: identified.version,
+            resultingSpec: null,
+            detail: `Quota ${identified.version} is already the latest ${QUOTA_MAJOR}.x release; no change`,
+            mutated: false,
+            rolledBack: false,
+        };
     }
     const snapshot = configState.kind === "single" ? { path: configState.path, raw: configState.raw } : null;
     const beforeNonQuota = configState.kind === "single" && !configState.unparseable
         ? allPluginSpecsFromConfig(configState.parsed).filter((spec) => !mentionsQuotaPackage(spec))
         : null;
-    const beforeListText = listEntries === null ? null : JSON.stringify(listEntries);
-    // Apply: safe setting/cache work only, after the demonstrated-safe preview.
+    // Apply: targeted native update. The package argument restricts the change
+    // to Quota; unrelated plugins are verified unchanged below.
     try {
-        await executor(QUOTA_UPDATE_BIN, ["update", "--yes"]);
+        await executor("opencode", ["plugin", "update", QUOTA_PACKAGE_NAME]);
     }
     catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -443,20 +507,12 @@ export async function upgradeQuota(executor, options = {}) {
             detail: `native update failed (${reason}). ${snapshot === null
                 ? "No global config snapshot existed; config state is exactly as the updater left it."
                 : rolledBack
-                    ? `Global config restored to the pre-upgrade bytes (${snapshot.path}).`
+                    ? `Global config restored to the pre-upgrade bytes (${snapshot.path}); ARIA does not revert the installed package.`
                     : `Global config restore failed; ${snapshot.path} is exactly as the updater left it.`}`,
             mutated: true,
             rolledBack,
         };
     }
-    // Validate: persisted global config first (authoritative — the updater
-    // may rewrite the exact pin, so any surviving quota entry plus
-    // byte-preserved unrelated entries verifies it), then bounded runtime
-    // plugin-list convergence. A stale first list sample retries
-    // observation-only within the bound instead of rolling back a successful
-    // update. Exactly one `update --yes` ran above; polls below repeat
-    // `opencode plugin list` observation only, never mutation.
-    // Malformed/unrecognized list output fails closed (never success).
     const verification = await verifyPersistedThenConverge(async () => {
         const persisted = await readQuotaConfigState(configDir);
         if (persisted.kind === "ambiguous") {
@@ -487,14 +543,18 @@ export async function upgradeQuota(executor, options = {}) {
         const listResult = await runPluginList(executor);
         return listResult.ok ? quotaEntriesFromPluginList(listResult.stdout) : null;
     }, (entries) => {
-        if (entries.length === 1)
-            return { ok: true };
-        return {
-            ok: false,
-            reason: entries.length === 0
-                ? "quota plugin is no longer listed; registration surface lost"
-                : "quota plugin is listed more than once; registration surface ambiguous",
-        };
+        if (entries.length !== 1) {
+            return {
+                ok: false,
+                reason: entries.length === 0
+                    ? "quota plugin is no longer listed; registration surface lost"
+                    : "quota plugin is listed more than once; registration surface ambiguous",
+            };
+        }
+        if (entries[0]?.version !== target.version) {
+            return { ok: false, reason: `runtime still reports Quota ${entries[0]?.version ?? "unknown"}, not ${target.version}` };
+        }
+        return { ok: true };
     }, options.convergence ?? {}, options.delay ?? defaultDelay);
     if (verification.outcome !== "converged") {
         const rolledBack = await restoreSnapshot(snapshot);
@@ -507,38 +567,19 @@ export async function upgradeQuota(executor, options = {}) {
             detail: `upgrade validation failed (${problem}). ${snapshot === null
                 ? "No global config snapshot existed; state is exactly as the updater left it."
                 : rolledBack
-                    ? `Global config restored to the pre-upgrade bytes (${snapshot.path}).`
+                    ? `Global config restored to the pre-upgrade bytes (${snapshot.path}); ARIA does not revert the installed package.`
                     : `Global config restore failed; ${snapshot.path} is exactly as the updater left it.`}`,
             mutated: true,
             rolledBack,
         };
     }
-    const afterEntries = verification.runtime;
     const afterQuotaSpec = quotaSpecsFromConfig(verification.persisted.parsed)[0] ?? null;
-    // The updater is a no-op when already current: bytes prove it, so report
-    // it instead of claiming an upgrade.
-    // Convergence implies a single post-upgrade config read, so a missing
-    // pre-upgrade snapshot means the config newly appeared (never identical).
-    const configIdentical = snapshot === null ? false : verification.persisted.raw.equals(snapshot.raw);
-    const listIdentical = beforeListText === null ? false : JSON.stringify(afterEntries) === beforeListText;
-    if (configIdentical && listIdentical) {
-        return {
-            status: "already-current",
-            installedSpec: identified.spec,
-            installedVersion: identified.version,
-            resultingSpec: null,
-            detail: `Quota ${identified.version} is already current; native update changed no files`,
-            mutated: false,
-            rolledBack: false,
-        };
-    }
-    const keptId = afterEntries[0]?.id ?? QUOTA_PLUGIN_ID;
     return {
         status: "upgraded",
         installedSpec: identified.spec,
         installedVersion: identified.version,
-        resultingSpec: afterQuotaSpec ?? (afterEntries[0]?.target ?? null),
-        detail: `Quota ${identified.version} upgraded via the native update; plugin list carries ${keptId} exactly once and unrelated global entries are preserved (restart OpenCode to load)`,
+        resultingSpec: afterQuotaSpec,
+        detail: `Quota ${identified.version} upgraded to ${target.version} via 'opencode plugin update ${QUOTA_PACKAGE_NAME}'; unrelated plugin entries preserved (restart OpenCode to load)`,
         mutated: true,
         rolledBack: false,
     };

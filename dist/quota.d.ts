@@ -4,8 +4,55 @@ import { type DelayFn, type ListConvergenceBound } from "./list-convergence.js";
 export declare const QUOTA_PACKAGE_NAME = "@slkiser/opencode-quota";
 /** V2 server plugin ID registered by the Quota package. */
 export declare const QUOTA_PLUGIN_ID = "@slkiser/opencode-quota.server";
-/** Only this major is eligible for a managed Quota upgrade. */
-export declare const QUOTA_MAJOR = 5;
+/** Only this major is eligible for a managed Quota install or update. */
+export declare const QUOTA_MAJOR = 6;
+/** OpenCode release the Quota 6 plugin documents as its minimum. */
+export declare const QUOTA_MIN_OPENCODE = "2.0.26";
+/**
+ * Node.js floor for Quota's terminal commands (`engines` of the published
+ * package). ARIA declares Node >=20.19, so this is detected at runtime and
+ * refused with an explanation, never assumed.
+ */
+export declare const QUOTA_MIN_NODE = "22.13.0";
+/** Compare dotted numeric versions (`a.b.c`); negative when a < b. */
+export declare function compareDotted(a: string, b: string): number;
+/** Runtime gate: the Node.js on PATH must meet the Quota terminal-command floor. */
+export declare function quotaNodeGate(executor: Executor): Promise<{
+    ok: true;
+    version: string;
+} | {
+    ok: false;
+    reason: string;
+}>;
+/** Runtime gate: the OpenCode release must meet Quota's documented minimum. */
+export declare function quotaOpenCodeGate(executor: Executor): Promise<{
+    ok: true;
+} | {
+    ok: false;
+    reason: string;
+}>;
+/**
+ * Latest exact Quota release on npm, restricted to the supported major. Read
+ * with `npm view <pkg> dist-tags --json` (no install, no registry write).
+ */
+export declare function discoverQuotaTarget(executor: Executor): Promise<{
+    ok: true;
+    version: string;
+} | {
+    ok: false;
+    reason: string;
+}>;
+/**
+ * Observed Quota specs. The plugin list's SOURCE column is unversioned for
+ * npm packages while its VERSION column is the runtime identity; an
+ * unversioned package spec is therefore pinned to the listed version so the
+ * runtime identity is positively used. A config spec pinned to a different
+ * version stays distinct and fails closed as ambiguous.
+ */
+export declare function observedQuotaSpecs(listEntries: QuotaListEntry[] | null, configSpecs: string[]): {
+    listSpecs: string[];
+    configSpecs: string[];
+};
 /**
  * True when the text names exactly the Quota package (npm spec, plugin ID,
  * or config entry). A fork such as `@slkiser/opencode-quota-extra` does not
@@ -75,7 +122,7 @@ export type QuotaCheckStatus = "skipped" | "unmanaged-observed" | "unknown-targe
  * T007 inventory semantics (existing vocabulary, no new statuses):
  * - `skipped` — informational: no Quota installation observed, nothing to do.
  * - `unmanaged-observed` — informational observation: a positively
- *   identified Quota 5 is present. This inventory never versions it;
+ *   identified Quota 6 is present. This inventory never versions it;
  *   version action is owned exclusively by the gated `upgradeQuota` /
  *   bootstrap lifecycle below, never by `deps sync`.
  * - `unknown-target` — blocker/action-needed: the installed target is not
@@ -83,7 +130,7 @@ export type QuotaCheckStatus = "skipped" | "unmanaged-observed" | "unknown-targe
  *   moving tag such as `@latest`). Fail-closed: no updater invocation and
  *   no mutation.
  * - `unsupported-ownership` — intentionally unmanaged: a foreign channel
- *   or a major outside the Quota 5 policy. Left untouched, never upgraded.
+ *   or a major outside the Quota 6 policy. Left untouched, never upgraded.
  */
 export interface QuotaCheckResult {
     status: QuotaCheckStatus;
@@ -94,7 +141,7 @@ export interface QuotaCheckResult {
 /**
  * Strictly read-only Quota inventory for setup/sync reporting and the
  * future upgrade `--check` table: installed spec/version plus a status.
- * Never invokes the updater and never writes. Identified Quota 5 reports
+ * Never invokes the updater and never writes. Identified Quota 6 reports
  * `unmanaged-observed`: observed by this inventory while version action is
  * owned exclusively by the gated `upgradeQuota`/bootstrap lifecycle below,
  * and the legacy `deps sync` path performs no Quota installation or config
@@ -134,16 +181,12 @@ export interface QuotaUpgradeOptions {
     delay?: DelayFn;
 }
 /**
- * Gated Quota 5 upgrade for `aria upgrade` (T010 wires this; setup and sync
- * never call it). Inventory first: the installed target must be positively
- * identified as Quota 5. Safety second: OpenCode must be major 2 (on major 1
- * the native updater would pin Quota to `@4`, a downgrade) and the native
- * `opencode-quota update --dry-run` preview must exit cleanly. Only then
- * `opencode-quota update --yes` applies, followed by validation that the
- * TUI and server surfaces survived (plugin list still carries the quota
- * plugin exactly once; the global config still carries a quota entry with
- * unrelated entries preserved). Validation failure rolls the snapshotted
- * global config back where feasible.
+ * Native Quota 6 update: `opencode plugin update @slkiser/opencode-quota`
+ * (targeted; never the bare form, which updates every plugin). Preconditions:
+ * supported OpenCode and Node runtimes, an exact identified Quota 6 install,
+ * and a discovered target that is newer (never a downgrade). Afterwards the
+ * persisted config must keep every unrelated plugin entry byte-for-byte and
+ * the runtime list must converge on exactly one Quota entry at the target.
  */
 export declare function upgradeQuota(executor: Executor, options?: QuotaUpgradeOptions): Promise<QuotaUpgradeResult>;
 //# sourceMappingURL=quota.d.ts.map

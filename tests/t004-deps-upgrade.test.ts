@@ -90,7 +90,8 @@ const THIRD_PARTY_MUTATIONS = [
 ];
 
 function hasThirdPartyMutation(calls: string[]): boolean {
-  return calls.some((call) => THIRD_PARTY_MUTATIONS.some((mutation) => call.startsWith(mutation)));
+  // Read-only `--check` probes (e.g. `codegraph upgrade --check`) are not mutations.
+  return calls.some((call) => !call.endsWith(" --check") && THIRD_PARTY_MUTATIONS.some((mutation) => call.startsWith(mutation)));
 }
 
 const TARGET_1015: AriaAvailableTarget = {
@@ -123,7 +124,7 @@ describe("T004 plain deps inventory is mutation-free", () => {
     });
 
     const rows = check.components.filter((row) => row.component !== "aria");
-    expect(rows.map((row) => row.component).sort()).toEqual(["codegraph", "context7", "engram", "quota", "zotpilot"]);
+    expect(rows.map((row) => row.component).sort()).toEqual(["codegraph", "context7", "engram", "playwright", "quota", "zotpilot"]);
     for (const row of rows) expect(typeof row.detail).toBe("string");
     expect(hasThirdPartyMutation(calls)).toBe(false);
     expectSameTree(before, await snapshotTree(root));
@@ -162,6 +163,7 @@ describe("T004 unmanaged targets stay report-only with zero mutation", () => {
       "codegraph",
       "context7",
       "engram",
+      "playwright",
       "quota",
       "zotpilot",
     ]);
@@ -279,6 +281,7 @@ describe("R004 confirmation cannot install missing targets", () => {
       "codegraph",
       "context7",
       "engram",
+      "playwright",
       "quota",
       "zotpilot",
     ]);
@@ -323,6 +326,7 @@ describe("T004 dependency failure is isolated and never blocks ARIA self-upgrade
       "codegraph",
       "context7",
       "engram",
+      "playwright",
       "quota",
       "zotpilot",
     ]);

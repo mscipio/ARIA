@@ -202,7 +202,7 @@ export declare function detectIncompatibleStatusline(configDir?: string): Promis
  *   global dir.
  */
 export declare function cleanupIncompatibleStatusline(configDir?: string): Promise<StatuslineCleanupResult>;
-declare function detectEngram(executor: Executor): Promise<{
+declare function detectEngram(executor: Executor, binary?: string): Promise<{
     found: boolean;
     version: string | null;
 }>;
@@ -230,6 +230,19 @@ export interface McpStatus {
     /** True when `opencode mcp list` failed (no list output was available). */
     listFailed?: boolean;
 }
+/** One MCP server row from `opencode mcp list` (every server, not only ARIA's). */
+export interface McpServerEntry {
+    name: string;
+    status: string;
+    connected: boolean;
+}
+/**
+ * Parse every server row of `opencode mcp list` (`✓ name   connected` on
+ * OpenCode 2.2.x, `name connected` on older builds). Status symbols are
+ * stripped with the rest of the non-ASCII decoration, so the status word is
+ * the only evidence used.
+ */
+export declare function parseMcpServers(output: string): McpServerEntry[];
 export declare function parseMcpList(output: string): McpStatus;
 declare function detectMcpConnectivity(executor: Executor): Promise<McpStatus>;
 /**

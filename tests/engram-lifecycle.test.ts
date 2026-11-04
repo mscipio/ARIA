@@ -256,7 +256,7 @@ describe("T012 outdated GitHub install updates and validates", () => {
       });
       const executor: Executor = async (command, args) => {
         calls.push(`${command} ${args.join(" ")}`);
-        if (command === "engram" && args[0] === "version") return { stdout: `engram ${version}`, stderr: "" };
+        if ((command === "engram" || command === "/home/u/.local/bin/engram") && args[0] === "version") return { stdout: `engram ${version}`, stderr: "" };
         if (command === "brew" && args[0] === "list") return { stdout: "node\nyarn", stderr: "" };
         if (command === "which" && args[0] === "engram") return { stdout: "/home/u/.local/bin/engram", stderr: "" };
         if (command === "brew" && args[0] === "--cellar") return { stdout: "/Cellar", stderr: "" };
@@ -268,7 +268,7 @@ describe("T012 outdated GitHub install updates and validates", () => {
           version = "1.20.0";
           return { stdout: "", stderr: "" };
         }
-        if (command === "engram" && args[0] === "setup") return { stdout: "", stderr: "" };
+        if ((command === "engram" || command === "/home/u/.local/bin/engram") && args[0] === "setup") return { stdout: "", stderr: "" };
         if (command === "opencode" && args[0] === "mcp") {
           return { stdout: ["engram connected", "1 server(s)"].join("\n"), stderr: "" };
         }
@@ -284,7 +284,8 @@ describe("T012 outdated GitHub install updates and validates", () => {
       expect(result.mcpConnected).toBe(true);
       expect(result.statuslineAbsent).toBe(true);
       expect(calls.some((call) => call.includes(asset))).toBe(true);
-      expect(calls).toContain("engram setup opencode");
+      // Setup runs the binary just installed (absolute path), not a PATH lookup.
+      expect(calls).toContain("/home/u/.local/bin/engram setup opencode");
       const main = JSON.parse(await readFile(resolve(configDir, "opencode.json"), "utf8"));
       expect(main.mcp.servers.other).toEqual({ type: "remote", url: "https://example.invalid/mcp" });
     });
@@ -319,7 +320,8 @@ describe("T012 validation rolls the config snapshot back", () => {
         throw new Error(`unexpected: ${command} ${args.join(" ")}`);
       };
 
-      const result = await ensureEngram(executor);
+      // Fake clock: exhaust the bounded readiness poll without real sleeps.
+      const result = await ensureEngram(executor, { delay: async () => undefined });
 
       expect(result.status).toBe("validation-failed");
       expect(result.mutated).toBe(true);

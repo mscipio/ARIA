@@ -48,10 +48,10 @@
 // ---------------------------------------------------------------------------
 
 import { installQuotaIfMissing } from "./bootstrap.js";
-import { detectCodegraphState, ensureCodegraph } from "./codegraph.js";
+import { codegraphProviderState, detectCodegraphState, ensureCodegraph, upgradeCodegraphExternal } from "./codegraph.js";
 import { defaultExecutor, detectContext7, syncContext7, type DependencyFileOps, type Executor } from "./deps.js";
 import { detectEngramState, ensureEngram } from "./engram.js";
-import { checkQuotaUpgrade, upgradeQuota } from "./quota.js";
+import { checkQuotaUpgrade, compareDotted, upgradeQuota } from "./quota.js";
 import { detectZotpilotState, ensureZotpilot } from "./zotpilot.js";
 import { setupPlaywright, syncPlaywrightConfig, upgradePlaywright } from "./playwright.js";
 import type { ComponentContext, ComponentUpgradeOutcome } from "./upgrade.js";
@@ -70,9 +70,19 @@ export interface DependencyOutcome {
   mutated: boolean;
 }
 
+/** Optional components that setup installs only with explicit consent. */
+export const OPTIONAL_INSTALL_COMPONENTS = ["quota", "zotpilot"] as const;
+export type OptionalInstallComponent = (typeof OPTIONAL_INSTALL_COMPONENTS)[number];
+
 export interface DependencyLifecycleOptions {
   /** Explicit global config dir (XDG-contained; omits to the effective root). */
   configDir?: string;
+  /**
+   * Optional components the user consented to install (`aria setup
+   * --install-optional`). Optional components are never installed without
+   * this consent; a missing optional component is reported as an offer.
+   */
+  optionalInstalls?: readonly OptionalInstallComponent[];
   /** Explicit home dir for the ZotPilot user-scoped ownership check. */
   homeDir?: string;
   /** Filesystem seam for Engram channel detection + asset verification. */
@@ -83,6 +93,14 @@ export interface DependencyLifecycleResult {
   ok: boolean;
   outcomes: DependencyOutcome[];
   report: string;
+}
+
+function optionalConsented(options: DependencyLifecycleOptions, component: OptionalInstallComponent): boolean {
+  return options.optionalInstalls?.includes(component) === true;
+}
+
+function optionalOfferDetail(component: OptionalInstallComponent): string {
+  return `optional and not installed; install only with consent: aria setup --install-optional ${component}`;
 }
 
 function completed(component: string, detail: string, mutated: boolean): DependencyOutcome {
@@ -107,7 +125,7 @@ function failed(component: string, detail: string, rolledBack: boolean | undefin
  * - Absent (`checkQuotaUpgrade` skipped) → install-if-missing via the T016
  *   demonstrated-safe native `opencode plugin add <exact 5.x>` after `npm
  *   view` discovery (XDG-guarded, validated, snapshot rollback).
- * - Positively identified Quota 5 (`unmanaged-observed`) → gated native
+ * - Positively identified Quota 6 (`unmanaged-observed`) → gated native
  *   update via the T007 adapter (owned-outdated → update, current →
  *   normalize/validate as `already-current`).
  * - Ambiguous/unsupported (`unknown-target`/`unsupported-ownership`) →
@@ -327,6 +345,8 @@ export async function runSetupDependencies(
           `${shape}; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`,
         ),
       );
+    } else if (!optionalConsented(options, "zotpilot")) {
+      outcomes.push(skipped("zotpilot", optionalOfferDetail("zotpilot")));
     } else {
       const zotpilot = await ensureZotpilot(executor, { configDir: options.configDir, homeDir: options.homeDir });
       outcomes.push(mapZotpilot("zotpilot", zotpilot));
@@ -348,6 +368,8 @@ export async function runSetupDependencies(
     const inventory = await checkQuotaUpgrade(executor, options.configDir);
     if (inventory.status !== "skipped") {
       outcomes.push(skipped("quota", `${inventory.detail}; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`));
+    } else if (!optionalConsented(options, "quota")) {
+      outcomes.push(skipped("quota", optionalOfferDetail("quota")));
     } else {
       const installed = await installQuotaIfMissing(executor, { configDir: options.configDir });
       switch (installed.status) {
@@ -526,7 +548,15 @@ export async function runDepsUpgrades(
         ),
       );
     } else {
-      outcomes.push(mapCodegraph("codegraph", await ensureCodegraph(executor, { configDir: options.configDir })));
+      // Confirmed provider update for an npm-global install (explicit approval
+      // path only). Anything else keeps the existing install/report-only rules.
+      const provider = await codegraphProviderState(executor);
+      if (provider.npmGlobal && provider.installed !== null && provider.latest !== null && compareDotted(provider.installed, provider.latest) < 0) {
+        const applied = await upgradeCodegraphExternal(executor, provider.latest);
+        outcomes.push({ component: "codegraph", status: applied.status, detail: applied.detail, mutated: applied.mutated });
+      } else {
+        outcomes.push(mapCodegraph("codegraph", await ensureCodegraph(executor, { configDir: options.configDir })));
+      }
     }
   } catch (error) {
     outcomes.push({

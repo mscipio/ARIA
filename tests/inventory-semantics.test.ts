@@ -230,7 +230,7 @@ const TARGET_107: AriaAvailableTarget = {
   spec: "github:mscipio/ARIA#v1.0.7",
 };
 
-const QUOTA_SPEC_502 = "@slkiser/opencode-quota@5.0.2";
+const QUOTA_SPEC_502 = "@slkiser/opencode-quota@6.0.2";
 const QUOTA_LATEST = "@slkiser/opencode-quota@latest";
 const QUOTA_FOREIGN = "/home/u/libs/@slkiser/opencode-quota";
 const QUOTA_V4 = "@slkiser/opencode-quota@4.10.8";
@@ -317,7 +317,7 @@ describe("T007 upgrade component categories", () => {
       probeExecutor(
         {
           lsRemote: LS_REMOTE_SAMPLE,
-          pluginList: pluginList([[QUOTA_PLUGIN_ID, "5.0.2", QUOTA_SPEC_502]]),
+          pluginList: pluginList([[QUOTA_PLUGIN_ID, "6.0.2", QUOTA_SPEC_502]]),
           mcpList: CONNECTED_MCP_WITH_ZOTPILOT,
           engramVersion: "engram 1.20.0",
           codegraphVersion: "codegraph 1.3.1",
@@ -333,7 +333,7 @@ describe("T007 upgrade component categories", () => {
     for (const name of ["engram", "codegraph", "zotpilot", "quota"] as const) {
       expect(byName.get(name)?.status).toBe("unmanaged-observed");
     }
-    expect(byName.get("quota")?.installed).toBe("5.0.2");
+    expect(byName.get("quota")?.installed).toBe("6.0.2");
     expect(result.selfUpgradeBlocked).toBe(false);
     expectUpgradeReadOnly(calls);
     await expectByteIdentical(root, before);
@@ -367,7 +367,7 @@ describe("T007 upgrade component categories", () => {
     const result = await checkUpgradeInventory(
       probeExecutor(
         {
-          pluginList: pluginList([[QUOTA_PLUGIN_ID, "5.0.2", QUOTA_LATEST]]),
+          pluginList: pluginList([[QUOTA_PLUGIN_ID, "6.0.2", QUOTA_LATEST]]),
           mcpList: CONNECTED_MCP_LIST,
         },
         calls,
@@ -395,7 +395,7 @@ describe("T007 upgrade component categories", () => {
       const result = await checkUpgradeInventory(
         probeExecutor(
           {
-            pluginList: pluginList([["quota-entry", "5.0.2", spec]]),
+            pluginList: pluginList([["quota-entry", "6.0.2", spec]]),
             mcpList: CONNECTED_MCP_LIST,
           },
           calls,
@@ -429,7 +429,7 @@ describe("T007 quota @latest stays unknown-target with no mutation", () => {
     const executor: Executor = async (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
       if (command === "opencode" && args[0] === "plugin") {
-        return { stdout: pluginList([[QUOTA_PLUGIN_ID, "5.0.2", QUOTA_LATEST]]), stderr: "" };
+        return { stdout: pluginList([[QUOTA_PLUGIN_ID, "6.0.2", QUOTA_LATEST]]), stderr: "" };
       }
       throw new Error(`unexpected call (updater must never run): ${command} ${args.join(" ")}`);
     };
@@ -457,7 +457,7 @@ describe("T007 quota @latest stays unknown-target with no mutation", () => {
     const executor: Executor = async (command, args) => {
       calls.push(`${command} ${args.join(" ")}`);
       if (command === "opencode" && args[0] === "plugin") {
-        return { stdout: pluginList([[QUOTA_PLUGIN_ID, "5.0.2", QUOTA_LATEST]]), stderr: "" };
+        return { stdout: pluginList([[QUOTA_PLUGIN_ID, "6.0.2", QUOTA_LATEST]]), stderr: "" };
       }
       throw new Error(`unexpected call (updater must never run): ${command} ${args.join(" ")}`);
     };
@@ -475,9 +475,9 @@ describe("T007 quota @latest stays unknown-target with no mutation", () => {
   it("covers every quota inventory category without mutation", async () => {
     const cases: Array<{ specs: string[]; rows: Array<[string, string, string]>; status: string }> = [
       { specs: [], rows: [], status: "skipped" },
-      { specs: [QUOTA_SPEC_502], rows: [[QUOTA_PLUGIN_ID, "5.0.2", QUOTA_SPEC_502]], status: "unmanaged-observed" },
-      { specs: [QUOTA_LATEST], rows: [[QUOTA_PLUGIN_ID, "5.0.2", QUOTA_LATEST]], status: "unknown-target" },
-      { specs: [QUOTA_FOREIGN], rows: [["quota-entry", "5.0.2", QUOTA_FOREIGN]], status: "unsupported-ownership" },
+      { specs: [QUOTA_SPEC_502], rows: [[QUOTA_PLUGIN_ID, "6.0.2", QUOTA_SPEC_502]], status: "unmanaged-observed" },
+      { specs: [QUOTA_LATEST], rows: [[QUOTA_PLUGIN_ID, "6.0.2", QUOTA_LATEST]], status: "unknown-target" },
+      { specs: [QUOTA_FOREIGN], rows: [["quota-entry", "6.0.2", QUOTA_FOREIGN]], status: "unsupported-ownership" },
     ];
     for (const { specs, rows, status } of cases) {
       const root = await mkdtemp(resolve(tmpdir(), "rdc-sem-quota-cat-"));

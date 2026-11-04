@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { readPackageVersion, rollbackAgentInstall } from "./agents.js";
 import { reconcileManagedCommands, rollbackCommandInstall } from "./commands.js";
-import { codegraphUpgradeComponent } from "./codegraph.js";
+import { codegraphProviderState, codegraphUpgradeComponent } from "./codegraph.js";
 import {
   context7UpgradeComponent,
   quotaLifecycleUpgradeComponent,
@@ -20,13 +20,14 @@ import {
   type Executor,
 } from "./deps.js";
 import { doctorExitCode, runDoctor } from "./doctor.js";
-import { engramUpgradeComponent } from "./engram.js";
+import { detectEngramState, engramUpgradeComponent } from "./engram.js";
 import { classifyAriaRegistration, parsePluginList } from "./lifecycle.js";
 import { reconcileManagedAgents } from "./model-config.js";
 import { reconcileManagedAgents as reconcileAgentFiles } from "./model-config.js";
 import { openCodeGlobalDir } from "./paths.js";
+import { PLAYWRIGHT_MCP_VERSION, playwrightState } from "./playwright.js";
 import { resolveDurableAriaSkillsRoot } from "./skills.js";
-import { checkQuotaUpgrade } from "./quota.js";
+import { checkQuotaUpgrade, compareDotted, discoverQuotaTarget, quotaNodeGate, quotaOpenCodeGate } from "./quota.js";
 import { defaultGlobalConfigPath, ensureAriaSkillsRefreshFile } from "./setup-config.js";
 import { zotpilotUpgradeComponent } from "./zotpilot.js";
 
@@ -184,7 +185,12 @@ export function formatBlockedApprovalDetail(currentVersion: string | null, targe
 /** Component inventory scope bound by `--check`, approval, and handoff. */
 export const UPGRADE_COMPONENTS = ["aria", "engram", "context7", "codegraph", "zotpilot", "quota"] as const;
 
-export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number];
+/**
+ * Inventory rows: the ARIA-only upgrade handoff scope (`UPGRADE_COMPONENTS`)
+ * plus Playwright, which is inventoried for `aria deps` and console updates
+ * but is not part of the ARIA self-upgrade handoff scope.
+ */
+export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number] | "playwright";
 
 /**
  * Upgrade-action states for the `--check` Component|Installed|Available|
@@ -218,6 +224,7 @@ export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number];
  *   for ARIA this blocks self-upgrade with zero mutation.
  */
 export type UpgradeComponentStatus =
+  | "provider-upgrade-available"
   | "current"
   | "upgrade-available"
   | "remote-healthy"
@@ -269,6 +276,13 @@ export interface UpgradeCheckOptions {
    * `git ls-remote`; `null` forces unknown for tests/operator override).
    */
   availableOverride?: AriaAvailableTarget | null;
+  /**
+   * Consult provider-supported release sources (Homebrew formula for Engram,
+   * the upstream CodeGraph CLI check, npm dist-tags for Quota). Used only by
+   * the explicit update check and the upgrade proposal; the plain inventory
+   * stays offline and never reports a version it did not verify.
+   */
+  discoverProviders?: boolean;
 }
 
 export interface UpgradeCheckResult {
@@ -812,6 +826,10 @@ export async function checkUpgradeInventory(
     });
   }
 
+  // Playwright MCP: ARIA-owned pinned install (ownership marker verified by
+  // `playwrightState`) or an external package that stays report-only.
+  components.push(await playwrightInventoryRow(executor));
+
   // Quota: delegate to the T007 read-only inventory (status vocabulary shared).
   const quota = await checkQuotaUpgrade(executor, options.configDir);
   components.push({
@@ -831,7 +849,59 @@ export async function checkUpgradeInventory(
     : available.kind === "unknown"
       ? available.reason
       : null;
-  return { currentVersion, cliVersion, installedSpec, available, selfUpgradeBlocked, blockReason, components };
+  const reportedComponents = options.discoverProviders
+    ? await applyProviderUpgrades(executor, components)
+    : components;
+  return { currentVersion, cliVersion, installedSpec, available, selfUpgradeBlocked, blockReason, components: reportedComponents };
+}
+
+/** Read-only Playwright MCP inventory row (never installs or upgrades). */
+export async function playwrightInventoryRow(executor: Executor): Promise<UpgradeComponentRow> {
+  try {
+    const state = await playwrightState(executor);
+    if (state.version === null) {
+      return {
+        component: "playwright",
+        installed: null,
+        available: PLAYWRIGHT_MCP_VERSION,
+        status: "skipped",
+        detail: `Playwright MCP not installed; missing installs belong to 'aria setup' (ARIA pin ${PLAYWRIGHT_MCP_VERSION})`,
+      };
+    }
+    if (!state.managed) {
+      return {
+        component: "playwright",
+        installed: state.version,
+        available: null,
+        status: "unmanaged-observed",
+        detail: `Playwright MCP ${state.version} is not ARIA-owned (no ARIA ownership marker); report-only, never adopted automatically`,
+      };
+    }
+    if (state.version === PLAYWRIGHT_MCP_VERSION) {
+      return {
+        component: "playwright",
+        installed: state.version,
+        available: PLAYWRIGHT_MCP_VERSION,
+        status: "current",
+        detail: `ARIA-managed Playwright MCP ${state.version} matches the ARIA pin`,
+      };
+    }
+    return {
+      component: "playwright",
+      installed: state.version,
+      available: PLAYWRIGHT_MCP_VERSION,
+      status: "upgrade-available",
+      detail: `ARIA-managed Playwright MCP ${state.version}; ARIA pin is ${PLAYWRIGHT_MCP_VERSION} (upstream releases are adopted only after validation)`,
+    };
+  } catch (error) {
+    return {
+      component: "playwright",
+      installed: null,
+      available: null,
+      status: "unknown-target",
+      detail: `Playwright MCP state could not be read (${error instanceof Error ? error.message : String(error)}); report-only`,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -900,8 +970,12 @@ export function formatDepsUpgradeProposal(check: UpgradeCheckResult): string {
   for (const row of rows) {
     lines.push(`  ${row.component}: installed=${row.installed ?? "-"} available=${row.available ?? "-"} status=${row.status} — ${row.detail}`);
     const stance =
-      row.status === "unmanaged-observed"
-        ? "proposed: re-evaluated by the owning adapter on approval (unknown/unmanaged stays report-only)"
+      row.status === "upgrade-available"
+        ? `proposed: upgraded by the owning adapter to ${row.available ?? "the ARIA target"} on approval`
+      : row.status === "provider-upgrade-available"
+        ? `proposed: updated through the provider's own mechanism to ${row.available ?? "the latest release"} on approval (ARIA takes no ownership)`
+      : row.status === "unmanaged-observed"
+        ? "report-only: no supported update path for this installation (see the blocker)"
         : row.status === "remote-healthy" || row.status === "current"
           ? "no action: already healthy/current"
           : row.status === "skipped"
@@ -1361,7 +1435,11 @@ export function buildUpgradeHandoff(target: AriaAvailableTarget, check: UpgradeC
     kind: "aria-upgrade-handoff",
     handoffVersion: 1,
     target: { ...target },
-    approvedComponents: check.components.map((row) => row.component),
+    // ARIA-only handoff scope: inventory-only rows (Playwright) are never approved here.
+    approvedComponents: check.components
+      .map((row) => row.component)
+      .filter((component): component is (typeof UPGRADE_COMPONENTS)[number] =>
+        (UPGRADE_COMPONENTS as readonly string[]).includes(component)),
     before: check,
   };
 }
@@ -1394,7 +1472,9 @@ export function isHandoffMatch(
       reason: `handoff target drift: approved ${handoff.target.spec} but new release resolves ${actualTarget.spec}; stopping for fresh approval`,
     };
   }
-  if (!sameScope(handoff.approvedComponents, [...actualComponents])) {
+  // Scope is the ARIA-only handoff scope; inventory-only rows are not part of it.
+  const handoffScope = actualComponents.filter((component) => (UPGRADE_COMPONENTS as readonly string[]).includes(component));
+  if (!sameScope(handoff.approvedComponents, handoffScope)) {
     return {
       match: false,
       reason: `handoff scope drift: approved [${handoff.approvedComponents.join(", ")}] but new release inventories [${[...actualComponents].join(", ")}]; stopping for fresh approval`,
@@ -2033,4 +2113,84 @@ export function formatMigrateResult(result: MigrateRunResult): string {
 /** CLI exit code: 0 only when the migrate transition plus continuation completed. */
 export function migrateExitCode(result: MigrateRunResult): number {
   return result.ok ? 0 : 1;
+}
+
+// ---------------------------------------------------------------------------
+// Provider-supported update discovery (explicit update checks only).
+// Each function only reads: it reports a newer release when the owning
+// provider path confirms one, and otherwise keeps the row with the reason.
+// ---------------------------------------------------------------------------
+
+async function applyProviderUpgrades(executor: Executor, rows: UpgradeComponentRow[]): Promise<UpgradeComponentRow[]> {
+  const out: UpgradeComponentRow[] = [];
+  for (const row of rows) {
+    if (row.component === "engram") out.push(await engramProviderRow(executor, row));
+    else if (row.component === "codegraph") out.push(await codegraphProviderRow(executor, row));
+    else if (row.component === "quota") out.push(await quotaProviderRow(executor, row));
+    else out.push(row);
+  }
+  return out;
+}
+
+async function engramProviderRow(executor: Executor, row: UpgradeComponentRow): Promise<UpgradeComponentRow> {
+  if (row.installed === null) return row;
+  const state = await detectEngramState(executor);
+  if (state.channel !== "homebrew") {
+    return { ...row, detail: `${row.detail}; not Homebrew-managed, so no provider update path` };
+  }
+  try {
+    const info = await executor("brew", ["info", "--json=v2", ENGRAM_HOMEBREW_FORMULA], {
+      env: { HOMEBREW_NO_AUTO_UPDATE: "1" },
+    });
+    const parsed = JSON.parse(info.stdout) as { formulae?: Array<{ versions?: { stable?: unknown } }> };
+    const stable = parsed.formulae?.[0]?.versions?.stable;
+    if (typeof stable !== "string" || !/^\d+\.\d+\.\d+$/.test(stable)) {
+      return { ...row, detail: `${row.detail}; Homebrew formula version unknown` };
+    }
+    if (compareDotted(row.installed, stable) < 0) {
+      return {
+        ...row,
+        available: stable,
+        status: "provider-upgrade-available",
+        detail: `Engram ${row.installed} via Homebrew formula ${ENGRAM_HOMEBREW_FORMULA}; supported update: brew upgrade to ${stable} (ARIA Engram adapter)`,
+      };
+    }
+    return { ...row, available: stable, detail: `${row.detail}; up to date with Homebrew ${stable}` };
+  } catch {
+    return { ...row, detail: `${row.detail}; Homebrew formula version unavailable` };
+  }
+}
+
+async function codegraphProviderRow(executor: Executor, row: UpgradeComponentRow): Promise<UpgradeComponentRow> {
+  if (row.installed === null) return row;
+  const state = await codegraphProviderState(executor);
+  if (!state.npmGlobal) return { ...row, detail: `${row.detail}; ${state.detail}; no provider update path` };
+  if (state.latest !== null && compareDotted(row.installed, state.latest) < 0) {
+    return {
+      ...row,
+      available: state.latest,
+      status: "provider-upgrade-available",
+      detail: `CodeGraph ${row.installed} npm-global; supported update: codegraph upgrade ${state.latest} (upstream CLI; MCP registration untouched)`,
+    };
+  }
+  return { ...row, available: state.latest, detail: `${row.detail}; ${state.latest ? `up to date with ${state.latest}` : "latest release unknown"}` };
+}
+
+async function quotaProviderRow(executor: Executor, row: UpgradeComponentRow): Promise<UpgradeComponentRow> {
+  if (row.status !== "unmanaged-observed" || row.installed === null) return row;
+  const openCode = await quotaOpenCodeGate(executor);
+  if (!openCode.ok) return { ...row, detail: `${row.detail}; ${openCode.reason}` };
+  const node = await quotaNodeGate(executor);
+  if (!node.ok) return { ...row, detail: `${row.detail}; ${node.reason}` };
+  const target = await discoverQuotaTarget(executor);
+  if (!target.ok) return { ...row, detail: `${row.detail}; ${target.reason}` };
+  if (compareDotted(row.installed, target.version) < 0) {
+    return {
+      ...row,
+      available: target.version,
+      status: "provider-upgrade-available",
+      detail: `Quota ${row.installed} identified; supported update: targeted 'opencode plugin update @slkiser/opencode-quota' to ${target.version}`,
+    };
+  }
+  return { ...row, available: target.version, detail: `${row.detail}; up to date with Quota ${target.version}` };
 }

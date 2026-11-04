@@ -68,4 +68,36 @@ export declare function ensureCodegraph(executor: Executor, options?: CodegraphL
  * are discovered at runtime (never a version database).
  */
 export declare function codegraphUpgradeComponent(ctx: ComponentContext): Promise<ComponentUpgradeOutcome>;
+export declare const CODEGRAPH_NPM_PACKAGE = "@colbymchenry/codegraph";
+/** Latest release reported by `codegraph upgrade --check` (read-only), or null. */
+export declare function parseCodegraphLatest(output: string): string | null;
+/**
+ * Provenance: the active `codegraph` binary resolves into the npm global
+ * prefix's CodeGraph package. Anything else (npx, local checkout, unknown)
+ * is not eligible for the provider update.
+ */
+export declare function codegraphProvenance(executor: Executor): Promise<{
+    npmGlobal: boolean;
+    path: string | null;
+    detail: string;
+}>;
+/** Read-only provider state: installed version, provenance, and the upstream latest. */
+export declare function codegraphProviderState(executor: Executor): Promise<{
+    installed: string | null;
+    latest: string | null;
+    npmGlobal: boolean;
+    detail: string;
+}>;
+export type CodegraphExternalUpgradeStatus = "completed" | "skipped" | "unresolved";
+/**
+ * Apply the upstream `codegraph upgrade <target>` for an npm-global install.
+ * Verification: the installed binary must report exactly the target. The
+ * upstream update is not reversible by ARIA, so a failed verification is
+ * reported as unresolved with the observed version, never claimed as rolled back.
+ */
+export declare function upgradeCodegraphExternal(executor: Executor, target: string): Promise<{
+    status: CodegraphExternalUpgradeStatus;
+    mutated: boolean;
+    detail: string;
+}>;
 //# sourceMappingURL=codegraph.d.ts.map

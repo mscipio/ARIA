@@ -47,14 +47,22 @@
 //   written; ambiguous ownership fails closed report-only with zero mutation.
 // ---------------------------------------------------------------------------
 import { installQuotaIfMissing } from "./bootstrap.js";
-import { detectCodegraphState, ensureCodegraph } from "./codegraph.js";
+import { codegraphProviderState, detectCodegraphState, ensureCodegraph, upgradeCodegraphExternal } from "./codegraph.js";
 import { defaultExecutor, detectContext7, syncContext7 } from "./deps.js";
 import { detectEngramState, ensureEngram } from "./engram.js";
-import { checkQuotaUpgrade, upgradeQuota } from "./quota.js";
+import { checkQuotaUpgrade, compareDotted, upgradeQuota } from "./quota.js";
 import { detectZotpilotState, ensureZotpilot } from "./zotpilot.js";
 import { setupPlaywright, syncPlaywrightConfig, upgradePlaywright } from "./playwright.js";
 /** Bootstrap-stack component names (ARIA self-upgrade is separate, T011). */
 export const DEPENDENCY_COMPONENTS = ["engram", "codegraph", "zotpilot", "quota", "context7", "playwright"];
+/** Optional components that setup installs only with explicit consent. */
+export const OPTIONAL_INSTALL_COMPONENTS = ["quota", "zotpilot"];
+function optionalConsented(options, component) {
+    return options.optionalInstalls?.includes(component) === true;
+}
+function optionalOfferDetail(component) {
+    return `optional and not installed; install only with consent: aria setup --install-optional ${component}`;
+}
 function completed(component, detail, mutated) {
     return { component, status: "completed", detail, mutated };
 }
@@ -73,7 +81,7 @@ function failed(component, detail, rolledBack) {
  * - Absent (`checkQuotaUpgrade` skipped) → install-if-missing via the T016
  *   demonstrated-safe native `opencode plugin add <exact 5.x>` after `npm
  *   view` discovery (XDG-guarded, validated, snapshot rollback).
- * - Positively identified Quota 5 (`unmanaged-observed`) → gated native
+ * - Positively identified Quota 6 (`unmanaged-observed`) → gated native
  *   update via the T007 adapter (owned-outdated → update, current →
  *   normalize/validate as `already-current`).
  * - Ambiguous/unsupported (`unknown-target`/`unsupported-ownership`) →
@@ -268,6 +276,9 @@ export async function runSetupDependencies(executor, options = {}) {
                 : `existing ${initial.registration} zotpilot registration observed`;
             outcomes.push(skipped("zotpilot", `${shape}; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`));
         }
+        else if (!optionalConsented(options, "zotpilot")) {
+            outcomes.push(skipped("zotpilot", optionalOfferDetail("zotpilot")));
+        }
         else {
             const zotpilot = await ensureZotpilot(executor, { configDir: options.configDir, homeDir: options.homeDir });
             outcomes.push(mapZotpilot("zotpilot", zotpilot));
@@ -289,6 +300,9 @@ export async function runSetupDependencies(executor, options = {}) {
         const inventory = await checkQuotaUpgrade(executor, options.configDir);
         if (inventory.status !== "skipped") {
             outcomes.push(skipped("quota", `${inventory.detail}; setup leaves present installs untouched (version upgrades belong to 'aria deps --upgrade')`));
+        }
+        else if (!optionalConsented(options, "quota")) {
+            outcomes.push(skipped("quota", optionalOfferDetail("quota")));
         }
         else {
             const installed = await installQuotaIfMissing(executor, { configDir: options.configDir });
@@ -416,7 +430,16 @@ export async function runDepsUpgrades(executor = defaultExecutor, options = {}) 
             outcomes.push(skipped("codegraph", "CodeGraph not installed; missing installs belong to `aria setup` (confirmed upgrades only move existing managed targets)"));
         }
         else {
-            outcomes.push(mapCodegraph("codegraph", await ensureCodegraph(executor, { configDir: options.configDir })));
+            // Confirmed provider update for an npm-global install (explicit approval
+            // path only). Anything else keeps the existing install/report-only rules.
+            const provider = await codegraphProviderState(executor);
+            if (provider.npmGlobal && provider.installed !== null && provider.latest !== null && compareDotted(provider.installed, provider.latest) < 0) {
+                const applied = await upgradeCodegraphExternal(executor, provider.latest);
+                outcomes.push({ component: "codegraph", status: applied.status, detail: applied.detail, mutated: applied.mutated });
+            }
+            else {
+                outcomes.push(mapCodegraph("codegraph", await ensureCodegraph(executor, { configDir: options.configDir })));
+            }
         }
     }
     catch (error) {

@@ -34,7 +34,7 @@
 //   owns setup/upgrade wiring).
 // ---------------------------------------------------------------------------
 
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -372,4 +372,126 @@ export async function codegraphUpgradeComponent(ctx: ComponentContext): Promise<
         mutated: true,
       };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Provider-supported update for an EXTERNAL npm-global CodeGraph install.
+//
+// ARIA does not take ownership of a CodeGraph it did not install. The only
+// update performed is the upstream CLI's own `codegraph upgrade <version>`,
+// and only when provenance is positively the npm-global package and the
+// upstream `codegraph upgrade --check` reports a newer release. The MCP
+// registration is never touched. Available only through runDepsUpgrades
+// (explicit approval); setup never calls it.
+// ---------------------------------------------------------------------------
+
+export const CODEGRAPH_NPM_PACKAGE = "@colbymchenry/codegraph";
+
+// Strips the SGR colour codes the upstream CLI prints.
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
+
+/** Latest release reported by `codegraph upgrade --check` (read-only), or null. */
+export function parseCodegraphLatest(output: string): string | null {
+  const match = output.replace(ANSI_RE, "").match(/latest\s+v?(\d+\.\d+\.\d+)/);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Provenance: the active `codegraph` binary resolves into the npm global
+ * prefix's CodeGraph package. Anything else (npx, local checkout, unknown)
+ * is not eligible for the provider update.
+ */
+export async function codegraphProvenance(executor: Executor): Promise<{ npmGlobal: boolean; path: string | null; detail: string }> {
+  let binary: string | null = null;
+  try {
+    const which = await executor("which", ["codegraph"]);
+    binary = which.stdout.split("\n")[0]?.trim() || null;
+  } catch {
+    binary = null;
+  }
+  if (binary === null) return { npmGlobal: false, path: null, detail: "codegraph binary not found on PATH" };
+  let resolved: string;
+  try {
+    resolved = await realpath(binary);
+  } catch {
+    return { npmGlobal: false, path: binary, detail: `${binary} could not be resolved` };
+  }
+  let npmRoot: string;
+  try {
+    npmRoot = (await executor("npm", ["root", "-g"])).stdout.trim();
+  } catch {
+    return { npmGlobal: false, path: resolved, detail: "npm global prefix could not be read" };
+  }
+  const packageDir = join(npmRoot, ...CODEGRAPH_NPM_PACKAGE.split("/"));
+  const npmGlobal = resolved === packageDir || resolved.startsWith(`${packageDir}/`);
+  return {
+    npmGlobal,
+    path: resolved,
+    detail: npmGlobal
+      ? `npm-global install at ${packageDir}`
+      : `binary resolves to ${resolved}, outside the npm global ${CODEGRAPH_NPM_PACKAGE} package; not eligible`,
+  };
+}
+
+/** Read-only provider state: installed version, provenance, and the upstream latest. */
+export async function codegraphProviderState(executor: Executor): Promise<{
+  installed: string | null;
+  latest: string | null;
+  npmGlobal: boolean;
+  detail: string;
+}> {
+  const provenance = await codegraphProvenance(executor);
+  let installed: string | null = null;
+  try {
+    installed = (await detectCodeGraph(executor)).version ?? null;
+  } catch {
+    installed = null;
+  }
+  let latest: string | null = null;
+  try {
+    latest = parseCodegraphLatest((await executor("codegraph", ["upgrade", "--check"])).stdout);
+  } catch {
+    latest = null;
+  }
+  return { installed, latest, npmGlobal: provenance.npmGlobal, detail: provenance.detail };
+}
+
+export type CodegraphExternalUpgradeStatus = "completed" | "skipped" | "unresolved";
+
+/**
+ * Apply the upstream `codegraph upgrade <target>` for an npm-global install.
+ * Verification: the installed binary must report exactly the target. The
+ * upstream update is not reversible by ARIA, so a failed verification is
+ * reported as unresolved with the observed version, never claimed as rolled back.
+ */
+export async function upgradeCodegraphExternal(
+  executor: Executor,
+  target: string,
+): Promise<{ status: CodegraphExternalUpgradeStatus; mutated: boolean; detail: string }> {
+  if (!/^\d+\.\d+\.\d+$/.test(target)) {
+    return { status: "skipped", mutated: false, detail: `CodeGraph target ${target} is not an exact release; no update attempted` };
+  }
+  const provenance = await codegraphProvenance(executor);
+  if (!provenance.npmGlobal) {
+    return { status: "skipped", mutated: false, detail: `CodeGraph update not attempted: ${provenance.detail}` };
+  }
+  try {
+    await executor("codegraph", ["upgrade", target]);
+  } catch (error) {
+    return {
+      status: "unresolved",
+      mutated: true,
+      detail: `codegraph upgrade ${target} failed (${error instanceof Error ? error.message : String(error)}); the upstream CLI owns this install, so ARIA reports rather than rolls back`,
+    };
+  }
+  const verified = await detectCodeGraph(executor).catch(() => ({ found: false, version: null }));
+  if (verified.version === target) {
+    return { status: "completed", mutated: true, detail: `CodeGraph upgraded to ${target} via 'codegraph upgrade ${target}'; MCP registration untouched` };
+  }
+  return {
+    status: "unresolved",
+    mutated: true,
+    detail: `codegraph upgrade ${target} ran but the installed version reads ${verified.version ?? "unknown"}; ARIA did not claim success`,
+  };
 }

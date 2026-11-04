@@ -54,11 +54,12 @@ import {
 } from "./list-convergence.js";
 import { openCodeGlobalDir } from "./paths.js";
 import {
-  QUOTA_MAJOR,
   QUOTA_PACKAGE_NAME,
   quotaEntriesFromPluginList,
-  quotaMajor,
   quotaSpecsFromConfig,
+  discoverQuotaTarget,
+  quotaNodeGate,
+  quotaOpenCodeGate,
 } from "./quota.js";
 
 // ---------------------------------------------------------------------------
@@ -128,7 +129,7 @@ export const BOOTSTRAP_EVIDENCE: BootstrapEvidence[] = [
   {
     component: "quota",
     missingPath: "install",
-    discovery: "`npm view @slkiser/opencode-quota version` (npm's normal mechanism); only exact-semver Quota 5 proceeds",
+    discovery: "`npm view @slkiser/opencode-quota version` (npm's normal mechanism); only the exact-semver Quota 6 major proceeds",
     installCommands: ["opencode plugin add @slkiser/opencode-quota@<discovered-5.x>"],
     safety:
       "Absent-only (plugin list recognized with zero quota rows AND global config with zero quota specs); OpenCode's native installer targets the XDG-contained global config; divergent explicit configDir fails closed (same XDG guard as the T007 upgrade adapter). Post-install validation (plugin list carries quota exactly once + config carries a quota entry + unrelated specs preserved) with config-snapshot rollback.",
@@ -427,7 +428,7 @@ export async function installCodegraphIfMissing(
     return {
       status: "validation-failed",
       installedVersion: discovered.version,
-      detail: `post-install validation failed (${problem}). ${rolledBack ? `Global config restored (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed binary is left in place and reported, never guessed.`,
+      detail: `post-install validation failed (${problem}). ${rolledBack ? `Global config restored (${snapshot.path}); ARIA does not revert the installed package.` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed binary is left in place and reported, never guessed.`,
       mutated: true,
       rolledBack,
     };
@@ -563,7 +564,7 @@ export async function installZotpilotIfMissing(
     return {
       status: "validation-failed",
       installedVersion: discovered.version,
-      detail: `post-install validation failed (${problem}). ${rolledBack ? `Global config restored (${snapshot.path}).` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed package is left in place and reported, never guessed.`,
+      detail: `post-install validation failed (${problem}). ${rolledBack ? `Global config restored (${snapshot.path}); ARIA does not revert the installed package.` : `Global config restore failed; ${snapshot.path} is exactly as left.`} The installed package is left in place and reported, never guessed.`,
       mutated: true,
       rolledBack,
     };
@@ -575,19 +576,9 @@ export async function installZotpilotIfMissing(
 // Quota — install-if-missing (new, T016; setup/sync wiring is T017's job)
 // ---------------------------------------------------------------------------
 
-/** Discover current Quota upstream via npm's normal mechanism (no database). Only exact Quota 5 proceeds. */
+/** Discover current Quota upstream via npm's normal mechanism (no database). Only the exact Quota 6 major proceeds. */
 export async function discoverQuotaLatest(executor: Executor): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
-  try {
-    const result = await executor("npm", ["view", QUOTA_PACKAGE_NAME, "version"]);
-    const version = parseExactVersion(result.stdout);
-    if (version === null) return { ok: false, reason: `npm view ${QUOTA_PACKAGE_NAME} version produced no exact release` };
-    if (quotaMajor(version) !== QUOTA_MAJOR) {
-      return { ok: false, reason: `npm view ${QUOTA_PACKAGE_NAME} version is ${version} (this policy installs only Quota ${QUOTA_MAJOR}); leaving untouched` };
-    }
-    return { ok: true, version };
-  } catch (error) {
-    return { ok: false, reason: `npm view ${QUOTA_PACKAGE_NAME} version failed: ${error instanceof Error ? error.message : String(error)}` };
-  }
+  return discoverQuotaTarget(executor);
 }
 
 /** Every plugin spec string in the parsed global config (string/tuple/object forms; mirrors quota.ts). */
@@ -659,6 +650,12 @@ export async function installQuotaIfMissing(executor: Executor, options: QuotaIn
   if (observed.length > 0) {
     return report("already-present", null, `quota target already observed (${observed[0]}); existing installations defer to the T007 upgrade-only adapter with zero mutation here`);
   }
+  // Runtime compatibility is proven before any mutation: Quota's terminal
+  // commands need a newer Node than ARIA declares, so that is refused here.
+  const openCode = await quotaOpenCodeGate(executor);
+  if (!openCode.ok) return report("report-only", null, `${openCode.reason}; leaving Quota untouched`);
+  const node = await quotaNodeGate(executor);
+  if (!node.ok) return report("report-only", null, `${node.reason}; leaving Quota untouched`);
   const discovered = await discoverQuotaLatest(executor);
   if (!discovered.ok) return { status: "install-failed", installedVersion: null, detail: discovered.reason, mutated: false };
   const spec = `${QUOTA_PACKAGE_NAME}@${discovered.version}`;

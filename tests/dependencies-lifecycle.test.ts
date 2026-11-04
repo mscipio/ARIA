@@ -378,8 +378,9 @@ describe("T017 shared lifecycle orchestration runs all five adapters", () => {
       calls,
     );
     const result = await runSetupDependencies(executor, { configDir });
+    // Every shared-lifecycle component reports an outcome, Playwright included.
     expect(result.outcomes.map((outcome) => outcome.component).sort()).toEqual(
-      ["codegraph", "context7", "engram", "quota", "zotpilot"].sort(),
+      ["codegraph", "context7", "engram", "playwright", "quota", "zotpilot"].sort(),
     );
     expect(result.report).toContain("Dependency lifecycle report");
     // No version database: discovery ran through package-manager probes only.

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 
 import { CODEGRAPH_MCP_COMMAND } from "../src/bootstrap.js";
 import { runSetupDependencies } from "../src/dependencies.js";
@@ -84,7 +84,8 @@ const THIRD_PARTY_MUTATIONS = [
 ];
 
 function hasThirdPartyMutation(calls: string[]): boolean {
-  return calls.some((call) => THIRD_PARTY_MUTATIONS.some((mutation) => call.startsWith(mutation)));
+  // Read-only `--check` probes (e.g. `codegraph upgrade --check`) are not mutations.
+  return calls.some((call) => !call.endsWith(" --check") && THIRD_PARTY_MUTATIONS.some((mutation) => call.startsWith(mutation)));
 }
 
 const TARGET_107: AriaAvailableTarget = {
@@ -120,6 +121,7 @@ describe("T002 setup installs a missing required dependency", () => {
         return { stdout: ["codegraph connected", "1 server(s)"].join("\n"), stderr: "" };
       }
       if (key === "npm view @slkiser/opencode-quota version") throw new Error("network unavailable");
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       if (key === "opencode --version") return { stdout: "opencode 2.0.23", stderr: "" };
       throw new Error(`Unexpected command: ${key}`);
     };
@@ -156,6 +158,7 @@ describe("T002 setup leaves an already-present older dependency untouched", () =
       if (key === "zotpilot --version") return { stdout: "zotpilot 0.5.3", stderr: "" };
       if (key === "opencode plugin list") return { stdout: "No plugins found", stderr: "" };
       if (key === "npm view @slkiser/opencode-quota version") throw new Error("network unavailable");
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       if (key === "opencode --version") return { stdout: "opencode 2.0.23", stderr: "" };
       if (key.startsWith("npm view @colbymchenry/codegraph")) return { stdout: "9.9.9", stderr: "" };
       throw new Error(`Unexpected command: ${key}`);
@@ -203,10 +206,23 @@ describe("T002 rerun setup on a complete installation is idempotent", () => {
       if (key === "opencode plugin list") return { stdout: "No plugins found", stderr: "" };
       if (key === "opencode mcp list") return { stdout: "MCP Servers\n", stderr: "" };
       if (key === "npm view @slkiser/opencode-quota version") throw new Error("network unavailable");
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       if (key === "opencode --version") return { stdout: "opencode 2.0.23", stderr: "" };
       throw new Error(`Unexpected command: ${key}`);
     };
 
+    // A complete, ARIA-owned Playwright install (marker, pinned package, matching Chromium)
+    // so the rerun exercises the idempotent "already complete" path.
+    const playwright = await provisionCompletePlaywright();
+    try {
+      await runIdempotencyCheck(executor, configDir, root);
+    } finally {
+      await playwright.cleanup();
+    }
+  });
+});
+
+async function runIdempotencyCheck(executor: Executor, configDir: string, root: string): Promise<void> {
     const first = await runSetupDependencies(executor, { configDir });
     const before = await snapshotTree(root);
     const secondCalls: string[] = [];
@@ -225,8 +241,24 @@ describe("T002 rerun setup on a complete installation is idempotent", () => {
     expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
     for (const [path, bytes] of before) expect(after.get(path)).toBe(bytes);
     void first;
-  });
-});
+}
+
+/** Complete ARIA-owned Playwright fixture in the sandboxed data root (read by the real adapter). */
+async function provisionCompletePlaywright(): Promise<{ cleanup: () => Promise<void> }> {
+  const { mkdir: makeDir, writeFile: write, chmod: setMode, rm: remove } = await import("node:fs/promises");
+  const { dirname: dirOf, join: joinPath } = await import("node:path");
+  const base = joinPath(process.env.XDG_DATA_HOME ?? "", "aria", "playwright-mcp");
+  await makeDir(joinPath(base, "node_modules", "@playwright", "mcp"), { recursive: true });
+  await write(joinPath(base, "aria-managed.json"), JSON.stringify({ owner: "aria", package: "@playwright/mcp", version: "0.0.83" }));
+  await write(joinPath(base, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.83" }));
+  await makeDir(joinPath(base, "node_modules", "playwright-core"), { recursive: true });
+  await write(joinPath(base, "node_modules", "playwright-core", "browsers.json"), JSON.stringify({ browsers: [{ name: "chromium", revision: "1" }] }));
+  const executable = joinPath(base, "browsers", "chromium-1", "chrome-linux", "chrome");
+  await makeDir(dirOf(executable), { recursive: true });
+  await write(executable, "#!/bin/sh\n");
+  await setMode(executable, 0o755);
+  return { cleanup: () => remove(base, { recursive: true, force: true }) };
+}
 
 describe("T002 doctor performs no writes", () => {
   it("leaves the filesystem byte-identical with no mutating executor calls", async () => {
@@ -262,6 +294,7 @@ describe("T002 doctor performs no writes", () => {
 
 describe("R001 complete setup path is install-only with no version-chasing sync", () => {
   it("leaves an older present Engram untouched, never runs brew update/upgrade, and reruns idempotently", async () => {
+    onTestFinished((await provisionCompletePlaywright()).cleanup);
     const checkoutRoot = await makeTempRoot("rdc-r001-checkout-");
     const binDir = resolve(checkoutRoot, "checkout", "bin");
     await mkdir(binDir, { recursive: true });
@@ -290,7 +323,9 @@ describe("R001 complete setup path is install-only with no version-chasing sync"
       if (key === "opencode mcp list") return { stdout: "MCP Servers\n", stderr: "" };
       if (key === "zotpilot --version") return { stdout: "zotpilot 0.5.3", stderr: "" };
       if (key === "npm view @slkiser/opencode-quota version") throw new Error("network unavailable");
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       if (key === "opencode --version") return { stdout: "opencode 2.0.23", stderr: "" };
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       throw new Error(`Unexpected command: ${key}`);
     };
 

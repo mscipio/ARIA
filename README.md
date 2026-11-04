@@ -111,7 +111,7 @@ Tags before v1.1.0 predate the current v1.1.x line and are retained unchanged.
 
 ## Configuration
 
-ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. Project `aria.json` is read-only; the global file may be created manually or written interactively by `aria models --config` (see below).
+ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. The global file may be created manually or written by `aria models` or `aria models --config` (see below). The project `aria.json` is written only by `aria models` (project scope); `aria models --config` never writes it.
 
 | File | Path | Scope |
 |------|------|-------|
@@ -152,11 +152,13 @@ ARIA currently requires three external integrations. ARIA does not fork, vendor,
 | [Context7](https://github.com/upstash/context7) | Current external library, framework, and API documentation | Remote MCP endpoint |
 | [CodeGraph](https://github.com/colbymchenry/codegraph) | Codebase intelligence for structure and impact | `@colbymchenry/codegraph` |
 
-### Quota 5 (optional, safety-gated)
+### OpenCode Quota 6 (optional, safety-gated)
 
-OpenCode Quota 5 is optional: the setup bootstrap lifecycle installs it only when positively absent (install-missing-only with validation and rollback where feasible; setup never upgrades present installs). Ambiguous, observed, or unsupported targets stay observed-but-unmanaged with zero mutation — setup leaves present installs untouched. `aria deps` remains a read-only inventory and does not independently chase or install Quota (`SyncResult` carries no quota field). Quota is therefore absent from the required-dependency plan above. A Quota 5 version upgrade belongs exclusively to `aria deps --upgrade` and proceeds only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
+OpenCode Quota is optional and installed only with explicit consent (`aria setup --install-optional quota`). When consented and positively absent, the bootstrap lifecycle installs the supported Quota 6 major, exact release, and verifies it; on a failed validation ARIA restores the global config file only (the installed package is not reverted); setup never upgrades present installs. A Quota installation outside the supported major (for example the current 6.x upstream) is reported with the reason and is never downgraded. Ambiguous, observed, or unsupported targets stay observed-but-unmanaged with zero mutation — setup leaves present installs untouched. `aria deps` remains a read-only inventory and does not independently chase or install Quota (`SyncResult` carries no quota field). Quota is therefore absent from the required-dependency plan above. A Quota 5 version upgrade belongs exclusively to `aria deps --upgrade` and proceeds only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
 
 ### Commands
+
+Run `aria` with no arguments in an interactive terminal to open the **ARIA Management Console**: one keyboard-driven screen for Models & Agents, Setup & Repair, Doctor, Plugins & MCPs, and Updates. It is a presentation layer over the same commands listed below and makes no external call until you ask for one: Doctor and Plugins load on Enter, Updates check on Enter, and Setup, ARIA upgrade, and dependency upgrade each require a `Y` confirmation before anything changes; model changes are saved only by the explicit `S` key. `↑`/`↓` move, `Enter` opens or runs, `Esc` goes back or cancels, `Q` quits from the menu, and `Ctrl+C` exits (a second press force-quits while a configuration change is running). Without an interactive terminal, bare `aria` prints this command help.
 
 Public CLI surface (see `aria --help`):
 
@@ -170,7 +172,8 @@ aria doctor               # Read-only health check of ARIA (package, config, rou
 aria upgrade              # Show upgrade inventory without mutation (requires --yes to apply; ARIA-only)
 aria upgrade --check      # Read-only upgrade inventory (current + available releases, component table)
 aria upgrade --yes        # Approve and run the ARIA-only upgrade pipeline
-aria models               # Print resolved model routes for each ARIA role (compact role/model/effort table)
+aria models               # Interactive model manager (terminal): change the model and variant per ARIA agent
+aria models --show        # Read-only table of effective assignments, variants, and configuration sources
 aria models --config      # Interactively configure ARIA role models (the v1.1.x configuration surface)
 aria deps                 # Read-only dependency inventory (plugins/MCPs with observed versions)
 aria deps --upgrade       # Check and propose managed dependency upgrades (zero mutation; re-run with --yes to apply)
@@ -187,7 +190,7 @@ Retired commands are rejected with guidance and are not supported: `aria configu
 
 First install and bootstrap: registers the ARIA plugin globally with OpenCode, then idempotently reconciles registration, global configuration, managed agent files, packaged skills, and the two managed slash-command files in `~/.config/opencode/commands/`. Existing unmanaged conflicts are backed up; unrelated user commands are preserved. It installs required managed dependencies only when missing and never version-chases present ones — upgrades belong to `aria deps --upgrade`. Package-owned skills use OpenCode's V2 `skills: string[]` configuration and are resolved from the durable skills root below. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
 
-- **First run**: registers the plugin, then installs missing dependencies.
+- **First run**: registers the plugin, then installs missing **required** dependencies (Engram, Context7, CodeGraph, Playwright MCP). Optional dependencies (OpenCode Quota, ZotPilot) are never installed without consent: pass `aria setup --install-optional quota,zotpilot` (or a subset) to install them, or use the console's Setup & Repair section, which checks first and asks before installing.
 - **Repeated runs**: reports `already registered`, skips duplicate global registration, and still reconciles configuration/agents/skills and installs anything missing (itself idempotent) — without upgrading anything already present.
 - **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks the dependency install.
 
@@ -240,6 +243,21 @@ Run `/aria-release VERSION --check|--full-check|--publish [--tag TAG]` or the sa
 
 ### `aria deps`
 
+Read-only dependency inventory. It lists the ARIA-managed dependencies with installed and available versions where known, and then every integration OpenCode actually loads (plugins from `opencode plugin list`, MCP servers from `opencode mcp list`, cross-checked against the effective config's declared servers). Each integration is labeled **ARIA-managed**, **external**, **remote**, **user-managed**, or **unverified**; anything ARIA does not define is user-managed and never acted on.
+
+`aria deps --upgrade` shows the same inventory as an upgrade proposal with, for each managed dependency, the installed version, source, supported update mechanism, proposed action, and any ownership or compatibility blocker. Applying it requires `--yes`; only ARIA-owned components are upgraded. External installs stay report-only: adopting an external install into ARIA ownership is not implemented yet, so no external dependency is taken over automatically.
+
+Dependency mechanisms:
+
+| Dependency | Install (when missing) | Update | Notes |
+|---|---|---|---|
+| Engram | Homebrew formula `gentleman-programming/tap/engram` or GitHub release asset, `engram setup opencode` | Homebrew installs: `brew upgrade` to the tap's stable release, after approval; other channels report-only | the installed binary is never re-owned by ARIA |
+| Context7 | remote MCP entry in the global config | none (remote endpoint) | no client-side version exists |
+| CodeGraph | pinned npm package + ARIA `mcp.servers.codegraph` registration, validated with `opencode mcp list` | npm-global installs: `codegraph upgrade <exact version>` after approval (provenance verified; MCP registration untouched); other installs report-only | ARIA never takes ownership of an external install |
+| Playwright MCP | pinned `@playwright/mcp` in an ARIA-owned data prefix plus matching Chromium | to the ARIA pin, ARIA-owned installs only | upstream releases are adopted only after validation |
+| OpenCode Quota 6 | opt-in via `--install-optional quota` (`opencode plugin add`, exact release) | targeted `opencode plugin update @slkiser/opencode-quota` after approval; never a downgrade | requires OpenCode 2.0.26+ and Node.js 22.13+ (refused with the reason otherwise); Quota 5 installs are reported, not migrated |
+| ZotPilot | opt-in via `--install-optional zotpilot`; the user's Python environment is never taken over | none (user-managed) | discovery and health only |
+
 Read-only inventory first, explicitly approved upgrades second — a two-step with no interactive prompt:
 
 - `aria deps` — read-only inventory/status of managed plugins/MCPs (installed and available versions with per-component status). No changes are made.
@@ -272,20 +290,29 @@ A dedicated SKIP finding states the standalone limitation: `aria doctor` cannot 
 
 ### `aria models`
 
-Prints the resolved model (and effort) for every ARIA role as a compact role/model/effort table, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. The effort column is the resolved variant (`-` when the route carries none). If any configuration file is invalid the command fails with a non-zero exit code.
+Interactive model manager for the ten ARIA agents. Run it in a terminal to change the model and reasoning variant of any agent without editing configuration files. It needs a real terminal; without one it exits with a message pointing to `aria models --show`.
+
+- The table shows each agent's effective `provider/model`, its variant, and its source: `default` (packaged ARIA default), `global` (`~/.config/opencode/aria.json`), or `project` (`aria.json` in the current project), which overrides global.
+- Models come from the OpenCode catalog for the current environment (`opencode models`, plus `opencode api --standalone model.list` for variants). Only enabled, available models are offered. Variants are whatever the catalog reports for that model; when a model reports no variant metadata, only the no-variant choice is offered and nothing is guessed. No model is called and no provider credential is read or changed.
+
+Keys: `↑`/`↓` select an agent · `Enter` choose a model · `/` search models · `Enter` on a variant screen applies it · `Tab` switch global/project scope · `R` remove the override in the active scope (global: reset to the ARIA default; project: inherit the global assignment) · `S` save and apply · `Esc` back, or discard pending changes, or exit · `Ctrl+C` exit without saving.
+
+Several agents can be changed before saving; pending changes are marked with `*` and listed. `S` re-checks the models against a fresh catalog and writes nothing if any selected model or variant is no longer supported. Saving writes only the changed roles of `aria.json` (global and/or project), keeps unrelated keys and roles, and writes atomically. A global change regenerates the ARIA-managed agent files and restores the previous files if regeneration fails. Project changes never touch global files. Restart OpenCode sessions to load new assignments.
+
+`aria models --show` prints the same effective assignments as a read-only table with the configuration file in use. It does not contact OpenCode.
 
 ```
-role  model  effort
-coder  opencode-go/muse-spark-1.3-contributor  xhigh
-explorer  opencode-go/muse-spark-1.3-contributor  high
-visualizer  opencode-go/muse-spark-1.3-contributor  xhigh
-planner  openai/gpt-6-luna  xhigh
-implementer  opencode-go/muse-spark-1.3-contributor  xhigh
-reviewer  openai/gpt-6.1-sol  medium
-researcher  openai/gpt-6.1-sol  medium
-archivist  opencode-go/muse-spark-1.3-contributor  high
-writer  openai/gpt-6-luna  xhigh
-scientist  openai/gpt-6.1-sol  medium
+ARIA model assignments (read-only; no changes made)
+
+Configuration sources:
+  global   /home/you/.config/opencode/aria.json
+  project  /work/project/aria.json
+
+role         model                                   variant  source
+coder        github-copilot/gpt-6-luna               -        project
+explorer     openai/gpt-6-luna                       -        global
+visualizer   openai/gpt-6.1-sol                      high     global
+planner      openai/gpt-6-luna                       xhigh    default
 ```
 
 MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. Markdown plans under `.aria/plans/` are authoritative for plan, task, scope, and approval state.

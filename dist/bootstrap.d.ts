@@ -54,7 +54,7 @@ export declare function discoverZotpilotLatest(executor: Executor): Promise<{
     reason: string;
 }>;
 export declare function installZotpilotIfMissing(executor: Executor, configDir?: string, options?: BootstrapConvergenceOptions): Promise<BootstrapInstallResult>;
-/** Discover current Quota upstream via npm's normal mechanism (no database). Only exact Quota 5 proceeds. */
+/** Discover current Quota upstream via npm's normal mechanism (no database). Only the exact Quota 6 major proceeds. */
 export declare function discoverQuotaLatest(executor: Executor): Promise<{
     ok: true;
     version: string;

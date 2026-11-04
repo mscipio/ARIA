@@ -413,9 +413,10 @@ describe("bin/aria.mjs doctor dispatch", () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("aria doctor                Read-only health check of ARIA");
-    expect(result.stdout).toContain("aria setup                 Register ARIA with OpenCode and install missing dependencies");
+    expect(result.stdout).toContain("aria setup [--install-optional quota,zotpilot]   Register ARIA and install missing required dependencies");
     expect(result.stdout).toContain("aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)");
-    expect(result.stdout).toContain("aria models                Print resolved model routes for each ARIA role");
+    expect(result.stdout).toContain("aria models                Interactive model manager: change the model and reasoning variant per ARIA agent (terminal only)");
+    expect(result.stdout).toContain("aria models --show         Read-only table of effective assignments, variants, and configuration sources");
     expect(result.stdout).toContain("aria models --config       Interactively configure ARIA role models");
     expect(result.stdout).toContain("aria deps                  Read-only dependency inventory");
     expect(result.stdout).toContain("aria deps --upgrade        Check managed dependencies");
@@ -582,7 +583,7 @@ describe("bin/aria.mjs setup dispatch", () => {
     const result = await runCli(["--help"]);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("aria setup                 Register ARIA with OpenCode and install missing dependencies");
+    expect(result.stdout).toContain("aria setup [--install-optional quota,zotpilot]   Register ARIA and install missing required dependencies");
     expect(result.stdout).toContain("aria models --config       Interactively configure ARIA role models");
     expect(result.stdout).not.toContain("setup --configure");
     expect(result.stdout).not.toContain("--plugin-spec");
@@ -733,6 +734,38 @@ describe("bin/aria.mjs upgrade dispatch", () => {
   }, 60000);
 });
 
+describe("aria setup --install-optional consent flag", () => {
+  it("rejects unknown optional components before any registration or install work", async () => {
+    const result = await runCli(["setup", "--install-optional", "bogus"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Invalid --install-optional value: bogus");
+    expect(result.stderr).toContain("quota, zotpilot");
+    expect(result.stdout).not.toContain("Registration:");
+    expect(result.stdout).not.toContain("Dependencies:");
+  });
+
+  it("requires a value and never runs setup without one", async () => {
+    const result = await runCli(["setup", "--install-optional"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Invalid --install-optional value: (missing)");
+    expect(result.stdout).not.toContain("Registration:");
+  });
+});
+
+describe("bare aria without an interactive terminal", () => {
+  it("prints the normal CLI help instead of launching the management console", async () => {
+    const result = await runCli([]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("Usage:");
+    expect(result.stdout).toContain("aria                       Open the ARIA Management Console");
+    expect(result.stdout).toContain("aria models                Interactive model manager");
+    expect(result.stderr).toBe("");
+  });
+});
+
 describe("bin/aria.mjs models dispatch (T002 surface gating for T003)", () => {
   it("retires bare configure/routes/update with guidance to the seven forms", async () => {
     for (const [args, fragment] of [
@@ -747,16 +780,25 @@ describe("bin/aria.mjs models dispatch (T002 surface gating for T003)", () => {
     }
   });
 
-  it("prints the compact role/model/effort table from resolved routes", async () => {
+  it("prints the read-only assignment table through `models --show`", async () => {
     // Sandboxed HOME plus no repo-root project overrides: the packaged
-    // defaults render, so one representative row proves the table reflects
-    // the resolved configuration through the public `models` form.
-    const result = await runCli(["models"], {}, cliSandboxEnv.HOME);
+    // defaults render, so representative rows prove the table reflects the
+    // resolved configuration, its variants, and its source.
+    const result = await runCli(["models", "--show"], {}, cliSandboxEnv.HOME);
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("role  model  effort");
-    expect(result.stdout).toContain("coder  opencode-go/muse-spark-1.3-contributor  xhigh");
-    expect(result.stdout).toContain("reviewer  openai/gpt-6.1-sol  medium");
+    expect(result.stdout).toContain("ARIA model assignments (read-only; no changes made)");
+    expect(result.stdout).toMatch(/coder\s+opencode-go\/muse-spark-1\.3-contributor\s+xhigh\s+default/);
+    expect(result.stdout).toMatch(/reviewer\s+openai\/gpt-6\.1-sol\s+medium\s+default/);
+  });
+
+  it("refuses the interactive manager without a terminal and points to --show", async () => {
+    const result = await runCli(["models"]);
+
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("needs a terminal");
+    expect(result.stderr).toContain("aria models --show");
   });
 
   it("rejects an unsupported models flag before doing configuration work", async () => {
@@ -764,7 +806,7 @@ describe("bin/aria.mjs models dispatch (T002 surface gating for T003)", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Unknown models option");
-    expect(result.stderr).toContain("Usage: aria models [--config]");
+    expect(result.stderr).toContain("Usage: aria models [--show | --config]");
     // Rejected before configuration work: no model-configuration report.
     expect(result.stdout).not.toContain("Model configuration:");
   });
@@ -858,7 +900,7 @@ describe("bin/aria.mjs models dispatch (T002 surface gating for T003)", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("Unknown models option");
-    expect(result.stderr).toContain("Usage: aria models [--config]");
+    expect(result.stderr).toContain("Usage: aria models [--show | --config]");
     expect(result.stdout).not.toContain("Model configuration:");
     // Rejected before the dynamic import/call: the stub never ran.
     expect(existsSync(fixture.recordPath)).toBe(false);

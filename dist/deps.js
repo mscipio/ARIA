@@ -471,8 +471,8 @@ export async function cleanupIncompatibleStatusline(configDir) {
  * statusline side effect in the active (possibly isolated) global config.
  * Cleanup failures never mask the setup result.
  */
-async function runEngramSetup(executor, configDir) {
-    const setup = await run(executor, "engram", "setup", "opencode");
+async function runEngramSetup(executor, configDir, binary = "engram") {
+    const setup = await run(executor, binary, "setup", "opencode");
     if (setup.ok) {
         try {
             await cleanupIncompatibleStatusline(configDir);
@@ -484,8 +484,8 @@ async function runEngramSetup(executor, configDir) {
     }
     return setup;
 }
-async function detectEngram(executor) {
-    const result = await run(executor, "engram", "version");
+async function detectEngram(executor, binary = "engram") {
+    const result = await run(executor, binary, "version");
     if (!result.ok)
         return { found: false, version: null };
     return { found: true, version: extractVersion(result.stdout) };
@@ -678,13 +678,14 @@ async function syncEngramGitHub(executor, fileOps = defaultFileOps, configDir) {
         if (!mvResult.ok) {
             return { action: "replace-failed", error: `Failed to replace binary: ${mvResult.stderr}` };
         }
-        // Setup OpenCode integration
-        const setup = await runEngramSetup(executor, configDir);
+        // Setup OpenCode integration. Invoke the binary we just installed by its
+        // absolute path: its directory (usually ~/.local/bin) need not be on PATH.
+        const setup = await runEngramSetup(executor, configDir, targetPath);
         if (!setup.ok) {
             return { action: "setup-failed", error: `engram setup opencode failed: ${setup.stderr}` };
         }
         // Verify the installed binary works
-        const verify = await detectEngram(executor);
+        const verify = await detectEngram(executor, targetPath);
         if (!verify.found) {
             return { action: "post-install-verify-failed", error: "engram not found after installation" };
         }
@@ -977,21 +978,34 @@ async function syncCodeGraph(executor) {
     }
     return { action: "observed-not-managed", version: detected.version ?? undefined };
 }
+/**
+ * Parse every server row of `opencode mcp list` (`✓ name   connected` on
+ * OpenCode 2.2.x, `name connected` on older builds). Status symbols are
+ * stripped with the rest of the non-ASCII decoration, so the status word is
+ * the only evidence used.
+ */
+export function parseMcpServers(output) {
+    const entries = [];
+    for (const line of stripAnsi(output).split("\n")) {
+        const match = line.trim().match(/^([A-Za-z0-9_.-]+)\s+([a-z][a-z ]*)$/);
+        if (!match?.[1] || !match[2])
+            continue;
+        const status = match[2].trim();
+        if (!/^(connected|disconnected|error|needs auth|needs client registration)$/.test(status))
+            continue;
+        entries.push({ name: match[1], status, connected: status === "connected" });
+    }
+    return entries;
+}
 export function parseMcpList(output) {
-    const clean = stripAnsi(output);
     const result = { engram: false, context7: false, codegraph: false };
-    for (const line of clean.split("\n")) {
-        const trimmed = line.trim();
-        const match = trimmed.match(/^(\w+)\s+(connected|disconnected|error)/);
-        if (match?.[1] && match[2]) {
-            const name = match[1];
-            const status = match[2];
-            if (name === "engram" || name === "context7" || name === "codegraph") {
-                result[name] = status === "connected";
-            }
-            if (name === "zotpilot") {
-                result.zotpilot = { listed: true, connected: status === "connected" };
-            }
+    for (const entry of parseMcpServers(output)) {
+        const name = entry.name;
+        if (name === "engram" || name === "context7" || name === "codegraph") {
+            result[name] = entry.connected;
+        }
+        if (name === "zotpilot") {
+            result.zotpilot = { listed: true, connected: entry.connected };
         }
     }
     return result;
@@ -1249,7 +1263,7 @@ export function doctorExitCode(status) {
 // command is invoked here; unrelated Quota entries in the shared global
 // config are preserved byte-identical. The upgrade-only adapter in
 // `src/quota.ts` (consumed by the future `aria upgrade` orchestration) may
-// upgrade an already-installed Quota 5 only through its positively
+// upgrade an already-installed Quota 6 only through its positively
 // identified target plus a demonstrated-safe native update preview, with
 // validation and rollback where feasible.
 // ---------------------------------------------------------------------------

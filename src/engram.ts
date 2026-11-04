@@ -33,7 +33,8 @@
 //   proven-absent (ENOENT-stat) files, never unknown state.
 // ---------------------------------------------------------------------------
 
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { BOOTSTRAP_EVIDENCE } from "./bootstrap.js";
@@ -161,7 +162,10 @@ function defaultDelay(ms: number): Promise<void> {
  * Default MCP-list convergence: 3 polls/100ms — 1 initial read plus 2
  * additional polls, 200ms worst-case added latency (sub-second total).
  */
-const DEFAULT_MCP_CONVERGENCE: Required<McpConvergenceBound> = { attempts: 3, delayMs: 100 };
+// A cold or freshly reconfigured OpenCode service loads MCP servers
+// asynchronously: measured ~1.6 s from a cold start before Engram reports
+// connected. Bounded to ~7 s total; exhaustion still fails closed.
+const DEFAULT_MCP_CONVERGENCE: Required<McpConvergenceBound> = { attempts: 15, delayMs: 500 };
 
 /**
  * Bounded `opencode mcp list` connectivity read: returns the first sample
@@ -266,6 +270,32 @@ async function snapshotsChanged(snapshots: FileSnapshot[]): Promise<boolean> {
   return false;
 }
 
+/**
+ * Standard Engram install locations. A binary here that is absent from PATH
+ * is an existing installation, not a missing one: ARIA must not reinstall it
+ * (a second copy in ~/.local/bin would shadow the user's own Engram).
+ */
+function standardEngramLocations(): string[] {
+  return [
+    join(homedir(), ".local", "bin", "engram"),
+    "/opt/homebrew/bin/engram",
+    "/usr/local/bin/engram",
+    "/home/linuxbrew/.linuxbrew/bin/engram",
+  ];
+}
+
+async function engramAtStandardLocation(): Promise<string | null> {
+  for (const candidate of standardEngramLocations()) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Absent at this location.
+    }
+  }
+  return null;
+}
+
 function reportOnly(channel: EngramChannel, detail: string): EngramLifecycleResult {
   return {
     status: "report-only",
@@ -352,6 +382,15 @@ export async function ensureEngram(executor: Executor, options: EngramLifecycleO
   }
 
   const initial = await detectEngramState(executor, fileOps);
+  if (!initial.found) {
+    const located = await engramAtStandardLocation();
+    if (located !== null) {
+      return reportOnly(
+        "unknown",
+        `Engram is installed at ${located} but is not on PATH; leaving it untouched (ARIA never reinstalls an existing Engram; put its directory on PATH to manage it)`,
+      );
+    }
+  }
   const wasMissing = !initial.found;
 
   // Run the demonstrated-safe install/update for the detected channel and
@@ -484,7 +523,12 @@ export async function ensureEngram(executor: Executor, options: EngramLifecycleO
   } catch {
     // Surfaced below via the absence check.
   }
-  const final = await detectEngram(executor);
+  let final = await detectEngram(executor);
+  if (!final.found) {
+    // Off PATH (e.g. a GitHub install in ~/.local/bin): validate the installed binary itself.
+    const located = await engramAtStandardLocation();
+    if (located !== null) final = await detectEngram(executor, located);
+  }
   const mcp = await pollMcpConnectivity(executor, options.mcpConvergence ?? {}, options.delay ?? defaultDelay);
   const statusline = await detectIncompatibleStatusline(configDir);
   const connected = mcp.engram === true;

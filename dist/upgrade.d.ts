@@ -47,7 +47,12 @@ export declare function formatApprovalGuidance(currentVersion: string | null, ta
 export declare function formatBlockedApprovalDetail(currentVersion: string | null, targetSpec: string | null): string;
 /** Component inventory scope bound by `--check`, approval, and handoff. */
 export declare const UPGRADE_COMPONENTS: readonly ["aria", "engram", "context7", "codegraph", "zotpilot", "quota"];
-export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number];
+/**
+ * Inventory rows: the ARIA-only upgrade handoff scope (`UPGRADE_COMPONENTS`)
+ * plus Playwright, which is inventoried for `aria deps` and console updates
+ * but is not part of the ARIA self-upgrade handoff scope.
+ */
+export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number] | "playwright";
 /**
  * Upgrade-action states for the `--check` Component|Installed|Available|
  * Status table (existing vocabulary; T007 semantic categories, no new
@@ -79,7 +84,7 @@ export type UpgradeComponentName = (typeof UPGRADE_COMPONENTS)[number];
  * - `unknown-target`: installed or available not positively identified;
  *   for ARIA this blocks self-upgrade with zero mutation.
  */
-export type UpgradeComponentStatus = "current" | "upgrade-available" | "remote-healthy" | "unmanaged-observed" | "unsupported-ownership" | "skipped" | "unknown-target";
+export type UpgradeComponentStatus = "provider-upgrade-available" | "current" | "upgrade-available" | "remote-healthy" | "unmanaged-observed" | "unsupported-ownership" | "skipped" | "unknown-target";
 export interface UpgradeComponentRow {
     component: UpgradeComponentName;
     installed: string | null;
@@ -124,6 +129,13 @@ export interface UpgradeCheckOptions {
      * `git ls-remote`; `null` forces unknown for tests/operator override).
      */
     availableOverride?: AriaAvailableTarget | null;
+    /**
+     * Consult provider-supported release sources (Homebrew formula for Engram,
+     * the upstream CodeGraph CLI check, npm dist-tags for Quota). Used only by
+     * the explicit update check and the upgrade proposal; the plain inventory
+     * stays offline and never reports a version it did not verify.
+     */
+    discoverProviders?: boolean;
 }
 export interface UpgradeCheckResult {
     /** Installed ARIA version from the positively identified plugin registration (null when unknown). */
@@ -214,6 +226,8 @@ export declare function validateAriaTargetForRemoval(target: AriaAvailableTarget
  * or mutating CLI is ever invoked here.
  */
 export declare function checkUpgradeInventory(executor?: Executor, options?: UpgradeCheckOptions): Promise<UpgradeCheckResult>;
+/** Read-only Playwright MCP inventory row (never installs or upgrades). */
+export declare function playwrightInventoryRow(executor: Executor): Promise<UpgradeComponentRow>;
 export declare function formatUpgradeCheck(result: UpgradeCheckResult): string;
 export declare function formatDepsUpgradeProposal(check: UpgradeCheckResult): string;
 /** Fully qualified Engram Homebrew formula the preflight and upgrade use. */

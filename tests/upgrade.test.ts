@@ -186,7 +186,8 @@ describe("T010 --check inventory (strictly read-only)", () => {
     const after = await snapshotTree(root);
     expect([...after.keys()].sort()).toEqual([...before.keys()].sort());
     for (const [path, bytes] of before) expect(after.get(path)).toBe(bytes);
-    expect(result.components.map((row) => row.component)).toEqual([...UPGRADE_COMPONENTS]);
+    // Inventory rows: the ARIA handoff scope plus the Playwright inventory row (never handed off).
+    expect(result.components.map((row) => row.component)).toEqual(["aria", "engram", "context7", "codegraph", "zotpilot", "playwright", "quota"]);
     expect(result.components.find((row) => row.component === "aria")?.status).toBe("upgrade-available");
     expect(result.components.find((row) => row.component === "context7")?.status).toBe("remote-healthy");
   });
@@ -209,19 +210,19 @@ describe("T010 --check inventory (strictly read-only)", () => {
 
   it("delegates the quota row to the T007 read-only inventory vocabulary", async () => {
     const { configDir } = await makeIsolatedConfigDir();
-    const quotaSpec = "@slkiser/opencode-quota@5.0.2";
+    const quotaSpec = "@slkiser/opencode-quota@6.0.2";
     await writeFile(join(configDir, "opencode.json"), JSON.stringify({ plugins: [quotaSpec] }), "utf8");
     const calls: string[] = [];
     const result = await checkUpgradeInventory(
       probeExecutor(
-        { pluginList: pluginList([["@slkiser/opencode-quota.server", "5.0.2", quotaSpec]]), mcpList: HEALTHY_MCP_LIST },
+        { pluginList: pluginList([["@slkiser/opencode-quota.server", "6.0.2", quotaSpec]]), mcpList: HEALTHY_MCP_LIST },
         calls,
       ),
       { configDir, currentVersion: "1.0.6", availableOverride: TARGET_107 },
     );
     const quota = result.components.find((row) => row.component === "quota");
     expect(quota?.status).toBe("unmanaged-observed");
-    expect(quota?.installed).toBe("5.0.2");
+    expect(quota?.installed).toBe("6.0.2");
   });
 });
 

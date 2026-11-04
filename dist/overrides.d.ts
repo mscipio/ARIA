@@ -1,5 +1,7 @@
-import type { AriaPluginOptions, AriaProjectOverrides, ResolvedAriaConfig, RoleName } from "./types.js";
+import type { AriaPluginOptions, AriaProjectOverrides, ResolvedAriaConfig, RoleDefaults, RoleName, RoleOverride } from "./types.js";
 export declare const ROLES: RoleName[];
+/** Canonical role for a configured `roles` key (canonical name or legacy alias). */
+export declare function roleForConfigKey(key: string): RoleName | undefined;
 declare class ConfigValidationError extends Error {
     constructor(filePath: string, path: string, got: unknown, want: string);
 }
@@ -25,6 +27,18 @@ export declare function readGlobalAriaOverrides(explicit?: string): AriaProjectO
  * resolution.
  */
 export declare function readProjectAriaOverrides(worktree: string, options?: AriaPluginOptions): AriaProjectOverrides;
+/**
+ * Model-aware resolution of the model/variant pair across override layers
+ * (lowest to highest). The pair is owned by the highest layer that specifies
+ * `model`: that layer's variant is used when supplied, otherwise the inherited
+ * variant is cleared, so a model-only override never keeps a stale variant.
+ * A layer that specifies only `variant` inherits the lower model and replaces
+ * just the variant.
+ */
+export declare function resolveRoleRoute(defaults: RoleDefaults, ...layers: (RoleOverride | undefined)[]): {
+    model: string;
+    variant: string | undefined;
+};
 export declare function resolveAriaConfig(worktree: string, options?: AriaPluginOptions, metaUrl?: string): ResolvedAriaConfig;
 export { ConfigValidationError };
 //# sourceMappingURL=overrides.d.ts.map

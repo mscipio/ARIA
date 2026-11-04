@@ -2,7 +2,8 @@
 
 // ARIA CLI — dependency-free, Node standard library only.
 // Public surface (v1.1.0 T002 + v2 T002/T003): aria ship, aria release, aria setup, aria doctor, aria upgrade
-// [--check], aria models [--config], aria deps [--upgrade], aria --help,
+// [--check], aria models [--show | --config] (bare `models` is the interactive manager, terminal only),
+// aria deps [--upgrade], aria --help,
 // aria --version. Legacy top-level `update`/`configure`/`routes`/`deps sync`
 // are retired (rejected with guidance); `--migrate-from`/`--handoff-json`
 // remain accepted as internal handoff switches but are not advertised.
@@ -35,14 +36,16 @@ function usage() {
   return `ARIA CLI v${version}
 
 Usage:
+  aria                       Open the ARIA Management Console (interactive terminal; otherwise shows this help)
   aria ship --paths <file> [<file> ...] --message <text> [--push] Commit explicit files; push only when requested (repo hooks/filters are trusted code)
   aria release VERSION --check|--full-check|--publish [--tag TAG] Project-specific preflight, full gate, or explicitly requested GitHub Release
-  aria setup                 Register ARIA with OpenCode and install missing dependencies (idempotent; never upgrades present deps)
+  aria setup [--install-optional quota,zotpilot]   Register ARIA and install missing required dependencies; optional ones only with consent (idempotent; never upgrades present deps)
   aria doctor                Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
   aria upgrade               Show upgrade inventory (requires --yes to approve any mutation; ARIA-only)
   aria upgrade --check        Read-only upgrade inventory (current + available releases, component table)
   aria upgrade --yes          Approve and run the ARIA-only upgrade pipeline
-  aria models                Print resolved model routes for each ARIA role
+  aria models                Interactive model manager: change the model and reasoning variant per ARIA agent (terminal only)
+  aria models --show         Read-only table of effective assignments, variants, and configuration sources
   aria models --config       Interactively configure ARIA role models
   aria deps                  Read-only dependency inventory (plugins/MCPs with observed versions)
   aria deps --upgrade        Check managed dependencies; version upgrades require explicit confirmation (use --yes to apply)
@@ -74,6 +77,18 @@ async function main() {
       return await runReleaseCli(args.slice(1), process.cwd());
     } catch (error) {
       console.error(`aria release: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
+
+  if (args.length === 0 && process.stdin.isTTY === true && process.stdout.isTTY === true) {
+    // Bare `aria` in an interactive terminal opens the Management Console.
+    // Everything else (including bare `aria` without a terminal) keeps the CLI help.
+    try {
+      const { runManagementConsole } = await import("../dist/management-console.js");
+      return await runManagementConsole({ worktree: process.cwd(), binaryUrl: import.meta.url });
+    } catch (err) {
+      console.error(`aria: ${err instanceof Error ? err.message : String(err)}`);
       return 1;
     }
   }
@@ -128,12 +143,38 @@ async function main() {
       const { checkUpgradeInventory, formatDepsUpgradeProposal } = await import("../dist/upgrade.js");
       // Read-only inventory without the ARIA remote probe (pinned unknown:
       // no `git ls-remote`, never any installer/updater).
-      const result = await checkUpgradeInventory(undefined, { availableOverride: null });
+      // Plain inventory stays offline; the upgrade proposal consults provider release sources.
+      const result = await checkUpgradeInventory(undefined, { availableOverride: null, discoverProviders: upgrade });
       const rows = result.components.filter((row) => row.component !== "aria");
+      // Runtime discovery (what OpenCode loads) merged with ARIA's definitions.
+      // Supporting information only: a discovery failure is reported and never
+      // blocks the dependency inventory or proposal.
+      let integrations;
+      let integrationNote = "";
+      try {
+        const { discoverIntegrations } = await import("../dist/integrations.js");
+        const { defaultExecutor } = await import("../dist/deps.js");
+        integrations = await discoverIntegrations(defaultExecutor, { inventory: result });
+      } catch (err) {
+        integrationNote = `Integration discovery unavailable: ${err instanceof Error ? err.message : String(err)}`;
+      }
+      const integrationSection = async () => {
+        if (!integrations) return integrationNote;
+        const { formatIntegrationProposal } = await import("../dist/integrations.js");
+        return formatIntegrationProposal(integrations);
+      };
       if (!upgrade) {
         const lines = ["ARIA dependency inventory (read-only; no changes were made)", ""];
         for (const row of rows) {
           lines.push(`  ${row.component}: installed=${row.installed ?? "-"} available=${row.available ?? "-"} status=${row.status} — ${row.detail}`);
+        }
+        lines.push("", "Integrations loaded by OpenCode (plugins and MCP servers):");
+        if (integrations) {
+          for (const entry of integrations.entries) {
+            lines.push(`  ${entry.kind} ${entry.name}: runtime=${entry.runtime} version=${entry.version ?? "-"} ownership=${entry.ownership}${entry.component ? ` component=${entry.component}` : " (not an ARIA dependency)"}`);
+          }
+        } else {
+          lines.push(`  ${integrationNote}`);
         }
         console.log(lines.join("\n"));
         return 0;
@@ -143,6 +184,7 @@ async function main() {
         // proposal with zero mutation — re-run with --yes to apply managed
         // upgrades. Unknown/unmanaged targets stay report-only either way.
         console.log(formatDepsUpgradeProposal(result));
+        console.log(`\n${await integrationSection()}`);
         return 1;
       }
       // T004 confirmed: managed-only upgrades via the existing adapters.
@@ -180,12 +222,26 @@ async function main() {
     // T003 refines output without dispatcher rework.
     const rest = args.slice(1);
     if (rest.length === 0) {
+      // Interactive model manager: needs a real terminal (stdin and stdout).
+      if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+        console.error("aria models is interactive and needs a terminal. Run it from a terminal, or use `aria models --show` for a read-only table of effective assignments.");
+        return 1;
+      }
       try {
-        const { formatRoutes } = await import("../dist/routes.js");
-        console.log(formatRoutes());
+        const { runModelManager } = await import("../dist/model-manager.js");
+        return await runModelManager(process.cwd());
+      } catch (err) {
+        console.error(`aria models: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
+      }
+    }
+    if (rest.length === 1 && rest[0] === "--show") {
+      try {
+        const { formatModelAssignmentsFor } = await import("../dist/model-manager.js");
+        console.log(formatModelAssignmentsFor(process.cwd()));
         return 0;
       } catch (err) {
-        console.error(err instanceof Error ? err.message : String(err));
+        console.error(`aria models: ${err instanceof Error ? err.message : String(err)}`);
         return 1;
       }
     }
@@ -214,7 +270,7 @@ async function main() {
       }
     }
     console.error(`Unknown models option: ${rest.join(" ")}`);
-    console.error("Usage: aria models [--config]");
+    console.error("Usage: aria models [--show | --config]");
     return 1;
   }
 
@@ -233,8 +289,23 @@ async function main() {
       return 1;
     }
     let pluginSpec;
+    let optionalInstalls = [];
     for (let index = 0; index < rest.length; index++) {
       const arg = rest[index];
+      if (arg === "--install-optional" || arg.startsWith("--install-optional=")) {
+        // Optional components are installed only with explicit consent.
+        const value = arg.includes("=") ? arg.slice("--install-optional=".length) : rest[index + 1];
+        if (!arg.includes("=")) index++;
+        const allowed = ["quota", "zotpilot"];
+        const requested = (value ?? "").split(",").map((item) => item.trim()).filter((item) => item.length > 0);
+        if (requested.length === 0 || requested.some((item) => !allowed.includes(item))) {
+          console.error(`Invalid --install-optional value: ${value ?? "(missing)"} (expected a comma-separated list of: ${allowed.join(", ")})`);
+          console.error("Usage: aria setup [--install-optional quota,zotpilot]");
+          return 1;
+        }
+        optionalInstalls = [...new Set([...optionalInstalls, ...requested])];
+        continue;
+      }
       if (arg === "--plugin-spec") {
         const value = rest[index + 1];
         if (value === undefined || value.startsWith("--")) {
@@ -277,7 +348,7 @@ async function main() {
       // self-upgrade handoff on the setup path). R001: no depsSync seam is
       // provided, so production setup is install-if-missing only — no
       // version-chasing sync ever runs here.
-      dependenciesFn: async (executor, configDir) => runSetupDependencies(executor, { configDir }),
+      dependenciesFn: async (executor, configDir) => runSetupDependencies(executor, { configDir, optionalInstalls }),
     });
 
     if (result.setup) {

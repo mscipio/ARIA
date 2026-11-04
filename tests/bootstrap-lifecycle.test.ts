@@ -340,18 +340,20 @@ describe("T016 Quota install-if-missing", () => {
       let added = false;
       const executor: Executor = async (command, args) => {
         calls.push(`${command} ${args.join(" ")}`);
+        if (command === "node") return { stdout: "v24.18.0\n", stderr: "" };
+        if (command === "opencode" && args[0] === "--version") return { stdout: "2.2.5\n", stderr: "" };
         if (command === "opencode" && args[0] === "plugin" && args[1] === "list") {
           if (!added) return { stdout: "No plugins found", stderr: "" };
-          return { stdout: [PLUGIN_HEADER, quotaListRow("5.1.0", "@slkiser/opencode-quota@5.1.0")].join("\n"), stderr: "" };
+          return { stdout: [PLUGIN_HEADER, quotaListRow("6.1.0", "@slkiser/opencode-quota@6.1.0")].join("\n"), stderr: "" };
         }
-        if (command === "npm" && args[0] === "view") return { stdout: "5.1.0\n", stderr: "" };
+        if (command === "npm" && args[0] === "view") return { stdout: JSON.stringify([{ latest: "6.1.0" }]), stderr: "" };
         if (command === "opencode" && args[0] === "plugin" && args[1] === "add") {
           added = true;
           // Simulate the native installer persisting the registration to the
           // XDG-contained global config (T003 persisted-first contract: the
           // installer owns creation and the config positively carries the
           // installed spec before any runtime list sample is accepted).
-          await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["@slkiser/opencode-quota@5.1.0"] }));
+          await writeFile(resolve(configDir, "opencode.json"), JSON.stringify({ plugins: ["@slkiser/opencode-quota@6.1.0"] }));
           return { stdout: "", stderr: "" };
         }
         throw new Error(`unexpected: ${command} ${args.join(" ")}`);
@@ -364,9 +366,9 @@ describe("T016 Quota install-if-missing", () => {
       const result = await installQuotaIfMissing(executor);
 
       expect(result.status).toBe("installed");
-      expect(result.installedVersion).toBe("5.1.0");
+      expect(result.installedVersion).toBe("6.1.0");
       expect(result.mutated).toBe(true);
-      expect(calls).toContain("opencode plugin add @slkiser/opencode-quota@5.1.0");
+      expect(calls).toContain("opencode plugin add @slkiser/opencode-quota@6.1.0");
     });
   });
 
@@ -424,7 +426,9 @@ describe("T016 Quota install-if-missing", () => {
           // Installer ran, but the quota registration surface never appears.
           return { stdout: "No plugins found", stderr: "" };
         }
-        if (command === "npm" && args[0] === "view") return { stdout: "5.1.0\n", stderr: "" };
+        if (command === "node") return { stdout: "v24.18.0\n", stderr: "" };
+        if (command === "opencode" && args[0] === "--version") return { stdout: "2.2.5\n", stderr: "" };
+        if (command === "npm" && args[0] === "view") return { stdout: JSON.stringify([{ latest: "6.1.0" }]), stderr: "" };
         if (command === "opencode" && args[0] === "plugin" && args[1] === "add") return { stdout: "", stderr: "" };
         throw new Error(`unexpected: ${command} ${args.join(" ")}`);
       };

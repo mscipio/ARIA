@@ -41,8 +41,8 @@ import { assertNotCallerGlobalPath } from "./test-isolation.js";
 // as regression evidence; this file adds no duplicates for those paths.
 // ---------------------------------------------------------------------------
 
-const QUOTA_SPEC = "@slkiser/opencode-quota@5.1.0";
-const QUOTA_VERSION = "5.1.0";
+const QUOTA_SPEC = "@slkiser/opencode-quota@6.1.0";
+const QUOTA_VERSION = "6.1.0";
 const UNRELATED_PLUGIN = "unrelated-plugin@1.0.0";
 const PLUGIN_HEADER = "ID  VERSION  SOURCE";
 const STALE_LIST = "No plugins found";
@@ -126,8 +126,10 @@ function installHarness(options: {
       postServed += 1;
       return { stdout: output ?? STALE_LIST, stderr: "" };
     }
+    if (command === "node") return { stdout: "v24.18.0\n", stderr: "" };
+    if (command === "opencode" && args[0] === "--version") return { stdout: "2.2.5\n", stderr: "" };
     if (command === "npm" && args[0] === "view") {
-      return { stdout: `${options.npmVersion ?? QUOTA_VERSION}\n`, stderr: "" };
+      return { stdout: JSON.stringify([{ latest: options.npmVersion ?? QUOTA_VERSION }]), stderr: "" };
     }
     if (command === "opencode" && args[0] === "plugin" && args[1] === "add") {
       const spec = args[2] ?? "";

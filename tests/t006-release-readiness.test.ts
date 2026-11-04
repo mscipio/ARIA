@@ -370,12 +370,17 @@ describe("T006 isolated install provenance (candidate prefix, never the live glo
 });
 
 describe("T006 seven fast forms via bare aria (no live mutation)", () => {
-  it("models prints the resolved role/model/effort table; models --config skips cleanly off-TTY", async () => {
-    const models = await runBare(["models"]);
-    expect(models.code).toBe(0);
-    expect(models.stdout).toContain("role  model  effort");
-    expect(models.stdout).toContain("coder  opencode-go/muse-spark-1.3-contributor  xhigh");
-    expect(models.stdout).toContain("reviewer  openai/gpt-6.1-sol  medium");
+  it("models --show prints the read-only assignment table; bare models refuses off-TTY; models --config skips cleanly", async () => {
+    const show = await runBare(["models", "--show"]);
+    expect(show.code).toBe(0);
+    expect(show.stdout).toContain("ARIA model assignments (read-only; no changes made)");
+    expect(show.stdout).toMatch(/coder\s+opencode-go\/muse-spark-1\.3-contributor\s+xhigh\s+default/);
+    expect(show.stdout).toMatch(/reviewer\s+openai\/gpt-6\.1-sol\s+medium\s+default/);
+
+    // The interactive manager never runs without a terminal.
+    const interactive = await runBare(["models"]);
+    expect(interactive.code).toBe(1);
+    expect(interactive.stderr).toContain("aria models --show");
 
     // execFile provides no TTY: deterministic skipped path, never setup phases.
     const config = await runBare(["models", "--config"]);

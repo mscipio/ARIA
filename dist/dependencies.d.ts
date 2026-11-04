@@ -10,9 +10,18 @@ export interface DependencyOutcome {
     detail: string;
     mutated: boolean;
 }
+/** Optional components that setup installs only with explicit consent. */
+export declare const OPTIONAL_INSTALL_COMPONENTS: readonly ["quota", "zotpilot"];
+export type OptionalInstallComponent = (typeof OPTIONAL_INSTALL_COMPONENTS)[number];
 export interface DependencyLifecycleOptions {
     /** Explicit global config dir (XDG-contained; omits to the effective root). */
     configDir?: string;
+    /**
+     * Optional components the user consented to install (`aria setup
+     * --install-optional`). Optional components are never installed without
+     * this consent; a missing optional component is reported as an offer.
+     */
+    optionalInstalls?: readonly OptionalInstallComponent[];
     /** Explicit home dir for the ZotPilot user-scoped ownership check. */
     homeDir?: string;
     /** Filesystem seam for Engram channel detection + asset verification. */
@@ -29,7 +38,7 @@ export interface DependencyLifecycleResult {
  * - Absent (`checkQuotaUpgrade` skipped) → install-if-missing via the T016
  *   demonstrated-safe native `opencode plugin add <exact 5.x>` after `npm
  *   view` discovery (XDG-guarded, validated, snapshot rollback).
- * - Positively identified Quota 5 (`unmanaged-observed`) → gated native
+ * - Positively identified Quota 6 (`unmanaged-observed`) → gated native
  *   update via the T007 adapter (owned-outdated → update, current →
  *   normalize/validate as `already-current`).
  * - Ambiguous/unsupported (`unknown-target`/`unsupported-ownership`) →

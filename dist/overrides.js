@@ -21,6 +21,12 @@ const LEGACY_ROLE_ALIASES = {
     architect: "reviewer",
 };
 const ROLE_OVERRIDE_FIELDS = new Set(["model", "variant"]);
+/** Canonical role for a configured `roles` key (canonical name or legacy alias). */
+export function roleForConfigKey(key) {
+    if (ROLE_SET.has(key))
+        return key;
+    return LEGACY_ROLE_ALIASES[key];
+}
 const SHARED_MCP_GUIDANCE = `## MCP Guidance
 
 Use any available MCP whenever it materially improves the evidence; these are preferred evidence sources, not exclusive routing. Do not force unnecessary calls.
@@ -188,7 +194,7 @@ export function readProjectAriaOverrides(worktree, options = {}) {
  * A layer that specifies only `variant` inherits the lower model and replaces
  * just the variant.
  */
-function resolveRoleRoute(defaults, ...layers) {
+export function resolveRoleRoute(defaults, ...layers) {
     let model = defaults.model;
     let variant = defaults.variant;
     for (const layer of layers) {

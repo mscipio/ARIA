@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -229,14 +229,33 @@ function upgradeWorld(options: { dryRun: "ok" | "fail" | "indeterminate"; engram
   return { calls, executor };
 }
 
+
+/** Complete ARIA-owned Playwright fixture in the sandboxed data root (read by the real adapter). */
+async function provisionCompletePlaywright(): Promise<{ cleanup: () => Promise<void> }> {
+  const { chmod } = await import("node:fs/promises");
+  const base = join(process.env.XDG_DATA_HOME ?? "", "aria", "playwright-mcp");
+  await mkdir(join(base, "node_modules", "@playwright", "mcp"), { recursive: true });
+  await writeFile(join(base, "aria-managed.json"), JSON.stringify({ owner: "aria", package: "@playwright/mcp", version: "0.0.83" }));
+  await writeFile(join(base, "node_modules", "@playwright", "mcp", "package.json"), JSON.stringify({ version: "0.0.83" }));
+  await mkdir(join(base, "node_modules", "playwright-core"), { recursive: true });
+  await writeFile(join(base, "node_modules", "playwright-core", "browsers.json"), JSON.stringify({ browsers: [{ name: "chromium", revision: "1" }] }));
+  const executable = join(base, "browsers", "chromium-1", "chrome-linux", "chrome");
+  await mkdir(join(base, "browsers", "chromium-1", "chrome-linux"), { recursive: true });
+  await writeFile(executable, "#!/bin/sh\n");
+  await chmod(executable, 0o755);
+  return { cleanup: () => rm(base, { recursive: true, force: true }) };
+}
+
 describe("v1.0.11 formula-scoped brew argv (deps + lifecycle)", () => {
   it("depsSync homebrew upgrade uses the exact formula argv, never bare/cask/tap/trust", async () => {
+    onTestFinished((await provisionCompletePlaywright()).cleanup);
     const configDir = await makeConfigDirWithContext7();
     const { homedir } = await import("node:os");
     const home = homedir();
     const cellarBin = `${home}/.local/Cellar/engram/1.20.0/bin/engram`;
     const calls: BrewCall[] = [];
     const executor: Executor = async (command, args, options) => {
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       recordCall(calls, command, args, options);
       if (command === "engram" && args[0] === "version") return { stdout: "engram 1.20.0", stderr: "" };
       if (command === "brew" && args[0] === "list") return { stdout: "engram", stderr: "" };
@@ -264,10 +283,12 @@ describe("v1.0.11 formula-scoped brew argv (deps + lifecycle)", () => {
   });
 
   it("depsSync missing-install uses brew install --formula, never bare/cask/tap/trust", async () => {
+    onTestFinished((await provisionCompletePlaywright()).cleanup);
     const configDir = await makeConfigDirWithContext7();
     const calls: BrewCall[] = [];
     let installed = false;
     const executor: Executor = async (command, args, options) => {
+      if (command === "ldd") return { stdout: "libc.so.6 => /lib/libc.so.6\n", stderr: "" };
       recordCall(calls, command, args, options);
       const key = `${command} ${args.join(" ")}`;
       if (command === "engram" && args[0] === "version") {
