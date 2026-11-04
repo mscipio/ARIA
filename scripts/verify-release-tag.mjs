@@ -353,8 +353,8 @@ try {
     if (!checkOutput.includes("ARIA upgrade check")) fail("upgrade --check output missing report header");
     if (!checkOutput.includes("Component")) fail("upgrade --check output missing component table");
     console.log("verify-release-tag: upgrade --check ok (exit 0, read-only)");
-    const modelsOutput = capture(process.execPath, [ariaBin, "models"], { cwd: installRoot, env: smokeEnv });
-    if (!modelsOutput.includes("role  model  effort")) fail("aria models did not produce the routes table header");
+    const modelsOutput = capture(process.execPath, [ariaBin, "models", "--show"], { cwd: installRoot, env: smokeEnv });
+    if (!modelsOutput.includes("variant  source")) fail("aria models --show did not produce the routes table header");
     if (!modelsOutput.includes("coder")) fail("aria models did not include the coder role");
     console.log("verify-release-tag: models dispatch ok");
   });

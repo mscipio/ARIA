@@ -306,13 +306,14 @@ console.log("smoke-package: installed agent migration/preflight ok");
     if (!helpOutput.includes(command)) fail(`aria --help does not mention ${command}`);
   }
 
-  const modelsOutput = execFileSync(process.execPath, [ariaBin, "models"], {
+  // Bare `models` is the interactive manager (terminal only); the read-only table is `--show`.
+  const modelsOutput = execFileSync(process.execPath, [ariaBin, "models", "--show"], {
     cwd: installRoot,
     encoding: "utf8",
     env: childEnv(),
   });
-  if (!modelsOutput.includes("role  model  effort")) {
-    fail("aria models did not produce expected header");
+  if (!modelsOutput.includes("variant  source")) {
+    fail("aria models --show did not produce expected header");
   }
   if (!modelsOutput.includes("coder")) {
     fail("aria models did not include a role row");
