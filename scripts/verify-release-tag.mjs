@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, isAbsolute, join, relative, resolve, sep } from "node:path";
 import process from "node:process";
-import { createUniqueScratchDir } from "../dist/scratch.js";
+import { allocateUnplannedExecutionDir } from "../dist/scratch.js";
 
 // Short post-tag verifier (T004). Verifies provenance and essential packaged
 // startup for an immutable release tag WITHOUT rerunning behavioral
@@ -81,7 +81,7 @@ let expectedVersion = "";
 // scratch run directory. Created
 // before any stage so failure cleanup (including unknown-tag failures) is
 // uniform; only the exact-tag install stage below may use the network.
-const sandboxRoot = await createUniqueScratchDir(repoRoot, "release-verifier", "run");
+const sandboxRoot = await allocateUnplannedExecutionDir(repoRoot, "release-verifier-run");
 const installRoot = join(sandboxRoot, "install");
 const homeDir = join(sandboxRoot, "home");
 const xdgConfig = join(sandboxRoot, "xdg-config");
