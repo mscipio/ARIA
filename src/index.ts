@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Plugin, Skill } from "@opencode/plugin";
+import { cancelledMessage, classify, createDenials, createReplyTracker, rejectionMessage, repeatMessage, settle } from "./denials.ts";
 import { createGuard, createRootResolver } from "./guard.ts";
 import { GIT_INPUT_SCHEMA, runGit, type GitInput } from "./git-tool.ts";
 import { describePlan, loadPlans, partitionPlans } from "./plans.ts";
 import { ROLE_IDS, buildRoles, loadPrompt } from "./roles.ts";
-import { SCRATCH_DIR, ensureScratch, scratchRelative, validSessionID } from "./scratch.ts";
+import { SCRATCH_DIR, ensureScratch, shellQuote, validSessionID } from "./scratch.ts";
 import { discoverSkills } from "./skills.ts";
 import { META_KEY, VERDICT_SCHEMA, fromMetadata, onEdit, onRequest, onShell, onVerdict, parseVerdict, summarize, type ReviewState } from "./review.ts";
 import { createApprovalCarry, needsGate } from "./tool-gate.ts";
@@ -19,12 +20,15 @@ import { createApprovalCarry, needsGate } from "./tool-gate.ts";
  *               top-level `permissions` are layered on top natively. No models are pinned.
  *   skills      curated skills registered with the native skill registry
  *   guard       `permission` `evaluate` hook: symlink boundary + scratch ownership (deny-only)
- *   tool gate   `tool` `execute.before` hook: per-call permission for tools that never assert
+ *   tool gate   `tool` `execute.before` hook: per-call permission for tools that never assert; a user
+ *               rejection is reported to the model as such and holds for the session tree until the
+ *               user's next prompt (denials.ts)
  *   aria_git    read-only status/diff/log/show for roles without a shell
  *   aria_status effective roles, models, plans and review state as the running server sees them
  *   review      observed review state per root session (changes, reviewer launches, verdicts the
  *               reviewer recorded with aria_review_verdict), stored in the root session's metadata
- *   context     per-session scratch path and the plan owned by this session tree
+ *   context     per-session scratch path (re-provisioned on every request, which also marks the
+ *               session as active for cleanup) and the plan owned by this session tree
  *
  * Options (`plugins: [{ "package": "/path/to/aria", "options": { ... } }]`):
  *   zoteroServer  MCP server name of zotero-mcp (default "zotero")
@@ -98,19 +102,63 @@ export default Plugin.define({
     await track(ctx.permission.hook("evaluate", createGuard({ directory, projectDirectory, rootOf })));
 
     // Tool gate: per-call permission for every tool that is not a self-asserting built-in.
+    // A user rejection is made unmistakable to the model and binds the whole session tree (so a
+    // subagent cannot redo it) until the user's next prompt; see denials.ts.
     const carry = createApprovalCarry();
+    const denials = createDenials();
+    const replies = createReplyTracker();
+    // OpenCode cancels every other pending request when the user rejects one; the events tell the
+    // user's own answer from those cancellations (denials.ts).
+    let stopped = false;
+    void (async () => {
+      try {
+        for await (const event of ctx.event.subscribe({ types: ["permission.asked", "permission.replied"] })) {
+          if (stopped) break;
+          const e = event as unknown as { type: string; data?: never };
+          if (e.type === "permission.asked") replies.asked(e.data as never);
+          else if (e.type === "permission.replied") replies.replied(e.data as never);
+        }
+      } catch {
+        // Stream failed. Without it rejections are reported as unconfirmed and not recorded (denials.ts).
+      }
+    })();
+    disposers.push(async () => {
+      stopped = true;
+    });
     await track(ctx.permission.hook("evaluate", (event) => carry.hook(event as never)));
     await track(
       ctx.tool.hook("execute.before", async (event) => {
         if (!needsGate(event.tool)) return;
-        await ctx.permission.assert({
-          sessionID: event.sessionID,
-          agent: event.agent,
-          action: event.tool,
-          resources: ["*"],
-          source: { type: "tool", messageID: event.messageID, id: event.id },
-        });
+        // Fail closed: a rejection recorded for the tree cannot be checked if the tree is unknown.
+        const root = await rootOf(event.sessionID).catch(() => undefined);
+        if (!root) throw new Error(`ARIA could not resolve this session's tree to check earlier permission decisions, so ${event.tool} did not run. Try again.`);
+        const earlier = denials.find(root, event.tool);
+        if (earlier) throw new Error(repeatMessage(earlier));
+        try {
+          await ctx.permission.assert({
+            sessionID: event.sessionID,
+            agent: event.agent,
+            action: event.tool,
+            resources: ["*"],
+            source: { type: "tool", messageID: event.messageID, id: event.id },
+          });
+        } catch (error) {
+          const rejection = classify(error);
+          if (!rejection) throw error;
+          const verdict = await settle(() => replies.verdict(event.sessionID, event.id, event.tool));
+          if (verdict !== "explicit") throw new Error(cancelledMessage(event.tool, verdict));
+          denials.record(root, event.tool, rejection.kind === "corrected" ? rejection.feedback : undefined);
+          throw new Error(rejectionMessage(event.tool, rejection));
+        }
         carry.record(event.sessionID, event.id, event.tool);
+      }),
+    );
+    // A prompt into a ROOT session is the user speaking again (subagent reports do not pass through
+    // this hook); a child's launch prompt must not lift a rejection. If the lookup fails, keep the block.
+    await track(
+      ctx.session.hook("prompt", async (event) => {
+        const info = await ctx.session.get({ sessionID: event.sessionID as never }).catch(() => undefined);
+        if (info && !info.parentID) denials.clear(event.sessionID as string);
       }),
     );
 
@@ -244,7 +292,21 @@ export default Plugin.define({
       return lines.join("\n");
     }
 
-    const scratchState = new Map<string, string>();
+    // Scratch is provisioned on every model request (idempotent and cheap), so a directory removed
+    // mid-session (cleanup, manual delete) is recreated before the model is told to use it.
+    type Provision = { ok: true; dir: string; root: string } | { ok: false; reason: string };
+    const provision = async (sessionID: string): Promise<Provision> => {
+      try {
+        const root = await rootOf(sessionID);
+        if (!validSessionID(root) || !validSessionID(sessionID)) throw new Error("session id could not be resolved");
+        ensureScratch(directory, root, sessionID);
+        // Shown with the project path OpenCode itself uses (it matches paths lexically), not the real path.
+        return { ok: true, dir: join(directory, SCRATCH_DIR, root, sessionID), root };
+      } catch (error) {
+        return { ok: false, reason: (error as Error).message };
+      }
+    };
+
     await track(
       ctx.session.hook("context", async (event) => {
         const notes: string[] = [];
@@ -255,24 +317,13 @@ export default Plugin.define({
           root = undefined;
         }
         if (SCRATCH_ROLES.has(event.agent)) {
-          let state = scratchState.get(event.sessionID);
-          if (!state) {
-            try {
-              if (!root || !validSessionID(root) || !validSessionID(event.sessionID)) throw new Error("session id could not be resolved");
-              ensureScratch(directory, root, event.sessionID);
-              state = "ok";
-            } catch (error) {
-              state = `unavailable: ${(error as Error).message}`;
-            }
-            // Only success is cached; a failure is re-checked next turn.
-            if (state === "ok") scratchState.set(event.sessionID, state);
-          }
-          if (state === "ok" && root) {
+          const scratch = await provision(event.sessionID);
+          if (scratch.ok) {
             notes.push(
-              `ARIA scratch for this session: ${scratchRelative(root, event.sessionID)}/ (Git-ignored, yours alone). Throwaway scripts, logs and intermediate files go there; deliverables go in their proper place. Edits to other sessions' scratch are denied.${root === event.sessionID ? ` When the task is complete and verified, create ${SCRATCH_DIR}/${root}/DONE so \`aria scratch clean\` can remove it.` : ""}`,
+              `ARIA scratch for this session: ${scratch.dir}/ (Git-ignored, yours alone, already created; do not guess other session ids). Put ALL temporary files there: scripts, logs, terminal captures, intermediate output, disposable fixtures and any temporary HOME or config directory. Do not use /tmp, bare mktemp or any other directory outside the project unless the user asks. Single files can go directly in it. To keep several related files together, make one activity directory, \`mkdir -- ${shellQuote(scratch.dir)}/"$(date +%Y%m%d-%H%M%S)-short-kebab-description"\` (plain mkdir fails if the name exists; then add a suffix such as -2). TMPDIR is not set to your scratch (the host's value applies): when a tool picks its own temporary location, run it as \`TMPDIR=${shellQuote(scratch.dir)} command\`, or use \`mktemp -d -p ${shellQuote(scratch.dir)}\`. This is a convention, not a sandbox. Deliverables and intentional edits go in their proper place, not here. The edit and write tools are denied in other sessions' scratch (a shell is not restricted). Subagents get their own scratch and cannot write yours: to hand them a file, put it here and give them its path (they can read it).${scratch.root === event.sessionID ? ` When the task is complete and verified, create ${SCRATCH_DIR}/${scratch.root}/DONE so \`aria scratch clean\` can remove it; continuing to work afterwards is fine, cleanup then keeps the scratch.` : ""}`,
             );
           } else {
-            notes.push(`ARIA scratch is ${state}. Do not create temporary files in the repository; keep intermediate output in memory or ask.`);
+            notes.push(`ARIA scratch is unavailable: ${scratch.reason}. Do not create temporary files in the repository or in /tmp; keep intermediate output in memory or ask.`);
           }
         }
         if (root && (event.agent === "aria" || event.agent === "scientist")) {

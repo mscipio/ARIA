@@ -5,7 +5,7 @@ description: Efficiently understand a repository or subsystem before changing it
 
 # Investigating a codebase
 
-1. **Instructions first.** Read `AGENTS.md` and any README or contributing notes that apply to the area.
+1. **Instructions first.** Read the README and any contributing or convention notes that apply to the area.
 2. **Shape.** `glob` the top levels and the manifest files (package.json, pyproject.toml, environment.yml, *.m entry points, CMake/Makefile) to learn language, build, and test commands.
 3. **Locate.** `grep` for the symbol, string, or behaviour; follow definitions and callers by reading, not guessing. Prefer a few full reads over many partial ones.
 4. **Behaviour over names.** Confirm what code actually does; comments and names lie. Check how it is called and what the tests exercise.

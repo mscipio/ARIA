@@ -12,6 +12,9 @@
  * for the same session, tool call and action, once, within a short window, and only after the
  * gate's check succeeded. Deny is never affected.
  *
+ * A user's rejection of a gated call is turned into an explicit message and remembered for the session
+ * tree until the user's next prompt (denials.ts); the gate refuses a repeat without asking again.
+ *
  * Residual risk: a third-party plugin that registers a tool under a built-in name (e.g. `read`)
  * replaces the built-in and is not gated. Detecting that would need registry provenance OpenCode
  * does not expose.

@@ -69,7 +69,7 @@ function findExecutable(dep: Dependency): { path?: string; managed: boolean } {
 
 function cliDeps(): { ok: boolean; missing: string[] } {
   const req = createRequire(join(packageRoot, "package.json"));
-  const missing = ["ink", "react", "jsonc-parser"].filter((name) => {
+  const missing = ["terminal-kit", "jsonc-parser"].filter((name) => {
     try {
       req.resolve(name);
       return false;
@@ -86,7 +86,7 @@ export async function depStatus(dep: Dependency, project: string): Promise<DepSt
     const r = cliDeps();
     return {
       ...base, enabled: true, ownership: "aria-managed", health: r.ok ? "healthy" : "missing", basis: "runtime",
-      evidence: [r.ok ? `resolved ink, react, jsonc-parser from ${packageRoot}` : `cannot resolve: ${r.missing.join(", ")} from ${packageRoot}`],
+      evidence: [r.ok ? `resolved terminal-kit, jsonc-parser from ${packageRoot}` : `cannot resolve: ${r.missing.join(", ")} from ${packageRoot}`],
       actions: r.ok ? [] : ["install"],
     };
   }

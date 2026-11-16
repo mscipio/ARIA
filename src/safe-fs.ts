@@ -1,4 +1,4 @@
-import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, lutimesSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, unlinkSync, writeSync } from "node:fs";
 import { join, relative, sep, isAbsolute } from "node:path";
 
 /**
@@ -113,6 +113,13 @@ export function createExclusive(path: string, content: string): boolean {
     closeSync(fd);
   }
   return true;
+}
+
+/** Mark a real directory as recently active (mtime = now). Refuses links; never follows one. */
+export function touchDirectory(path: string): void {
+  if (kindOf(path) !== "directory") throw new UnsafePath(`${path} is not a real directory`);
+  const now = new Date();
+  lutimesSync(path, now, now);
 }
 
 /** Directory entries; symlinks and odd entries are reported as such and never followed. */

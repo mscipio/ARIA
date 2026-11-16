@@ -310,7 +310,7 @@ async function dispatch(argv: readonly string[]): Promise<number> {
         if (json) console.log(JSON.stringify({ entries, problems }, null, 2));
         else {
           if (!entries.length && !problems.length) console.log("No scratch directories.");
-          for (const e of entries) console.log(`${e.root}  ${e.done ? "DONE" : "open"}  ${e.sessions.length} session dir(s)  last change ${e.modified.toISOString()}${e.problem ? `  MALFORMED: ${e.problem}` : ""}`);
+          for (const e of entries) console.log(`${e.root}  ${e.done ? "DONE" : e.reopened ? "reopened" : "open"}  ${e.sessions.length} session dir(s)  last change ${e.modified.toISOString()}${e.problem ? `  MALFORMED: ${e.problem}` : ""}`);
           for (const p of problems) console.log(`problem: ${p}`);
         }
         return problems.length ? EXIT.problem : EXIT.ok;
@@ -318,7 +318,7 @@ async function dispatch(argv: readonly string[]): Promise<number> {
       if (sub === "clean") {
         const days = str(args, "stale");
         try {
-          const r = cleanScratch(project, { dryRun: args.flags.has("dry-run"), ...(days !== undefined ? { staleDays: Number(days) } : {}) });
+          const r = cleanScratch(project, { dryRun: args.flags.has("dry-run"), ...(days !== undefined ? { staleDays: /^[0-9]+$/.test(days) ? Number(days) : Number.NaN } : {}) });
           if (json) console.log(JSON.stringify(r, null, 2));
           else {
             console.log(`${args.flags.has("dry-run") ? "Would remove" : "Removed"}: ${r.removed.join(", ") || "nothing"}`);

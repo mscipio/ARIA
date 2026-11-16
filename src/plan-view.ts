@@ -1,4 +1,5 @@
 import type { PlanSummary, PlanTask } from "./plans.ts";
+import type { Summary } from "./review.ts";
 
 /**
  * Pure helpers behind the TUI: how a plan task is shown and which changes are worth telling the
@@ -143,4 +144,33 @@ export function diffSessions(prev: ReadonlyMap<string, SessionSnapshot>, next: R
     }
   }
   return events;
+}
+
+export interface Nudge {
+  readonly text: string;
+  readonly tone: "muted" | "warning" | "error";
+}
+
+/** Edits since the last review before the sidebar suggests another one. */
+export const DEFAULT_REVIEW_NUDGE = 5;
+
+/**
+ * The single sidebar reminder about review, or nothing. Silent while the unreviewed edits are
+ * below `threshold` and when a review passed for the current changes. Counts edits, not files:
+ * a big change to one file can be worth reviewing. A FAIL always shows until a re-review passes.
+ */
+export function reviewNudge(s: Summary, threshold = DEFAULT_REVIEW_NUDGE): Nudge | undefined {
+  switch (s.disposition) {
+    case "requested":
+      return { text: "◌ review running", tone: "muted" };
+    case "failed":
+      return { text: `✗ review failed · ${s.unresolvedBlocking} blocking`, tone: "error" };
+    case "insufficient":
+      return { text: "◌ review: evidence missing", tone: "warning" };
+    default: {
+      if (s.changedSince < threshold) return undefined;
+      const since = s.latest ? " since review" : " unreviewed";
+      return { text: `◌ ${s.changedSince} edit${s.changedSince === 1 ? "" : "s"}${since}`, tone: "warning" };
+    }
+  }
 }

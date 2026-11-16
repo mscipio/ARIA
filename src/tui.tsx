@@ -1,30 +1,42 @@
 import { Plugin } from "@opencode/plugin/tui";
-import { For, Show, createSignal } from "solid-js";
-import { diffPlans, diffSessions, progressLine, taskLabel, taskLine, visibleTasks } from "./plan-view.ts";
-import type { SessionSnapshot, StatusEvent } from "./plan-view.ts";
-import { isActive, loadPlans, partitionPlans } from "./plans.ts";
+import { SyntaxStyle } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import type { Nudge } from "./plan-view.ts";
+import { DEFAULT_REVIEW_NUDGE, diffPlans, diffSessions, progressLine, reviewNudge, taskLine, taskState, visibleTasks } from "./plan-view.ts";
+import type { SessionSnapshot, StatusEvent, TaskState } from "./plan-view.ts";
+import { PLAN_LIMITS, PLANS_DIR, isPlanFileName, loadPlans, partitionPlans, planFromText, readPlanText } from "./plans.ts";
 import type { PlanReadState, PlanSummary } from "./plans.ts";
 import { fromMetadata, summarize } from "./review.ts";
 
 /**
  * ARIA in the OpenCode TUI, loaded from the same `plugins` entry as the server part
- * (`exports["./tui"]`). It reads `.aria/plans/*.md` through the confined plan reader and
- * OpenCode's own session data, and stores nothing.
+ * (`exports["./tui"]`). It reads `.aria/plans/*.md` and OpenCode's own session data. The only thing
+ * it stores is which plan you picked for a session.
  *
- * 1. Sidebar: the plan owned by this session tree (`session:` = root session id) as a task list
- *    (○ pending, ● in progress, ◐ executed without evidence, ✔ evidence recorded, ✗ blocked),
- *    a count of other active plans, then the session family with agent, state and model.
- * 2. Plan panel (`/aria-plan` or "ARIA: show plan"): all active plans with owner and read time.
+ * 1. Sidebar "ARIA Plan" (collapsible): the plan you selected for this session, else the plan
+ *    owned by this session tree (`session:` = root session id), as a task list coloured by state
+ *    (○ pending, ● in progress, ◐ executed without evidence, ✔ evidence recorded, ✗ blocked).
+ *    `[select]` or `/aria-plan` picks a plan. Under the progress line, one review reminder that
+ *    appears only when it matters (see reviewNudge). Then the session family with agent, state, model.
+ * 2. Plan panel (click the plan title, or `/aria-plan-open`): the selected plan as rendered
+ *    Markdown, scrollable, with copy (OSC 52, works over SSH), raw/rendered toggle and fullscreen.
  * 3. Toasts for plan task changes and subagent start/finish/failure; OS notifications only for
  *    blocked tasks, failures, finished plans and the root session finishing, and only while the
  *    terminal is unfocused. The first read is a baseline, so nothing old is replayed.
  *
+ * Plan files are read through the OpenCode server's file API, so this works when the TUI runs
+ * somewhere else than the project (SSH); if that API fails, the confined local reader is used.
  * Refresh: OpenCode events schedule one debounced refresh (at most every 500 ms); a 5 s timer
- * catches plan edits made outside OpenCode. When plan files cannot be read from this TUI (for
- * example a remote server), the UI says so instead of showing stale data.
+ * catches plan edits made outside OpenCode. When nothing current can be read, the UI says so
+ * instead of showing stale data.
  */
 
 const PANEL = "aria.plan";
+const REVIEW_NUDGE_EDITS = (() => {
+  const n = Number(process.env.ARIA_REVIEW_NUDGE_EDITS);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_REVIEW_NUDGE;
+})();
 const SIDEBAR_TASKS = 7;
 const SIDEBAR_SESSIONS = 6;
 const POLL_MS = 5000;
@@ -38,6 +50,10 @@ interface PlanState {
   /** Set when nothing current can be shown. */
   readonly unavailable: string | undefined;
 }
+
+// OpenTUI text attribute bits (TextAttributes.BOLD / DIM); literals avoid a runtime import from the host.
+const BOLD = 1;
+const DIM = 2;
 
 const time = (d: Date | undefined) => (d ? d.toTimeString().slice(0, 8) : "never");
 
@@ -79,74 +95,198 @@ export default Plugin.define({
       }
     };
 
-    const refresh = () => {
-      pending = undefined;
-      if (disposed) return;
-      const dir = directory();
-      let next: PlanState;
-      if (!dir) next = { read: "no-directory", plans: [], problems: [], readAt: new Date(), unavailable: "no local project directory for this TUI" };
-      else {
-        try {
-          const load = loadPlans(dir);
-          next = {
-            read: load.state,
-            plans: load.plans,
-            problems: load.problems,
-            readAt: new Date(),
-            unavailable: load.state === "unavailable" ? (load.problems[0] ?? "plan directory unreadable") : undefined,
-          };
-        } catch (error) {
-          next = { read: "unavailable", plans: [], problems: [], readAt: new Date(), unavailable: (error as Error).message };
-        }
-      }
-      let nextSessions: Map<string, SessionSnapshot> | undefined;
+    const location = () => context.location ?? context.data.location.default();
+
+    /** Plans through the server's file API (works over SSH); the confined local reader is the fallback. */
+    const readPlans = async (dir: string): Promise<PlanState> => {
+      const readAt = new Date();
       try {
-        nextSessions = sessions();
+        const listing = await context.client.file.list({ location: location(), path: PLANS_DIR });
+        if (!Array.isArray(listing.data)) throw new Error("no directory listing");
+        const names = [
+          ...new Set(
+            listing.data
+              .filter((item: { type?: string }) => item.type === "file" || !item.type)
+              .map((item: { name?: unknown; path?: unknown }) => (typeof item.name === "string" ? item.name : String(item.path ?? "").split(/[\\/]/).pop() ?? "")),
+          ),
+        ]
+          .filter((name) => name.endsWith(".md"))
+          .sort((x, y) => (x < y ? 1 : -1));
+        const plans: PlanSummary[] = [];
+        const problems: string[] = [];
+        for (const name of names.slice(0, PLAN_LIMITS.maxPlans)) {
+          if (!isPlanFileName(name)) {
+            problems.push(`skipped ${JSON.stringify(name)}: unexpected file name`);
+            continue;
+          }
+          const bytes = await context.client.file.read({ location: location(), path: `${PLANS_DIR}/${name}` });
+          if (bytes.byteLength > PLAN_LIMITS.maxBytes) {
+            problems.push(`skipped ${name}: too large`);
+            continue;
+          }
+          const plan = planFromText(name, new TextDecoder("utf-8").decode(bytes));
+          if (plan) plans.push(plan);
+          else problems.push(`skipped ${name}: no front matter with a status line`);
+        }
+        return { read: problems.length ? "partial" : plans.length ? "ok" : "empty", plans, problems, readAt, unavailable: undefined };
       } catch {
-        nextSessions = undefined;
+        const load = loadPlans(dir);
+        return { read: load.state, plans: load.plans, problems: load.problems, readAt, unavailable: load.state === "unavailable" ? (load.problems[0] ?? "plan directory unreadable") : undefined };
       }
-      // Only a complete read can be compared: a partial or failed read must not produce
-      // "started"/"done" events for plans that were merely skipped this time.
-      const complete = next.read === "ok" || next.read === "empty" || next.read === "absent";
-      if (previousPlans && complete) announce(diffPlans(previousPlans, next.plans));
-      if (previousSessions && nextSessions) announce(diffSessions(previousSessions, nextSessions));
-      if (complete) previousPlans = next.plans;
-      if (nextSessions) previousSessions = nextSessions;
-      setState(next);
-      setSnapshot((n) => n + 1);
+    };
+
+    let refreshing = false;
+    const refresh = async () => {
+      pending = undefined;
+      if (disposed || refreshing) return;
+      refreshing = true;
+      try {
+        const dir = directory();
+        let next: PlanState;
+        if (!dir) next = { read: "no-directory", plans: [], problems: [], readAt: new Date(), unavailable: "no project directory for this TUI" };
+        else {
+          try {
+            next = await readPlans(dir);
+          } catch (error) {
+            next = { read: "unavailable", plans: [], problems: [], readAt: new Date(), unavailable: (error as Error).message };
+          }
+        }
+        if (disposed) return;
+        let nextSessions: Map<string, SessionSnapshot> | undefined;
+        try {
+          nextSessions = sessions();
+        } catch {
+          nextSessions = undefined;
+        }
+        // Only a complete read can be compared: a partial or failed read must not produce
+        // "started"/"done" events for plans that were merely skipped this time.
+        const complete = next.read === "ok" || next.read === "empty" || next.read === "absent";
+        if (previousPlans && complete) announce(diffPlans(previousPlans, next.plans));
+        if (previousSessions && nextSessions) announce(diffSessions(previousSessions, nextSessions));
+        if (complete) previousPlans = next.plans;
+        if (nextSessions) previousSessions = nextSessions;
+        setState(next);
+        setSnapshot((n) => n + 1);
+      } finally {
+        refreshing = false;
+      }
     };
 
     const schedule = () => {
-      if (!disposed && pending === undefined) pending = setTimeout(refresh, DEBOUNCE_MS);
+      if (!disposed && pending === undefined) pending = setTimeout(() => void refresh(), DEBOUNCE_MS);
     };
 
-    refresh();
+    void refresh();
     const stop = context.data.listen(schedule);
     const timer = setInterval(schedule, POLL_MS);
 
-    const active = () => state().plans.filter(isActive);
+    // Resolved theme: text.feedback.{success,error} and text.muted/faint are colors (checked against
+    // OpenCode 2.3's theme at runtime). A missing path leaves the default foreground, never throws.
+    // The theme may hand back a store proxy rather than a real RGBA, which the renderer cannot parse
+    // as a color. Convert to a plain "#rrggbb" string from the RGBA's float buffer; anything unexpected
+    // yields undefined (default foreground) instead of throwing inside render.
+    const themeColor = (...path: string[]): string | undefined => {
+      try {
+        let value: unknown = context.theme;
+        for (const key of path) value = value && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+        if (typeof value === "string") return value;
+        // Feedback colors are { base, muted } pairs: use the base color.
+        if (value && typeof value === "object" && !("buffer" in value) && "base" in value) value = (value as { base: unknown }).base;
+        const buffer = (value as { buffer?: ArrayLike<number> } | undefined)?.buffer;
+        if (!buffer || buffer.length < 3) return undefined;
+        // The buffer holds 0-255 channel values (observed in OpenCode 2.3); accept 0-1 floats too.
+        const scale = Math.max(Number(buffer[0]), Number(buffer[1]), Number(buffer[2])) > 1 ? 1 : 255;
+        const hex = (n: number) => Math.max(0, Math.min(255, Math.round(Number(n) * scale))).toString(16).padStart(2, "0");
+        return `#${hex(buffer[0] as number)}${hex(buffer[1] as number)}${hex(buffer[2] as number)}`;
+      } catch {
+        return undefined;
+      }
+    };
+    /** Running stands out, failed is flagged, idle recedes. The glyph and word stay for no-color terminals. */
+    const statusStyle = (status: string): { fg: string | undefined; attributes: number } =>
+      status === "running"
+        ? { fg: themeColor("text", "feedback", "success"), attributes: BOLD }
+        : status === "failed"
+          ? { fg: themeColor("text", "feedback", "error"), attributes: BOLD }
+          : { fg: themeColor("text", "muted"), attributes: DIM };
+
+    const colorOf = (state: TaskState): string | undefined => {
+      switch (state) {
+        case "verified":
+        case "executed":
+          return themeColor("text", "feedback", "success") ?? "green";
+        case "active":
+          return themeColor("text", "feedback", "warning") ?? "yellow";
+        case "blocked":
+          return themeColor("text", "feedback", "error") ?? "red";
+        default:
+          return themeColor("text", "muted");
+      }
+    };
+    const toneColor = (tone: "muted" | "warning" | "error") =>
+      tone === "error" ? themeColor("text", "feedback", "error") ?? "red" : tone === "warning" ? themeColor("text", "feedback", "warning") ?? "yellow" : themeColor("text", "muted");
+
+    const rootOf = (sessionID: string): string => {
+      try {
+        return context.data.session.root(sessionID);
+      } catch {
+        return sessionID;
+      }
+    };
+
+    // Which plan a session shows: the one picked for its root session; otherwise the one it owns.
+    const [picked, updatePicked] = context.storage.store("current-plan", { initial: { sessions: {} } as { sessions: Record<string, string> } });
+    const pickKey = (root: string) => `${directory() ?? ""}\u0000${root}`;
+    const planFor = (sessionID: string): PlanSummary | undefined => {
+      snapshot();
+      const root = rootOf(sessionID);
+      const file = picked.sessions[pickKey(root)];
+      return (file ? state().plans.find((p) => p.file === file) : undefined) ?? partitionPlans(state().plans, root).own[0];
+    };
+
+    let activePicker: ((sessionID: string) => Promise<void>) | undefined;
+    let activeSession: string | undefined;
+
+    const pickPlan = async (sessionID: string) => {
+      await refresh();
+      const root = rootOf(sessionID);
+      const current = picked.sessions[pickKey(root)] ?? "";
+      const plans = state().plans;
+      if (plans.length === 0) {
+        context.ui.toast.show({ title: "ARIA", message: state().unavailable ?? `No plans in ${PLANS_DIR}`, variant: "warning" });
+        return;
+      }
+      const choice = await context.ui.dialog.select({
+        title: "Select plan for this session",
+        current,
+        options: [
+          { title: "Automatic", value: "", description: "The plan owned by this session" },
+          ...plans.map((p) => ({ title: p.title, value: p.file, description: `${p.status} · ${progressLine(p)} · ${p.file}` })),
+        ],
+      });
+      if (choice === undefined) return;
+      await updatePicked((draft: { sessions: Record<string, string> }) => {
+        if (choice) draft.sessions[pickKey(root)] = choice as string;
+        else delete draft.sessions[pickKey(root)];
+      });
+      setSnapshot((n) => n + 1);
+    };
+
+    const reviewOf = (sessionID: string) => {
+      snapshot();
+      const r = rootOf(sessionID);
+      const info = context.data.session.get(r) as { metadata?: unknown } | undefined;
+      return reviewNudge(summarize(fromMetadata(info?.metadata, r)), REVIEW_NUDGE_EDITS);
+    };
 
     context.ui.slot({
       append: "sidebar.content",
       render: ({ sessionID }) => {
-        const root = () => {
-          snapshot();
-          try {
-            return context.data.session.root(sessionID);
-          } catch {
-            return sessionID;
-          }
-        };
-        const parts = () => partitionPlans(state().plans, root());
-        const plan = () => parts().own[0];
-        // Review state recorded by the server plugin in the root session's metadata (observed, not self-reported).
-        const review = () => {
-          snapshot();
-          const r = root();
-          const info = context.data.session.get(r) as { metadata?: unknown } | undefined;
-          const s = summarize(fromMetadata(info?.metadata, r));
-          return s.disposition === "none" && s.changedSince === 0 ? undefined : s;
-        };
+        const [open, setOpen] = createSignal(true);
+        activePicker = pickPlan;
+        activeSession = sessionID;
+        const plan = () => planFor(sessionID);
+        const nudge = () => reviewOf(sessionID);
         const window = () => {
           const p = plan();
           return p ? visibleTasks(p, SIDEBAR_TASKS) : undefined;
@@ -166,38 +306,46 @@ export default Plugin.define({
         };
         return (
           <box flexDirection="column">
-            <text>ARIA</text>
-            <Show when={state().unavailable}>
-              <text>  plans: unavailable ({state().unavailable})</text>
-            </Show>
-            <Show when={plan()}>
-              <text>
-                {plan()?.title} — {plan() ? progressLine(plan() as PlanSummary) : ""}
+            <box flexDirection="row" justifyContent="space-between" width="100%">
+              <text onMouseDown={() => setOpen(!open())}>
+                {open() ? "▼" : "▶"} ARIA Plan{plan() ? ` ${plan()?.counts.executed}/${plan()?.tasks.length}` : ""}
               </text>
-              <Show when={(window()?.before ?? 0) > 0}>
-                <text>  … {window()?.before} earlier</text>
-              </Show>
-              <For each={window()?.tasks ?? []}>{(task) => <text>  {taskLine(task)}</text>}</For>
-              <Show when={(window()?.after ?? 0) > 0}>
-                <text>  … {window()?.after} more</text>
-              </Show>
-            </Show>
-            <Show when={review()}>
-              <text>
-                {"  "}review: {review()?.disposition === "none" ? "not recorded" : review()?.disposition}
-                {review()?.disposition === "failed" ? ` (${review()?.unresolvedBlocking} blocking)` : ""}
-                {(review()?.changedSince ?? 0) > 0 ? ` · ${review()?.changedSince} change(s) since` : ""}
+              <text fg={themeColor("text", "muted")} onMouseDown={() => void pickPlan(sessionID)}>
+                [select]
               </text>
-            </Show>
-            <Show when={parts().other.length > 0}>
-              <text>  {parts().other.length} other active plan(s) — /aria-plan</text>
-            </Show>
-            <Show when={state().read === "partial"}>
-              <text>  plans partly read: {state().problems.length} file(s) skipped — /aria-plan</text>
+            </box>
+            <Show when={nudge()}>{(n: () => Nudge) => <text fg={toneColor(n().tone)}>  {n().text}</text>}</Show>
+            <Show when={open()}>
+              <Show when={state().unavailable}>
+                <text fg={themeColor("text", "muted")}>  plans: unavailable ({state().unavailable})</text>
+              </Show>
+              <Show when={!state().unavailable && !plan()}>
+                <text fg={themeColor("text", "muted")}>  No plan selected · /aria-plan</text>
+              </Show>
+              <Show when={state().read === "partial"}>
+                <text fg={themeColor("text", "muted")}>  {state().problems.length} plan file(s) skipped</text>
+              </Show>
+              <Show when={plan()}>
+                {(p: () => PlanSummary) => (
+                  <box flexDirection="column">
+                    <text fg={themeColor("text", "action", "secondary", "base")} onMouseDown={() => context.ui.panel.open(PANEL)}>
+                      {p().title} ↗
+                    </text>
+                    <text fg={themeColor("text", "muted")}>{progressLine(p())}</text>
+                    <Show when={(window()?.before ?? 0) > 0}>
+                      <text fg={themeColor("text", "muted")}>  … {window()?.before} earlier</text>
+                    </Show>
+                    <For each={window()?.tasks ?? []}>{(task) => <text fg={colorOf(taskState(task))}>  {taskLine(task)}</text>}</For>
+                    <Show when={(window()?.after ?? 0) > 0}>
+                      <text fg={themeColor("text", "muted")}>  … {window()?.after} more</text>
+                    </Show>
+                  </box>
+                )}
+              </Show>
             </Show>
             <For each={rows()}>
               {(row) => (
-                <text>
+                <text fg={statusStyle(row.status).fg} attributes={statusStyle(row.status).attributes}>
                   {row.status === "running" ? "●" : row.status === "failed" ? "✗" : "○"} {row.agent} {row.status} — {row.title}
                   {"\n"}  {row.model}
                 </text>
@@ -208,61 +356,132 @@ export default Plugin.define({
       },
     });
 
+    // The selected plan as rendered Markdown, scrollable. Reads the file again on open and on `r`.
+    function PlanPreview(props: { panel: { sessionID: string; focused: boolean; close: () => void; toggleFullscreen: () => void } }) {
+      const [source, setSource] = createSignal("");
+      const [error, setError] = createSignal("");
+      const [rendered, setRendered] = createSignal(true);
+      let scroll: ScrollBoxRenderable | undefined;
+      let generation = 0;
+      const scrollable = () => (scroll && !scroll.isDestroyed ? scroll : undefined);
+      const plan = () => planFor(props.panel.sessionID);
+      const accent = themeColor("text", "action", "secondary", "base") ?? "#7aa2f7";
+      const base = themeColor("text", "base");
+      const muted = themeColor("text", "muted");
+      const style = SyntaxStyle.fromStyles(
+        {
+          default: { fg: base },
+          "markup.heading": { fg: accent, bold: true },
+          "markup.heading.1": { fg: accent, bold: true, underline: true },
+          "markup.bold": { fg: base, bold: true },
+          "markup.strong": { fg: base, bold: true },
+          "markup.italic": { fg: muted, italic: true },
+          "markup.list": { fg: accent },
+          "markup.quote": { fg: muted, italic: true },
+          "markup.raw": { fg: accent },
+          "markup.raw.block": { fg: accent },
+          "markup.link": { fg: accent, underline: true },
+        },
+        context.renderer.nativeScene,
+      );
+
+      const load = async () => {
+        const file = plan()?.file;
+        const request = ++generation;
+        if (!file) {
+          setSource("");
+          setError("No plan selected for this session");
+          return;
+        }
+        try {
+          let text: string;
+          try {
+            text = new TextDecoder("utf-8").decode(await context.client.file.read({ location: location(), path: file }));
+          } catch {
+            const dir = directory();
+            if (!dir) throw new Error("no project directory for this TUI");
+            text = readPlanText(dir, file);
+          }
+          if (request !== generation) return;
+          setSource(text);
+          setError("");
+        } catch (cause) {
+          if (request !== generation) return;
+          setSource("");
+          setError(cause instanceof Error ? cause.message : "Unable to read the plan");
+        }
+      };
+      const copy = () => {
+        const text = source();
+        if (!text) return context.ui.toast.show({ title: "ARIA", message: "Plan source is not available", variant: "warning" });
+        const queued = context.renderer.copyToClipboardOSC52(text);
+        context.ui.toast.show({ title: "ARIA", message: queued ? "Plan sent to terminal clipboard (OSC 52)" : "Terminal clipboard is unavailable (OSC 52)", variant: queued ? "success" : "warning" });
+      };
+      createEffect(() => {
+        void plan()?.file;
+        void load();
+      });
+      context.keymap.layer(() => ({
+        priority: 100,
+        enabled: () => props.panel.focused,
+        commands: [
+          { id: "aria.plan.preview.close", title: "Close plan", bind: "escape,q", run: props.panel.close },
+          { id: "aria.plan.preview.down", title: "Scroll plan down", bind: "down,j", run: () => scrollable()?.scrollBy(1) },
+          { id: "aria.plan.preview.up", title: "Scroll plan up", bind: "up,k", run: () => scrollable()?.scrollBy(-1) },
+          { id: "aria.plan.preview.page-down", title: "Page down in plan", bind: "pagedown,ctrl+f", run: () => { const box = scrollable(); if (box) box.scrollBy(Math.max(1, Math.floor(box.viewport.height / 2))); } },
+          { id: "aria.plan.preview.page-up", title: "Page up in plan", bind: "pageup,ctrl+b", run: () => { const box = scrollable(); if (box) box.scrollBy(-Math.max(1, Math.floor(box.viewport.height / 2))); } },
+          { id: "aria.plan.preview.reload", title: "Reload plan", bind: "r", run: () => void load() },
+          { id: "aria.plan.preview.copy", title: "Copy plan Markdown", bind: "y", run: copy },
+          { id: "aria.plan.preview.source", title: "Toggle Markdown and source", bind: "m", run: () => setRendered(!rendered()) },
+          { id: "aria.plan.preview.fullscreen", title: "Toggle plan fullscreen", bind: "f", run: props.panel.toggleFullscreen },
+        ],
+      }));
+      onCleanup(() => {
+        ++generation;
+        void context.renderer.idle().then(() => style.destroy()).catch(() => {});
+      });
+
+      return (
+        <box flexDirection="column" width="100%" height="100%">
+          <box flexDirection="row" gap={1} paddingLeft={1} paddingRight={1} flexShrink={0}>
+            <text fg={base} wrapMode="none" truncate flexGrow={1}>
+              {plan()?.title ?? "ARIA Plan"} — read {time(state().readAt)}
+            </text>
+            <text fg={accent} onMouseDown={copy}>[copy]</text>
+            <text fg={muted} onMouseDown={props.panel.close}>[close]</text>
+          </box>
+          <Show when={error()}>
+            <text fg={themeColor("text", "feedback", "error")} wrapMode="word" padding={1}>{error()}</text>
+          </Show>
+          <Show when={!error()}>
+            <scrollbox ref={(item: ScrollBoxRenderable) => { scroll = item; }} flexGrow={1} minHeight={0} verticalScrollbarOptions={{ visible: true }}>
+              <box paddingLeft={1} paddingRight={1} flexShrink={0}>
+                <Show when={rendered()} fallback={<text fg={base} wrapMode="word">{source()}</text>}>
+                  <markdown
+                    content={source().replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n){1,2}/, "")}
+                    syntaxStyle={style}
+                    conceal
+                    fg={base}
+                    tableOptions={{ style: "grid", widthMode: "full", wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0 }}
+                  />
+                </Show>
+              </box>
+            </scrollbox>
+          </Show>
+          <text fg={muted} wrapMode="none" truncate paddingLeft={1} flexShrink={0}>
+            ↑↓ scroll · y copy · m Markdown/source · r reload · f fullscreen · esc close
+          </text>
+        </box>
+      );
+    }
+
     context.ui.slot({
       append: "session.panel",
-      render: (panel) => {
-        const root = () => {
-          snapshot();
-          try {
-            return context.data.session.root(panel.sessionID);
-          } catch {
-            return panel.sessionID;
-          }
-        };
-        return (
-          <Show when={panel.name === PANEL}>
-            <box flexDirection="column">
-              <text>ARIA plans — read {time(state().readAt)}; checkboxes are plan state, "evidence recorded" is the plan's own claim</text>
-              <Show when={state().unavailable}>
-                <text>Plan files unavailable: {state().unavailable}. Nothing below is current.</text>
-              </Show>
-              <Show when={state().read === "absent"}>
-                <text>No .aria/plans/ directory in this project.</text>
-              </Show>
-              <Show when={(state().read === "empty" || state().read === "ok") && active().length === 0}>
-                <text>No active plan in .aria/plans/.</text>
-              </Show>
-              <Show when={state().read === "partial"}>
-                <text>Partial read: the files listed at the bottom were skipped; plans shown are current, others may exist.</text>
-              </Show>
-              <For each={active()}>
-                {(plan) => (
-                  <box flexDirection="column">
-                    <text>
-                      {"\n"}
-                      {plan.title} {plan.session === root() ? "(this session)" : plan.session ? `(session ${plan.session})` : "(no owner recorded)"}
-                    </text>
-                    <text>{plan.file}</text>
-                    <Show when={plan.objective}>
-                      <text>Objective: {plan.objective}</text>
-                    </Show>
-                    <text>{progressLine(plan)}</text>
-                    <For each={plan.tasks}>
-                      {(task) => (
-                        <text>
-                          {taskLine(task)}
-                          {"\n"}    {taskLabel(task)}
-                        </text>
-                      )}
-                    </For>
-                  </box>
-                )}
-              </For>
-              <For each={state().problems}>{(problem) => <text>skipped: {problem}</text>}</For>
-            </box>
-          </Show>
-        );
-      },
+      render: (panel) => (
+        <Show when={panel.name === PANEL}>
+          <PlanPreview panel={panel} />
+        </Show>
+      ),
     });
 
     // "global": reachable while the prompt has focus, like OpenCode's own slash commands
@@ -271,18 +490,27 @@ export default Plugin.define({
       mode: "global",
       commands: [
         {
-          id: "aria.plan.toggle",
-          title: "ARIA: show plan",
-          description: "Open or close the ARIA plan panel",
+          id: "aria.plan.select",
+          title: "ARIA: select plan",
+          description: "Choose which plan this session shows",
           group: "ARIA",
           palette: true,
           slash: { name: "aria-plan" },
           run: () => {
+            if (activePicker && activeSession) void activePicker(activeSession);
+            else context.ui.toast.show({ message: "Open a session to select its plan", variant: "warning" });
+          },
+        },
+        {
+          id: "aria.plan.open",
+          title: "ARIA: show plan",
+          description: "Open or close the selected plan",
+          group: "ARIA",
+          palette: true,
+          slash: { name: "aria-plan-open" },
+          run: () => {
             if (context.ui.panel.current()?.name === PANEL) context.ui.panel.close();
-            else {
-              refresh();
-              context.ui.panel.open(PANEL);
-            }
+            else if (!context.ui.panel.open(PANEL)) context.ui.toast.show({ message: "Open a session to view its plan", variant: "warning" });
           },
         },
       ],

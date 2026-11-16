@@ -39,7 +39,7 @@ if (wantsUi) {
   }
   const dirFlag = argv.indexOf("--dir");
   const project = dirFlag >= 0 && argv[dirFlag + 1] ? argv[dirFlag + 1] : process.cwd();
-  const { runUi } = await load("ui.ts");
+  const { runUi } = await load("ui-tk.ts");
   process.exit(await runUi(project));
 } else {
   const { main } = await load("cli.ts");

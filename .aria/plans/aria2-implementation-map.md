@@ -1,11 +1,11 @@
 ---
 status: active
 objective: A small, trustworthy OpenCode v2.3.0 plugin with a self-managing CLI/TUI: install, update, rollback, models, dependencies and diagnostics without editing files by hand.
-updated: 2026-11-16 (alpha.5)
+updated: 2026-11-16 (alpha.6)
 ---
 # ARIA 2 implementation map
 
-Single source of truth for what is done, how it was checked, and what remains. `[x]` executed, `[ ]` pending, `[!]` blocked. A task counts as verified only where a `verified:` line records the evidence. Fixture scripts lived in `/tmp/aria-verify/` (disposable, not part of the repo, not automated tests).
+Single source of truth for what is done, how it was checked, and what remains. **Maintenance rule:** keep this map truthful; update it in the same change as the work it records (this note replaces the former repo-level instruction files, which ARIA no longer uses). `[x]` executed, `[ ]` pending, `[!]` blocked. A task counts as verified only where a `verified:` line records the evidence. Fixture scripts lived in `/tmp/aria-verify/` (disposable, not part of the repo, not automated tests).
 
 Baseline used: OpenCode upstream source at tag v2.3.0 and `@opencode/plugin` 2.3.0 types. **No OpenCode binary was installed**: installing it was outside the authorization given and was denied by the environment, so nothing below has been exercised in a running OpenCode.
 
@@ -65,7 +65,7 @@ Verification ran in a disposable environment (`HOME`, `XDG_CONFIG_HOME`, `ARIA_H
   - verified, models: set, bad spec, unknown role, variant change, undo, remove pin (with empty parents pruned); the global file is untouched by project edits
   - verified, deps: missing executable detected; zotero-mcp found inside a conda env without activation; enable writes an absolute path; idempotent; a user entry is never replaced or removed (exit 4); probe against a fake MCP server reported 35 read, 21 mutating, 1 unclassified and 1 expected-but-absent tool
   - verified, releases: release install from `.tgz` (sha256 verified, staged, `npm install --omit=dev`, smoke-tested); update preview, apply and idempotent re-run; rollback and `rollback --to`; checksum mismatch refused; SIGKILL during staging left the old release active and the config untouched, doctor reported it and repair cleaned it; injected failure before activation left the config unchanged; the old release stayed byte-identical; an unknown directory in `releases/` is never removed
-- [x] T47 Management TUI (Ink 8, keyboard only, ASCII markers): 6 sections, preview then `y` for every mutation, a progress overlay, Esc to cancel, help, and a narrow layout
+- [x] T47 Management TUI (Terminal-kit 3.1.4, keyboard only, ASCII markers): 6 sections, preview then `y` for every mutation, a progress overlay, Esc to cancel, help, and a narrow layout
   - verified in a real PTY (Python pty driver, 120x32 and 60x20), with the brief's scenario numbers:
     - launch without OpenCode (1); with the stub OpenCode (2)
     - healthy and unhealthy states (3); all sections by keyboard (4); diagnostic details (5)
@@ -208,6 +208,13 @@ Runtime for Level B checks: OpenCode **v2.3.0** (`@opencode/cli` 2.3.0 installed
   - all accepted and fixed; one fixture per finding added (rollback fixtures 39 → 51, deps 19 → 20, MCP 27 → 28)
   - round 2 (focused re-review): PASS; the reviewer re-ran its reproductions for 1–4 and confirmed them fixed. 3 new NON-BLOCKING: ownership lost if activation is interrupted between the config write and the ownership record (fixed: the activate marker carries the intended entry fingerprint, repair re-adopts it; fault point `activate:after-config`, fixtures handled + crash, 53/53); `ensureIntegration` reported "failed" for a partial install, and a failed browser download left entries repointed to a browserless copy (fixed: partial passes through; the browser is provisioned before the copy is adopted, a failed download discards the new copy); legacy releases with vendored node_modules can fail the new dependency check on rollback (kept as policy, documented in README)
   - not re-reviewed after round 2: the two round-2 fixes above (verified by fixtures only)
+
+- [x] T99 Repeated permission requests after a user rejection (real-model failure: `zotero.zotero_semantic_search` rejected, then retried with a reworded query)
+  - root cause (reproduced on real OpenCode 2.3.0, scripted model): the gate's `Permission.DeclinedError` has no message; inside Code Mode the model was shown only "Tool.Error" (vanilla OpenCode: "Permission.DeclinedError") and the turn continued, so a refusal looked transient. OpenCode keeps no memory of it, and `researcher` is allowed the same tool, so delegating bypassed the decision (reproduced: the call executed with no prompt). It is a correctable framework failure; whether a real model complies once told is not measured.
+  - fix: `src/denials.ts` + the tool gate in `src/index.ts`: explicit rejection message; rejection remembered per (session tree, tool name) until the user's next root prompt; repeats and delegated calls refused without asking; OpenCode's collateral cancellation of sibling requests told apart through `permission.asked/replied` events and not recorded; prompts (aria, scientist, researcher) and README updated. Native tools (shell, edit, read, web) are not covered.
+  - verified (scripted model, real OpenCode 2.3.0, 9 scenarios plus the reviewer's): retry refused with no second prompt; reason forwarded; delegation refused; unrelated tool still prompted and executed; next prompt reopens; Once still works with one prompt per call; pre-authorised researcher unaffected; parallel calls. typecheck and lint clean; identity fixtures 34/34, e2e 19/19.
+  - independent review (separate Claude agent, NOT ARIA's own Reviewer): round 1 FAIL, 2 BLOCKING (sibling cancellation recorded as a rejection of unrelated tools; a false README claim), fixed; round 2 PASS, 6 non-blocking. Two fixed afterwards (honest wording when the verdict is unknown; event loop stop flag instead of an ignored abort signal) and checked by scenarios only, not re-reviewed. Left open: a narrow event-ordering race could record a sibling; an answer through the `question` tool does not reopen a rejection; `rootOf` failure refuses gated tools.
+  - not verified: any real model (blocked); the TUI; event-stream failure in a real server; plugin reload.
 
 ## Remaining release blockers (need authorization or a real runtime)
 

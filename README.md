@@ -20,8 +20,8 @@ ARIA ships a manager: `aria` opens a keyboard-driven terminal UI. The same opera
 **First install from a release** (needs Node ≥ 22.18 and npm; nothing else from ARIA has to exist yet):
 
 ```
-mkdir aria-pkg && tar -xzf aria-2.0.0-alpha.5.tgz -C aria-pkg
-node aria-pkg/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.5.tgz --scope global --with zotero-mcp --link-bin --yes
+mkdir aria-pkg && tar -xzf aria-2.0.0-alpha.6.tgz -C aria-pkg
+node aria-pkg/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.6.tgz --scope global --with zotero-mcp --link-bin --yes
 ```
 
 The bootstrap uses only Node built-ins. It:
@@ -189,6 +189,7 @@ Both hooks can only tighten a decision, never loosen one.
   - Denies a read when an innocent-looking link points to an env or credential file.
   - Enforces scratch ownership per session.
 - **Tool gate** (`tool.execute.before`): asserts permission for every tool except OpenCode's built-in tools that check permission themselves. That includes MCP tools, plugin tools and the built-in `opencode_*` tools that never check, so `ask` and `deny` rules hold for all of them, including inside Code Mode. OpenCode records no tool provenance, so no name prefix is trusted. An MCP tool's own identical check, in the same call, passes once after the gate's approval, so you are not asked twice.
+- **Rejections** (the tool gate, `src/denials.ts`): when you answer a prompt for one of those tools with Reject, OpenCode 2.3.0 gives the model only a bare error (`Tool.Error`, or `Permission.DeclinedError` without ARIA), and inside Code Mode the turn carries on. ARIA replaces that with a message saying you rejected the tool (and why, if you typed a reason), and remembers it. For the rest of that request, until you send your next message, any call to the same tool is refused without asking you again, whatever the arguments, including a call made by a subagent the model launches. Only the tool you actually answered is blocked. OpenCode also cancels every other request pending in the session when you reject one; ARIA recognises those from OpenCode's permission events, tells the model its call was cancelled and not decided, and does not record it, so the model may ask again. If the events cannot establish which request you answered (for example the event stream failed), nothing is recorded, the model is told the refusal could not be confirmed, and the protection against a retry is off for that call. Your next typed message (or command) reopens the question, so you can still approve what you then ask for; an answer given through the model's `question` tool does not. Memory is per session tree and in process only. A plain Reject on one of these tools used to end the model's step when the model called it directly; now the step continues with the explicit message. Tools that OpenCode checks itself (shell, edit, write, web) keep OpenCode's own handling, which is per resource: a plain Reject there ends the step.
 
 ### Not enforced: policy only
 
@@ -229,12 +230,21 @@ With a plan, tasks carry `- review: required | not-required | skipped: … | pas
 
 ## Scratch
 
-Each session gets `.aria/scratch/<root-session>/<session>/` for throwaway files.
+Each session that can write gets `.aria/scratch/<root-session>/<session>/` for throwaway files: scripts, logs, terminal captures, intermediate output, disposable fixtures. Deliverables and intentional edits go in their proper place.
 
+- **Layout.** Single files go directly in the session directory. To group related files an agent makes an activity directory named `YYYYMMDD-HHMMSS-short-kebab-description` with plain `mkdir` (it fails if the name exists; add a suffix). Names are organisation only: ownership is decided by the two session ids, and nested paths below the session directory are allowed.
 - **Creation.** It is created one directory at a time from the real project root. A symlinked `.aria` or `.aria/scratch` disables scratch rather than being followed. Session IDs are validated before being used as paths.
 - **Ignored by Git.** `.aria/scratch/.gitignore` contains `*`.
-- **DONE marker.** The root session marks completion with `.aria/scratch/<root>/DONE`. It must be a regular file; a link is ignored.
-- **Cleanup.** `node bin/aria.mjs scratch clean [--stale N] [--dry-run]` removes only DONE-marked (or explicitly stale) root trees. Before deleting, it renames the tree and re-checks its identity. It never follows links, never crosses filesystems, and keeps anything malformed.
+- **Delivery.** For the `aria` and `scientist` roles (the only ones with a shell or project edits) the absolute path is added to the system context on every model request, after the directory has been re-created if it was removed. If scratch cannot be provisioned, the context says so and forbids `/tmp` instead of naming another place. Read-only roles get no scratch and no write access. A subagent has its own directory under the same root; it cannot write its caller's, and the caller shares a file by giving the subagent its path.
+- **Shell.** OpenCode starts every shell command with `OPENCODE_SESSION_ID` set, but its `shell` hook does not say which session a command belongs to, so ARIA does not set `TMPDIR` automatically. The context gives the path and tells the agent to run tools that choose their own temporary location as `TMPDIR=<scratch> command`, or to use `mktemp -d -p <scratch>`. The host's own `TMPDIR` (e.g. a cluster's `/home/scratch`) otherwise applies to `mktemp`.
+- **Limits.** This is a convention, not containment. What is enforced: the `edit`/`write`/`patch` tools may write only the caller's own scratch (guard), `edit` to absolute paths outside the project is denied, and reading outside the project asks. Anything a shell does depends on the model following the instruction in its context.
+- **DONE marker.** The root session marks completion with `.aria/scratch/<root>/DONE`. It must be a regular file; a link is ignored. If any session of that root is active more than ten minutes after DONE was written, the marker is treated as stale and the scratch is kept.
+- **Activity.** Every model request of a session refreshes its directory's modification time, so cleanup judges activity without scanning nested files. A job that runs for longer than the `--stale` age without any model request is not detected.
+- **Cleanup.** `node bin/aria.mjs scratch clean [--stale N] [--dry-run]` removes only DONE-marked (and not reopened) or explicitly stale root trees; `N` is a whole number of days. Before deleting, it re-reads the tree, renames it and re-checks its identity. It never follows links, never crosses filesystems, and keeps anything malformed or changed meanwhile.
+
+## Instruction files
+
+ARIA does not create, read, update or depend on `AGENTS.md` or `CLAUDE.md`. Its behaviour lives in the role prompts and skills, its filesystem rules in code. OpenCode 2.3.0 itself still loads a project's `AGENTS.md` (from the working directory up to the project root) and the one in its global config directory into the model context; it does not load `CLAUDE.md`. The only switch found is `OPENCODE_DISABLE_PROJECT_CONFIG`, which also disables the project's `opencode.jsonc` (plugin, model pins, permissions), so ARIA leaves it alone. ARIA still asks before editing a project's own instruction files.
 
 ## Plans
 
@@ -252,8 +262,9 @@ Plans are plain Markdown files at the top level of `.aria/plans/`, with front ma
 
 ## TUI
 
-- **Sidebar:** the plan owned by this session as a task list, a count of other active plans and skipped files, and the session family with agent, state and model.
-- **Plan panel:** open it with `/aria-plan` or "ARIA: show plan". It shows every active plan with its owner and the time the files were read. If plan files can't be read from the TUI, the panel says so instead of showing stale data.
+- **Sidebar ("ARIA Plan", collapsible):** the plan you selected for this session (`[select]` or `/aria-plan`), or else the plan owned by this session, as a task list coloured by state (pending, in progress, executed, evidence recorded, blocked), then the session family with agent, state and model. The choice is remembered per project and session.
+- **Review reminder:** one line under the progress line, shown only when it matters: `◌ N edits unreviewed` / `since review` once N edits (default 5, set `ARIA_REVIEW_NUDGE_EDITS`) have no review, `◌ review running`, `✗ review failed · n blocking`, or `◌ review: evidence missing`. Nothing is shown below the threshold or after a PASS for the current changes.
+- **Plan panel:** click the plan title or use `/aria-plan-open`. It shows the selected plan as rendered Markdown (scroll, `y` copy over OSC 52, `m` raw/rendered, `f` fullscreen). Plan files are read through the OpenCode server, so this works over SSH; if that fails the local reader is used, and if nothing can be read the panel says so instead of showing stale data.
 - **Updates:** toasts for task and subagent changes. An OS notification fires only for a blocked task, a failure, a finished plan, or the root session finishing, and only while the terminal is unfocused.
 - **Refresh:** debounced to at most one per 500 ms, plus a 5-second timer.
 - **Read states:** plan reads are reported as absent, empty, complete, partial or unavailable. A partial or failed read never triggers "started"/"done" notifications, and old plans are not shown as current.

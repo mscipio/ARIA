@@ -123,7 +123,7 @@ export const MANIFEST: readonly Dependency[] = [
   {
     id: "aria-cli-deps",
     name: "ARIA CLI packages",
-    purpose: "ink, react and jsonc-parser for the CLI and management TUI (the OpenCode plugins need none).",
+    purpose: "terminal-kit and jsonc-parser for the CLI and management TUI (the OpenCode plugins need none).",
     kind: "package",
     requirement: "required",
     defaultEnabled: true,

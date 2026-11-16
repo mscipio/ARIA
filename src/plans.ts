@@ -120,6 +120,25 @@ export function parsePlan(file: string, text: string): PlanSummary {
   };
 }
 
+/** Parse one plan file's text; undefined when it has no front matter with a status line. */
+export function planFromText(name: string, text: string): PlanSummary | undefined {
+  if (!/^---\r?\n[\s\S]*?\r?\n---/.test(text) || !/^status:/m.test(text)) return undefined;
+  return parsePlan(`${PLANS_DIR}/${name}`, text);
+}
+
+/** Valid plan file name (top level of .aria/plans, no path separators). */
+export const isPlanFileName = (name: string) => PLAN_FILE.test(name);
+export const PLAN_LIMITS = { maxBytes: MAX_PLAN_BYTES, maxPlans: MAX_PLANS } as const;
+
+/** Raw text of one plan through the same confined reader. Throws if it is unsafe or missing. */
+export function readPlanText(projectDir: string, file: string): string {
+  const name = file.startsWith(`${PLANS_DIR}/`) ? file.slice(PLANS_DIR.length + 1) : file;
+  if (!PLAN_FILE.test(name)) throw new UnsafePath(`not a plan file name: ${name}`);
+  const dir = secureDir(realRoot(projectDir), [".aria", "plans"], false);
+  if (!dir) throw new UnsafePath("no .aria/plans directory");
+  return readRegularFile(join(dir, name), MAX_PLAN_BYTES);
+}
+
 /** All readable plans in a project, newest-named first, plus why anything was skipped. Never throws. */
 export function loadPlans(projectDir: string): PlanLoad {
   let dir: string | undefined;
@@ -148,12 +167,12 @@ export function loadPlans(projectDir: string): PlanLoad {
       continue;
     }
     try {
-      const text = readRegularFile(join(dir, name), MAX_PLAN_BYTES);
-      if (!/^---\r?\n[\s\S]*?\r?\n---/.test(text) || !/^status:/m.test(text)) {
+      const plan = planFromText(name, readRegularFile(join(dir, name), MAX_PLAN_BYTES));
+      if (!plan) {
         problems.push(`skipped ${name}: no front matter with a status line`);
         continue;
       }
-      plans.push(parsePlan(`${PLANS_DIR}/${name}`, text));
+      plans.push(plan);
     } catch (error) {
       problems.push(`skipped ${name}: ${error instanceof UnsafePath ? error.message.replace(dir, PLANS_DIR) : "unreadable"}`);
     }
