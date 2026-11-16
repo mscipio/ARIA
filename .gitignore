@@ -1,0 +1,15 @@
+node_modules/
+*.log
+*.tgz
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+desktop.ini
+.env
+.env.local
+
+# ARIA scratch is self-ignoring (.aria/scratch/.gitignore) but ignore it here too for the framework repo.
+.aria/scratch/
+
+# Benchmark run output (eval/run.sh)
+eval/runs/

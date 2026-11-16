@@ -1,0 +1,15 @@
+ARIA 2
+
+The MIT license in LICENSE applies to the whole repository.
+
+- Copyright (c) 2026 cgize: the notice carried by the previous ARIA repository (mscipio/ARIA),
+  kept unchanged. Material derived from that repository: the skills under skills/ that were
+  copied and edited (aria-academic-writing, aria-document-design, aria-paper-self-review,
+  aria-research-evidence, aria-research-planning, aria-results-analysis, aria-review-response,
+  aria-writing-anti-ai, aria-zotero-tutor) and parts of the role prompts.
+- Copyright (c) 2026 Michele Scipioni: the ARIA 2 implementation (src/, bin/, prompts/, the
+  skills aria-plan, aria-review, aria-investigate, aria-numerics, documentation).
+
+Third-party facts used, not code: permission and plugin semantics from OpenCode (MIT,
+github.com/anomalyco/opencode) and tool names from zotero-mcp (MIT, github.com/54yyyu/zotero-mcp).
+Runtime dependencies keep their own licenses in node_modules.

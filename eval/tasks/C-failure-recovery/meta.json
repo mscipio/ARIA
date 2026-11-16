@@ -1,0 +1,5 @@
+{
+  "id": "C",
+  "category": "failure-recovery",
+  "expect": {"plan":"not needed","delegation":"unnecessary","review":"optional","asks_user":"never","obstacle":"scripts/check.sh has CRLF endings and no execute bit; the tests then reveal a real bug"}
+}
