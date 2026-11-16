@@ -19,7 +19,7 @@ import {
   type EditPlan,
   type Scope,
 } from "./config.ts";
-import { ensureIntegration } from "./deps.ts";
+import { ensureIntegration, setupTargets } from "./deps.ts";
 import { ariaHome, isWindows, packageRoot, releasesDir, run, statePath, toolsDir } from "./env.ts";
 import { createJournal, fault, readJournal, readText, removeJournal, revertFile, saveJournal, type Journal, type JournalFile } from "./journal.ts";
 import { MANIFEST, dependency } from "./manifest.ts";
@@ -272,11 +272,13 @@ export async function setup(input: SetupInput): Promise<OperationResult> {
   const interruptedGate = interruptedResult(input.dryRun);
   if (interruptedGate) return interruptedGate;
   const progress = input.progress ?? (() => undefined);
+  // `required` stands for every role-required capability (Engram, Context7, Impeccable); each is set up only when named here.
+  const withIds = (input.with ?? []).flatMap((id) => (id === "required" ? setupTargets().filter((d) => d.requirement === "role").map((d) => d.id) : [id]));
   const file = configFile(input.scope, input.project);
   const messages: string[] = [];
   const changes: Change[] = [];
   const steps: Step[] = [];
-  for (const id of input.with ?? []) if (!dependency(id)?.mcp?.config) return fail(input.dryRun, `--with ${id}: not an integration ARIA manages (zotero-mcp, context7, playwright-mcp)`);
+  for (const id of withIds) if (!setupTargets().some((d) => d.id === id)) return fail(input.dryRun, `--with ${id}: not an integration ARIA manages (${setupTargets().map((d) => d.id).join(", ")})`);
   let target: string;
   let source: Source | undefined;
   if (input.mode === "dev") {
@@ -309,7 +311,7 @@ export async function setup(input: SetupInput): Promise<OperationResult> {
   if (reg.plan?.changed) changes.push({ kind: "config", target: file, summary: reg.plan.summary.join("; ") });
   if (readCurrent() !== target) changes.push({ kind: "activate", target: join(ariaHome(), "current"), summary: `launcher ${join(ariaHome(), "bin", "aria")} -> ${target}` });
   if (input.dryRun) {
-    for (const id of input.with ?? []) {
+    for (const id of withIds) {
       const r = await ensureIntegration(id, { scope: input.scope, project: input.project, dryRun: true });
       changes.push(...r.changes);
       messages.push(...r.messages.map((m) => `${id}: ${m}`), ...r.errors.map((e) => `${id}: ${e}`), ...(r.blocked ? [`${id}: BLOCKED ${r.blocked}`] : []));
@@ -358,7 +360,7 @@ export async function setup(input: SetupInput): Promise<OperationResult> {
   if (verify.length !== 1) return { ok: false, dryRun: false, outcome: "failed", steps, changes, messages, errors: [`after setup, ARIA is registered ${verify.length} times for ${target}`] };
   // 2. Optional parts: each reported; any failure makes the result partial, never success.
   const errors: string[] = [];
-  for (const id of input.with ?? []) {
+  for (const id of withIds) {
     const r = await ensureIntegration(id, { scope: input.scope, project: input.project, dryRun: false, progress, ...(input.signal ? { signal: input.signal } : {}) });
     steps.push(...(r.steps ?? []).map((s) => ({ ...s, name: `${id}: ${s.name}` })));
     changes.push(...r.changes);

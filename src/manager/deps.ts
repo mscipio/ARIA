@@ -1,10 +1,12 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { ZOTERO_MUTATE, ZOTERO_READ } from "../permissions.ts";
 import { applyEdit, configFile, fingerprint, getPath, planEdits, readConfig, staticLayers, type Scope } from "./config.ts";
 import { isWindows, packageRoot, parseVersion, run, satisfies, toolsDir, which } from "./env.ts";
 import { MANIFEST, dependency, type Dependency } from "./manifest.ts";
+import { generatePlugin, inspectPlugin, pluginWriteProblem, removePlugin, syncPlugins, writePlugin, type PluginScope } from "./plugin-file.ts";
+import { fetchHttps, fetchVerified, readTar, compatible, inspectSkill, installSkill, isCurrent, removeSkill, type Intent, type SkillCopy, type SkillScope } from "./skill-archive.ts";
 import { createStaging, forgetStaging, removeMarker, removeStaging } from "./release.ts";
 import { browserInstalled, checkBrowser } from "./browser.ts";
 import { probeRemote, probeTools, type RemoteClass } from "./mcp-probe.ts";
@@ -19,6 +21,10 @@ export interface DepStatus {
   readonly purpose: string;
   readonly kind: Dependency["kind"];
   readonly requirement: Dependency["requirement"];
+  /** ARIA roles that use this dependency. */
+  readonly roles: readonly string[];
+  /** Version ARIA installs (the manifest pin), for managed dependencies. */
+  readonly pinned?: string;
   readonly enabled: boolean;
   /** Where the enabling MCP entry lives and whether ARIA wrote it. */
   readonly config?: { file: string; owned: boolean; value: unknown };
@@ -45,7 +51,13 @@ function mcpEntry(dep: Dependency, project: string): DepStatus["config"] | undef
   const { state } = readState();
   let found: DepStatus["config"];
   for (const layer of staticLayers(project)) {
-    const value = getPath(readConfig(layer.path).value, ["mcp", "servers", dep.mcp.server]);
+    const read = readConfig(layer.path).value;
+    let value = getPath(read, ["mcp", "servers", dep.mcp.server]);
+    if (value === undefined) {
+      // The older `mcp.<name>` form still registers the server in OpenCode 2.3.0. It is always the user's, and counts as registered (a second entry would register the server twice).
+      const legacy = getPath(read, ["mcp", dep.mcp.server]);
+      if (legacy && typeof legacy === "object" && ("command" in legacy || "url" in legacy)) value = legacy;
+    }
     if (value === undefined) continue;
     const owned = state.owned.some((o) => o.file === layer.path && o.kind === "mcp" && o.path.join("/") === `mcp/servers/${dep.mcp?.server}` && o.fingerprint === fingerprint(value));
     found = { file: layer.path, owned, value };
@@ -67,6 +79,12 @@ function findExecutable(dep: Dependency): { path?: string; managed: boolean } {
   return path ? { path, managed: false } : { managed: false };
 }
 
+/** ARIA recorded a managed copy of this tool, but its executable is gone (deleted or damaged). */
+export function managedCopyMissing(id: string): boolean {
+  const rec = readState().state.tools[id];
+  return Boolean(rec && !existsSync(rec.executable));
+}
+
 function cliDeps(): { ok: boolean; missing: string[] } {
   const req = createRequire(join(packageRoot, "package.json"));
   const missing = ["terminal-kit", "jsonc-parser"].filter((name) => {
@@ -80,8 +98,69 @@ function cliDeps(): { ok: boolean; missing: string[] } {
   return { ok: missing.length === 0, missing };
 }
 
+/**
+ * A skill dependency, judged from what is on disk in the OpenCode skills directories (project
+ * first, then global; that is OpenCode's own precedence for a name clash). An ARIA-owned copy is
+ * checked against its per-file hashes; a copy ARIA did not install is reused when its version is
+ * compatible and is never modified.
+ */
+async function skillStatus(dep: Dependency, base: Omit<DepStatus, "ownership" | "enabled" | "health" | "basis" | "evidence" | "actions">, project: string): Promise<DepStatus> {
+  const pin = dep.skill;
+  const copies = pin ? await inspectSkill(dep, project) : [];
+  const evidence: string[] = [];
+  const actions: string[] = [];
+  let health: Health = "missing";
+  let ownership: DepStatus["ownership"] = "aria-managed";
+  let version: string | undefined;
+  const first = copies[0];
+  if (!first) {
+    evidence.push(`${pin?.name} is not installed in the project's .opencode/skills or the global OpenCode skills directory`);
+    actions.push("install");
+  } else {
+    const use: SkillCopy = first;
+    version = use.version;
+    for (const c of copies) evidence.push(`${c.scope}: ${c.dir} — ${c.owner === "aria" ? "installed by ARIA" : "not installed by ARIA"}${c.version ? `, version ${c.version}` : ""}`);
+    if (copies.length > 1) evidence.push(`two copies: OpenCode's project copy takes precedence over the global one; ARIA judges the first listed`);
+    if (use.owner === "aria") {
+      ownership = "aria-managed";
+      const dmg = [...use.modified.map((m) => `modified: ${m}`), ...use.unknown.map((u) => `unknown entry: ${u}`), ...use.problems];
+      if (dmg.length) {
+        health = "config-error";
+        evidence.push(`ARIA-owned copy was changed: ${dmg.join("; ")}. ARIA will not overwrite it; restore the files or move the directory aside, then \`aria deps install ${dep.id}\``);
+      } else if (use.missing.length) {
+        health = "runtime-error";
+        evidence.push(`missing files: ${use.missing.slice(0, 5).join(", ")}${use.missing.length > 5 ? ` (+${use.missing.length - 5})` : ""}`);
+        actions.push("repair");
+      } else if (pin && !isCurrent(pin, use)) {
+        health = "outdated";
+        evidence.push(`installed ${use.version}; this ARIA pins ${pin.version}`);
+        actions.push("update");
+      } else {
+        health = "healthy";
+        evidence.push("every file matches its recorded SHA-256");
+        actions.push("remove");
+      }
+    } else {
+      ownership = "reused";
+      if (use.problems.length) {
+        health = "config-error";
+        evidence.push(...use.problems.map((p) => `${use.dir} ${p}`));
+      } else if (compatible(dep, use)) {
+        health = "healthy";
+        evidence.push(`reusing your copy (compatible with ${dep.range}); ARIA never modifies it`);
+      } else {
+        health = "incompatible";
+        evidence.push(`version ${use.version ?? "unknown"} is outside ${dep.range}; ARIA will not overwrite your copy. Move it aside and run \`aria deps install ${dep.id}\``);
+      }
+    }
+  }
+  return { ...base, ...(version ? { version } : {}), installed: ownership === "aria-managed" && Boolean(first), enabled: true, ownership, health, basis: "static", evidence, actions } as DepStatus;
+}
+
 export async function depStatus(dep: Dependency, project: string): Promise<DepStatus> {
-  const base = { id: dep.id, name: dep.name, purpose: dep.purpose, kind: dep.kind, requirement: dep.requirement, ...(dep.range ? { wanted: dep.range } : {}) };
+  const pinned = dep.install?.pin;
+  const base = { id: dep.id, name: dep.name, purpose: dep.purpose, kind: dep.kind, requirement: dep.requirement, roles: dep.roles ?? [], ...(pinned ? { pinned } : {}), ...(dep.range ? { wanted: dep.range } : {}) };
+  if (dep.skill) return skillStatus(dep, base, project);
   if (dep.id === "aria-cli-deps") {
     const r = cliDeps();
     return {
@@ -100,7 +179,7 @@ export async function depStatus(dep: Dependency, project: string): Promise<DepSt
   let basis: Check["basis"] = "none";
   if (dep.executable) {
     if (!exe.path) {
-      health = dep.requirement === "required" || enabled ? "missing" : "disabled";
+      health = dep.requirement !== "optional" || enabled ? "missing" : "disabled";
       evidence.push(`${dep.executable} not found on PATH${dep.searchDirs ? " or in known environment directories" : ""}`);
       if (dep.install) actions.push("install");
     } else {
@@ -123,7 +202,14 @@ export async function depStatus(dep: Dependency, project: string): Promise<DepSt
         evidence.push(`version ${version ?? "reported"}${dep.range ? ` (needs ${dep.range})` : ""}`);
         if (dep.mcp) evidence.push("executable runs; the MCP server itself is checked by `aria deps probe`");
       }
-      if (exe.managed) actions.push("update");
+      if (exe.managed) {
+        actions.push("update");
+        const recorded = readState().state.tools[dep.id]?.version;
+        if (pinned && recorded && recorded !== pinned && (health === "healthy" || health === "unverified")) {
+          health = "outdated";
+          evidence.push(`ARIA installed ${recorded}; this ARIA pins ${pinned} (aria deps update ${dep.id})`);
+        }
+      }
     }
   } else if (dep.mcp) {
     health = enabled ? (dep.healthNeedsNetwork ? "unverified" : "healthy") : "disabled";
@@ -142,10 +228,32 @@ export async function depStatus(dep: Dependency, project: string): Promise<DepSt
       if (health === "unverified" || health === "healthy") health = "disabled";
       actions.push("enable");
       evidence.push(`not configured as mcp.servers.${dep.mcp.server}`);
+      if (dep.requirement === "role") health = "missing";
     } else {
       evidence.push(`configured in ${config?.file}${config?.owned ? " (written by ARIA)" : " (user entry; ARIA will not change it)"}`);
       if (config?.owned) actions.push("disable");
       if (dep.mcp.probe && exe.path) actions.push("probe");
+    }
+  }
+  if (dep.install && dep.install.method !== "release-deps" && managedCopyMissing(dep.id)) {
+    evidence.push(`ARIA's recorded copy (${readState().state.tools[dep.id]?.executable}) is missing${exe.path ? `; ${exe.path} is being used instead` : ""} (aria deps repair ${dep.id})`);
+    if (health === "healthy" || health === "unverified" || health === "disabled") health = "missing";
+    if (!actions.includes("repair")) actions.push("repair");
+  }
+  if (dep.plugin) {
+    const copies = inspectPlugin(dep, project);
+    for (const c of copies) evidence.push(`plugin ${c.scope}: ${c.file} — ${c.state === "ours" ? "written by ARIA" : c.state === "reused" ? `yours${c.via === "array" ? " (listed in your config)" : ""} (reused; ARIA does not change it)` : c.state === "modified" ? "written by ARIA, then changed by you" : "not the expected plugin"}`);
+    const loaded = copies.filter((c) => c.state !== "foreign");
+    if (loaded.length > 1) {
+      evidence.push(`DUPLICATE: ${dep.name}'s plugin is loaded ${loaded.length} times (${loaded.map((c) => c.file).join("; ")}); each copy records sessions and injects the memory protocol. Remove all but one yourself; ARIA does not delete files it did not write`);
+      if (health === "healthy" || health === "unverified") health = "config-error";
+    }
+    if (copies.some((c) => c.state === "foreign")) {
+      if (health === "healthy" || health === "unverified") health = "config-error";
+    } else if (copies.length === 0 && enabled) {
+      evidence.push(`${dep.name}'s OpenCode plugin is missing: sessions are not tracked and no memory protocol is injected (aria deps enable ${dep.id})`);
+      if (health === "healthy" || health === "unverified") health = "config-error";
+      if (!actions.includes("enable")) actions.push("enable");
     }
   }
   if (dep.ownership === "external" && dep.installHint && health === "missing") evidence.push(dep.installHint);
@@ -179,7 +287,10 @@ export async function installDep(id: string, opts: { dryRun: boolean; progress?:
   if (!dep.install || dep.install.method === "release-deps") {
     return fail(opts.dryRun, dep.install?.method === "release-deps" ? "installed per release from its lockfile by `aria setup`/`aria update`; in a development checkout run `npm ci`" : `${dep.name} is user-managed: ${dep.installHint ?? "install and configure it yourself"}`);
   }
-  const spec = dep.install.method === "python-venv" ? `${dep.install.package}==${dep.install.pin}` : `${dep.install.package}@${dep.install.pin}`;
+  const platform = `${process.platform}-${process.arch}`;
+  const asset = dep.binary?.assets[platform];
+  if (dep.install.method === "github-binary" && !asset) return fail(opts.dryRun, `${dep.name}: no pinned build for ${platform} (${Object.keys(dep.binary?.assets ?? {}).join(", ")}); install it yourself and ARIA will reuse it`);
+  const spec = dep.install.method === "github-binary" ? `${dep.install.package} ${dep.binary?.version} (GitHub release asset, SHA-256 verified)` : dep.install.method === "python-venv" ? `${dep.install.package}==${dep.install.pin}` : `${dep.install.package}@${dep.install.pin}`;
   const changes: Change[] = [{ kind: "install", target: `${toolsDir()}/${id}-<new>`, summary: `install ${spec} (pinned) under ARIA_HOME/tools`, network: true }];
   if (dep.provision) changes.push({ kind: "install", target: join(toolsDir(), dep.provision.dir), summary: `download ${dep.provision.what} into ARIA_HOME/tools/${dep.provision.dir}`, network: true });
   if (opts.dryRun) return { ok: true, dryRun: true, outcome: "preview", changes, messages: ["Needs network access."], errors: [] };
@@ -190,7 +301,16 @@ export async function installDep(id: string, opts: { dryRun: boolean; progress?:
     try {
       staging = createStaging("tools", id, true);
       const target = staging.path;
-      if (dep.install?.method === "python-venv") {
+      if (dep.install?.method === "github-binary" && asset) {
+        progress(`downloading ${asset.url}`);
+        const archive = await fetchVerified(fetchHttps, asset.url, asset.sha256, progress);
+        const member = readTar(gunzipSync(archive, { maxOutputLength: 256 * 1024 * 1024 })).find((m) => (m.type === "0" || m.type === "7") && m.name.replace(/^\.\//, "") === asset.member);
+        if (!member) throw new Error(`${asset.member} not found in the archive`);
+        const out = join(target, dep.install.executable as string);
+        mkdirSync(join(out, ".."), { recursive: true });
+        writeFileSync(out, member.data, { mode: 0o755 });
+        chmodSync(out, 0o755);
+      } else if (dep.install?.method === "python-venv") {
         const python = which(isWindows ? "python" : "python3") ?? which("python");
         if (!python) throw new Error("python3 not found; it is needed to create the environment");
         progress(`creating environment ${target}`);
@@ -211,6 +331,12 @@ export async function installDep(id: string, opts: { dryRun: boolean; progress?:
       const v = await run(executable, dep.versionArgs ?? ["--version"], { timeoutMs: 60_000 });
       if (!v.ok) throw new Error(`installed, but \`${dep.executable} ${(dep.versionArgs ?? []).join(" ")}\` failed: ${(v.error ?? v.stderr.trim()).slice(-200)}`);
       steps.push({ name: "verify executable", status: "done", detail: executable });
+      if (dep.plugin) {
+        const text = await generatePlugin(dep, executable);
+        mkdirSync(join(target, "opencode"), { recursive: true });
+        writeFileSync(join(target, "opencode", dep.plugin.file), text, { mode: 0o644 });
+        steps.push({ name: `generate ${dep.plugin.file} for this version`, status: "done" });
+      }
       // The browser must be complete BEFORE the new copy is adopted: a failed download leaves the
       // previous copy in use and removes this one (still staging), instead of repointing entries
       // to a copy that has no browser.
@@ -275,6 +401,19 @@ export function adoptToolCopy(id: string, record: ManagedTool): { steps: Step[];
       notes.push(`${owned.file}: ${(error as Error).message}`);
     }
   }
+  // 2b. A plugin file ARIA wrote follows the executable (it names the binary it starts).
+  if (dep?.plugin) {
+    const src = join(record.path, "opencode", dep.plugin.file);
+    if (existsSync(src)) {
+      try {
+        const sync = syncPlugins(dep, readFileSync(src, "utf8"));
+        steps.push(...sync.steps.map((name) => ({ name, status: "done" as const })));
+        notes.push(...sync.notes);
+      } catch (error) {
+        notes.push(`plugin file: ${(error as Error).message}`);
+      }
+    }
+  }
   // 3. Apply each, recording the new fingerprint right after its write.
   for (const p of planned) {
     applyEdit(p.plan);
@@ -327,19 +466,31 @@ export async function enableDep(id: string, opts: { scope: Scope; project: strin
   const dep = dependency(id);
   if (!dep?.mcp) return fail(opts.dryRun, `${id} is not an MCP integration`);
   if (!dep.mcp.config) return fail(opts.dryRun, `${dep.name} is user-managed: add mcp.servers.${dep.mcp.server} to your OpenCode config yourself; ARIA only detects it`);
-  const exe = findExecutable(dep).path;
+  const found = findExecutable(dep);
+  const exe = found.path;
   const file = configFile(opts.scope, opts.project);
   const path = ["mcp", "servers", dep.mcp.server];
   const existing = getPath(readConfig(file).value, path);
   const { state } = readState();
   const owned = existing !== undefined && state.owned.some((o) => o.file === file && o.path.join("/") === path.join("/") && o.fingerprint === fingerprint(existing));
-  if (existing !== undefined && !owned && !opts.replace) {
+  // Registered anywhere already (either form, any scope)? Then a second entry would register the server twice: reuse it.
+  const elsewhere = existing === undefined ? mcpEntry(dep, opts.project) : undefined;
+  const skipMcp = Boolean(elsewhere) && !opts.replace;
+  if (!skipMcp && existing !== undefined && !owned && !opts.replace) {
     return { ok: false, dryRun: opts.dryRun, changes: [], messages: [`existing value: ${JSON.stringify(existing)}`], errors: [], blocked: `${file} already has a user entry mcp.servers.${dep.mcp.server}; ARIA leaves it alone (use --replace to take it over)` };
   }
-  if (dep.executable && !exe) return fail(opts.dryRun, `${dep.name}: ${dep.executable} not found. ${dep.install ? `Install it first: aria deps install ${id}` : dep.installHint ?? ""}`);
+  const plugins = dep.plugin ? inspectPlugin(dep, opts.project) : [];
+  const badPlugin = plugins.find((c) => c.state === "foreign");
+  if (badPlugin) return { ok: false, dryRun: opts.dryRun, changes: [], messages: [], errors: [], blocked: `${badPlugin.file} exists but is not ${dep.name}'s plugin; ARIA does not replace it` };
+  const needsPlugin = Boolean(dep.plugin) && plugins.length === 0;
+  if (dep.plugin && needsPlugin) {
+    const problem = pluginWriteProblem(dep, opts.scope, opts.project);
+    if (problem) return fail(opts.dryRun, `${dep.name}: ${problem}`);
+  }
+  if ((needsPlugin || !skipMcp) && dep.executable && !exe) return fail(opts.dryRun, `${dep.name}: ${dep.executable} not found. ${dep.install ? `Install it first: aria deps install ${id}` : dep.installHint ?? ""}`);
   const desired = dep.mcp.config(exe);
-  if (dep.provision && !provisioned(id)) return fail(opts.dryRun, `${dep.provision.what} is not installed yet; run \`aria deps install ${id}\` (or setup --with ${id}) first`);
-  if (existing !== undefined && !owned && JSON.stringify(existing) !== JSON.stringify(desired) && !opts.replace) {
+  if (!skipMcp && dep.provision && !provisioned(id)) return fail(opts.dryRun, `${dep.provision.what} is not installed yet; run \`aria deps install ${id}\` (or setup --with ${id}) first`);
+  if (!skipMcp && existing !== undefined && !owned && JSON.stringify(existing) !== JSON.stringify(desired) && !opts.replace) {
     return {
       ok: false, dryRun: opts.dryRun, changes: [], messages: [`existing value: ${JSON.stringify(existing)}`, `ARIA would write: ${JSON.stringify(desired)}`],
       errors: [], blocked: `${file} already has a user entry mcp.servers.${dep.mcp.server}; ARIA leaves it alone (use --replace to take it over)`,
@@ -347,20 +498,43 @@ export async function enableDep(id: string, opts: { scope: Scope; project: strin
   }
   let plan;
   try {
-    plan = planEdits(file, [{ path, value: desired }]);
+    plan = skipMcp ? undefined : planEdits(file, [{ path, value: desired }]);
   } catch (error) {
     return fail(opts.dryRun, (error as Error).message);
   }
-  const changes = plan.changed ? [{ kind: "config" as const, target: file, summary: plan.summary.join("; ") }] : [];
-  const messages = [plan.changed ? `${file}: ${plan.summary.join("; ")}` : `mcp.servers.${dep.mcp.server} already configured as ARIA would`, "OpenCode picks up MCP changes for new sessions."];
-  if (opts.dryRun || !plan.changed) {
-    if (!opts.dryRun && !plan.changed && existing !== undefined && !owned && opts.replace) await recordOwned(file, path, desired);
+  const changes: Change[] = plan?.changed ? [{ kind: "config", target: file, summary: plan.summary.join("; ") }] : [];
+  const messages = skipMcp ? [`mcp.servers.${dep.mcp.server} is already registered by you in ${elsewhere?.file}; ARIA reuses it and adds nothing`] : [plan?.changed ? `${file}: ${plan.summary.join("; ")}` : `mcp.servers.${dep.mcp.server} already configured as ARIA would`, "OpenCode picks up MCP changes for new sessions."];
+  const pluginScope: PluginScope = opts.scope;
+  if (dep.plugin && needsPlugin) {
+    changes.push({ kind: "config", target: `${pluginScope === "global" ? "<OpenCode config>/plugins" : `${opts.project}/.opencode/plugins`}/${dep.plugin.file}`, summary: `add ${dep.name}'s OpenCode plugin (session tracking, memory protocol); generated by ${dep.executable}, recorded as ARIA-owned` });
+    if (pluginScope === "project") messages.push(`The plugin file contains an absolute path of this machine: do not commit .opencode/plugins/${dep.plugin.file} (add it to .gitignore yourself; ARIA never edits it), or use --scope global.`);
+  } else if (dep.plugin) messages.push(`${dep.name}'s plugin is already present (${plugins.map((c) => `${c.scope}: ${c.state}`).join(", ")}); ARIA adds no second copy`);
+  const nothing = !plan?.changed && !(dep.plugin && needsPlugin);
+  if (opts.dryRun || nothing) {
+    if (!opts.dryRun && !plan?.changed && !skipMcp && existing !== undefined && !owned && opts.replace) await recordOwned(file, path, desired);
     return { ok: true, dryRun: opts.dryRun, changes, messages, errors: [] };
   }
-  await withLock(async () => {
-    applyEdit(plan);
-    await recordOwnedUnlocked(file, path, desired);
-  });
+  // Generate before taking the lock: it runs the executable.
+  let pluginText: string | undefined;
+  if (dep.plugin && needsPlugin) {
+    try {
+      const managedSrc = found.managed && found.path ? join(readState().state.tools[id]?.path ?? "", "opencode", dep.plugin.file) : undefined;
+      pluginText = managedSrc && existsSync(managedSrc) ? readFileSync(managedSrc, "utf8") : await generatePlugin(dep, exe as string);
+    } catch (error) {
+      return fail(false, (error as Error).message);
+    }
+  }
+  try {
+    await withLock(async () => {
+      if (plan?.changed) {
+        applyEdit(plan);
+        await recordOwnedUnlocked(file, path, desired);
+      }
+      if (pluginText !== undefined) writePlugin(dep, pluginScope, opts.project, pluginText);
+    });
+  } catch (error) {
+    return { ok: false, dryRun: false, outcome: "partial", changes, messages, errors: [(error as Error).message] };
+  }
   return { ok: true, dryRun: false, changes, messages, errors: [] };
 }
 
@@ -379,19 +553,47 @@ export async function disableDep(id: string, opts: { project: string; dryRun: bo
   const dep = dependency(id);
   if (!dep?.mcp) return fail(opts.dryRun, `${id} is not an MCP integration`);
   const status = await depStatus(dep, opts.project);
-  if (!status.config) return { ok: true, dryRun: opts.dryRun, changes: [], messages: [`${dep.name} is not configured`], errors: [] };
-  if (!status.config.owned) return { ok: false, dryRun: opts.dryRun, changes: [], messages: [], errors: [], blocked: `${status.config.file} has a user-written mcp.servers.${dep.mcp.server}; ARIA does not remove it` };
   const path = ["mcp", "servers", dep.mcp.server];
-  const plan = planEdits(status.config.file, [{ path, value: undefined }]);
-  const changes = [{ kind: "config" as const, target: status.config.file, summary: plan.summary.join("; ") }];
-  if (opts.dryRun) return { ok: true, dryRun: true, changes, messages: ["The installed executable is kept."], errors: [] };
-  await withLock(async () => {
-    applyEdit(plan);
-    const { state } = readState();
-    state.owned = state.owned.filter((o) => !(o.file === status.config?.file && o.path.join("/") === path.join("/")));
-    writeState(state);
-  });
-  return { ok: true, dryRun: false, changes, messages: ["Removed. The installed executable is kept."], errors: [] };
+  const changes: Change[] = [];
+  const messages: string[] = [];
+  // What is still active afterwards because it is yours (or someone else's): said plainly, never hidden.
+  const stillActive: string[] = [];
+  let plan: ReturnType<typeof planEdits> | undefined;
+  if (!status.config) messages.push(`${dep.name}: no MCP registration found`);
+  else if (!status.config.owned) stillActive.push(`MCP registration in ${status.config.file} (written by you; ARIA does not remove it)`);
+  else {
+    try {
+      plan = planEdits(status.config.file, [{ path, value: undefined }]);
+    } catch (error) {
+      return fail(opts.dryRun, (error as Error).message);
+    }
+    changes.push({ kind: "config", target: status.config.file, summary: plan.summary.join("; ") });
+  }
+  const copies = dep.plugin ? inspectPlugin(dep, opts.project) : [];
+  for (const c of copies) {
+    if (c.state === "ours") changes.push({ kind: "cleanup", target: c.file, summary: `remove ${dep.name}'s plugin file that ARIA wrote` });
+    else stillActive.push(`plugin ${c.file} (${c.via === "array" ? "listed in your config" : c.state === "modified" ? "written by ARIA, then changed by you" : "yours"}; ARIA does not remove it)`);
+  }
+  const warning = stillActive.length ? [`NOT fully disabled: still active because it is not ARIA's to remove: ${stillActive.join("; ")}.${dep.plugin && copies.some((c) => c.state !== "ours") ? ` ${dep.name}'s plugin keeps recording prompts and sessions while it stays installed.` : ""} Remove or disable ${stillActive.length > 1 ? "them" : "it"} yourself.`] : [];
+  if (opts.dryRun) return { ok: true, dryRun: true, changes, messages: [...messages, ...warning, "The installed executable is kept."], errors: [] };
+  if (changes.length) {
+    // Plugin first: a leftover plugin keeps recording, which is the worse half-state; each half is reported on its own.
+    try {
+      await withLock(async () => {
+        if (dep.plugin) removePlugin(dep, opts.project);
+        if (plan && status.config) {
+          applyEdit(plan);
+          const { state } = readState();
+          state.owned = state.owned.filter((o) => !(o.file === status.config?.file && o.path.join("/") === path.join("/")));
+          writeState(state);
+        }
+      });
+    } catch (error) {
+      return { ok: false, dryRun: false, outcome: "partial", changes, messages: [...messages, "Some of ARIA's files may be removed and some not; run `aria deps list` to see what is left, fix the cause below and run `aria deps disable` again (it is safe to repeat)."], errors: [(error as Error).message] };
+    }
+    messages.push("Removed what ARIA wrote. The installed executable is kept.");
+  } else messages.push("Nothing of ARIA's to remove.");
+  return { ok: stillActive.length === 0, dryRun: false, outcome: stillActive.length ? "partial" : changes.length ? "success" : "unchanged", changes, messages: [...messages, ...warning], errors: [] };
 }
 
 export interface InventoryReport {
@@ -425,7 +627,7 @@ export async function probeDep(id: string, ready = false, project?: string): Pro
   if (!dep?.mcp?.probe || !cmd) return { ok: false, tools: [], classifiedRead: [], classifiedMutating: [], unclassified: [], absent: [], error: !dep?.mcp?.probe ? "no local server to probe" : "executable not found" };
   const [command, ...args] = cmd.command;
   const r = await probeTools(command as string, args, cmd.environment, 60_000, ready && dep.mcp.readyCall ? { tool: dep.mcp.readyCall.tool, args: dep.mcp.readyCall.args } : undefined);
-  const known = id === "zotero-mcp" ? { read: ZOTERO_READ, mutate: ZOTERO_MUTATE } : { read: [] as readonly string[], mutate: [] as readonly string[] };
+  const known = dep.mcp.classes ?? { read: [] as readonly string[], mutate: [] as readonly string[] };
   const tools = [...r.tools].sort();
   return {
     ok: r.ok,
@@ -522,6 +724,19 @@ export async function readiness(id: string, project: string, opts: { requireEnab
     steps.push(...b.steps);
     if (!b.ok) return { ...base, state: "not-ready", ok: false, steps, detail: (b.steps.at(-1)?.detail ?? "browser not ready").slice(0, 300) };
   }
+  if (dep.plugin) {
+    const copies = inspectPlugin(dep, project);
+    const usable = copies.filter((c) => c.state !== "foreign");
+    if (usable.length === 0) {
+      steps.push({ name: "OpenCode plugin", status: "failed", detail: `${dep.plugin.file} not found in <OpenCode config>/plugins or .opencode/plugins (aria deps enable ${id})` });
+      return { ...base, state: "not-ready", ok: false, steps, detail: `${dep.name}'s plugin file is missing` };
+    }
+    if (usable.length > 1) {
+      steps.push({ name: "OpenCode plugin", status: "failed", detail: `loaded ${usable.length} times: ${usable.map((c) => c.file).join("; ")}` });
+      return { ...base, state: "not-ready", ok: false, steps, detail: `${dep.name}'s plugin is registered more than once` };
+    }
+    steps.push({ name: "OpenCode plugin", status: "done", detail: usable.map((c) => `${c.scope}: ${c.file}`).join("; ") });
+  }
   const p = await probeDep(id, true, project);
   if (!p.ok) {
     steps.push({ name: "server starts and lists tools", status: "failed", detail: p.error ?? "no answer" });
@@ -548,7 +763,8 @@ export async function ensureIntegration(id: string, opts: { scope: Scope; projec
   const interruptedGate = interruptedResult(opts.dryRun);
   if (interruptedGate) return interruptedGate;
   const dep = dependency(id);
-  if (!dep?.mcp) return fail(opts.dryRun, `${id} is not an optional integration (choose from: ${MANIFEST.filter((d) => d.mcp?.config).map((d) => d.id).join(", ")})`);
+  if (dep?.skill) return ensureSkill(dep, opts);
+  if (!dep?.mcp) return fail(opts.dryRun, `${id} is not an integration ARIA sets up (choose from: ${setupTargets().map((d) => d.id).join(", ")})`);
   if (!dep.mcp.config) return fail(opts.dryRun, `${dep.name} is user-managed; configure it yourself`);
   const steps: Step[] = [];
   const changes: Change[] = [];
@@ -592,4 +808,132 @@ export async function ensureIntegration(id: string, opts: { scope: Scope; projec
   if (!ready.ok) return { ok: false, dryRun: false, outcome: "partial", steps, changes, messages: [...messages, `${dep.name} is installed and configured but not ready: ${ready.detail}`], errors: [`${id}: not ready (${ready.detail})`] };
   if (ready.state === "initialized") messages.push(ready.detail);
   return { ok: true, dryRun: false, outcome: "success", steps, changes, messages, errors: [] };
+}
+
+/** Integrations and skills `setup --with` / "set up fully" can handle. */
+export const setupTargets = () => MANIFEST.filter((d) => d.mcp?.config || d.skill);
+
+/** Which skills directory a skill operation uses: the one asked for, else where ARIA already has a copy, else global. */
+async function chooseSkillScope(dep: Dependency, project: string, requested?: SkillScope): Promise<SkillScope> {
+  if (requested) return requested;
+  const own = (await inspectSkill(dep, project)).find((c) => c.owner === "aria");
+  return own?.scope ?? "global";
+}
+
+export interface ManageOpts {
+  /** Where a skill is installed. Omitted: the scope of ARIA's existing copy, else global. */
+  readonly scope?: SkillScope | undefined;
+  readonly project: string;
+  readonly dryRun: boolean;
+  readonly progress?: Progress | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
+
+const unsupported = (dryRun: boolean, why: string): OperationResult => ({ ok: false, dryRun, outcome: "blocked", changes: [], messages: [], errors: [], blocked: why });
+const unchanged = (dryRun: boolean, message: string): OperationResult => ({ ok: true, dryRun, outcome: "unchanged", changes: [], messages: [message], errors: [] });
+
+/**
+ * The one entry point for installing, updating and repairing a managed dependency (CLI, manager UI
+ * and setup all call it). It looks at what is actually installed and does the least that satisfies
+ * the request: an existing valid installation is reused or left as is, nothing ARIA does not own is
+ * touched, and an externally managed or hosted dependency gets an explanation instead of a change.
+ * After a real change, an enabled MCP integration is re-checked for operational readiness.
+ */
+export async function manageDep(intent: Intent, id: string, opts: ManageOpts): Promise<OperationResult> {
+  const dep = dependency(id);
+  if (!dep) return fail(opts.dryRun, `unknown dependency ${id}`);
+  const progress = opts.progress ?? (() => undefined);
+  if (dep.skill) {
+    const copies = await inspectSkill(dep, opts.project);
+    const foreign = copies.find((c) => c.owner === "user");
+    const own = copies.find((c) => c.owner === "aria");
+    if (!own && foreign) {
+      // Any foreign copy (either scope) is reused or left alone; an explicit scope only picks where ARIA's own copy would go.
+      const ok = compatible(dep, foreign) && foreign.problems.length === 0;
+      return intent === "install" && ok
+        ? unchanged(opts.dryRun, `${dep.name}: reusing your existing copy at ${foreign.dir} (${foreign.version ?? "unknown version"}); ARIA does not modify it`)
+        : unsupported(opts.dryRun, `${dep.name} at ${foreign.dir} was not installed by ARIA${ok ? "" : " and is not compatible"}; ARIA does not ${intent} it. Move it aside manually first`);
+    }
+    const scope = await chooseSkillScope(dep, opts.project, opts.scope);
+    return installSkill(dep, { scope, project: opts.project, dryRun: opts.dryRun, intent, progress });
+  }
+  if (!dep.install || dep.install.method === "release-deps") {
+    return unsupported(opts.dryRun, dep.install?.method === "release-deps" ? `${dep.name} is installed per release from its lockfile (\`aria setup\`/\`aria update\`; in a checkout run \`npm ci\`)` : `${dep.name} is ${dep.executable ? "externally managed" : "a hosted service"}: ARIA does not ${intent} it. ${dep.installHint ?? ""}`.trim());
+  }
+  const st = await depStatus(dep, opts.project);
+  const managed = st.installed === true || (intent === "repair" && managedCopyMissing(id));
+  // Installed and working but simply not enabled in a config file is not damage: enabling, not reinstalling, fixes it.
+  const onlyNotEnabled = Boolean(dep.mcp) && !st.enabled && st.installed === true && Boolean(st.executable) && !managedCopyMissing(id);
+  const sound = managed && (st.health === "healthy" || st.health === "unverified" || st.health === "disabled" || onlyNotEnabled) && provisioned(id);
+  if (intent === "install" && managed && st.health === "outdated" && provisioned(id)) return unchanged(opts.dryRun, `${dep.name}: ARIA's copy ${st.version ?? ""} is installed; an update is available (aria deps update ${id})`);
+  if (intent === "install" && sound) return unchanged(opts.dryRun, `${dep.name}: ARIA's copy ${st.version ?? ""} is installed and working; nothing to do`);
+  if (intent !== "install" && !managed && st.executable) {
+    return unsupported(opts.dryRun, `${dep.name} is ${st.ownership === "reused" ? "an existing copy ARIA reuses but does not own" : "externally managed"} (${st.executable}); ARIA does not ${intent} it. \`aria deps install ${id}\` installs ARIA's own pinned copy beside it`);
+  }
+  if (intent === "update" && sound) return unchanged(opts.dryRun, `${dep.name}: already at the pinned version${st.version ? ` (${st.version})` : ""}`);
+  if (intent === "repair" && (sound || (managed && st.health === "outdated" && provisioned(id)))) return unchanged(opts.dryRun, `${dep.name}: nothing to repair${st.health === "outdated" ? `; an update is available (aria deps update ${id})` : ""}`);
+  const r = await installDep(id, { dryRun: opts.dryRun, progress, ...(opts.signal ? { signal: opts.signal } : {}) });
+  if (opts.dryRun || !r.ok || !dep.mcp) return r;
+  const ready = await readiness(id, opts.project);
+  const steps = [...(r.steps ?? []), ...ready.steps.map((x) => ({ ...x, name: `readiness: ${x.name}` }))];
+  if (ready.state === "disabled") return { ...r, steps, messages: [...r.messages, `${dep.name} is not enabled in a config file; enable it with \`aria deps enable ${id}\``] };
+  return ready.ok ? { ...r, steps } : { ...r, ok: false, outcome: "partial", steps, errors: [...r.errors, `${id}: installed but not ready (${ready.detail})`] };
+}
+
+/**
+ * Update every eligible managed dependency (outdated) and repair damaged ones, with a preview by
+ * default. Dependencies ARIA does not own are listed, never touched. Normal `aria setup` does not
+ * call this: existing valid installations stay as they are unless an update is requested.
+ */
+export async function updateAll(opts: ManageOpts): Promise<OperationResult> {
+  const changes: Change[] = [];
+  const messages: string[] = [];
+  const errors: string[] = [];
+  const steps: Step[] = [];
+  let any = false;
+  let failedAny = false;
+  for (const dep of MANIFEST) {
+    const st = await depStatus(dep, opts.project);
+    const managed = st.installed === true || (!dep.skill && managedCopyMissing(dep.id));
+    const onlyNotEnabled = Boolean(dep.mcp) && !st.enabled && st.installed === true && Boolean(st.executable) && !managedCopyMissing(dep.id);
+    const act = st.health === "outdated" ? "update" : st.actions.includes("repair") || (managed && !onlyNotEnabled && (st.health === "missing" || st.health === "runtime-error")) ? "repair" : undefined;
+    if (!act) {
+      if (st.health === "config-error" && dep.skill) messages.push(`${dep.id}: skipped, ARIA's copy was changed by someone else (see \`aria deps list\`)`);
+      else if (st.health === "outdated") messages.push(`${dep.id}: update available but not managed by ARIA (${st.ownership}); not touched`);
+      continue;
+    }
+    if (!managed) {
+      messages.push(`${dep.id}: ${st.health}, but ARIA has no managed copy of it (${st.ownership}); not touched`);
+      continue;
+    }
+    any = true;
+    const r = await manageDep(act, dep.id, opts);
+    changes.push(...r.changes);
+    steps.push(...(r.steps ?? []).map((x) => ({ ...x, name: `${dep.id}: ${x.name}` })));
+    messages.push(...r.messages.map((m) => `${dep.id}: ${m}`));
+    if (r.blocked) messages.push(`${dep.id}: BLOCKED ${r.blocked}`);
+    if (!r.ok && !r.blocked) {
+      failedAny = true;
+      errors.push(...r.errors.map((e) => `${dep.id}: ${e}`));
+    }
+  }
+  if (!any) return { ok: true, dryRun: opts.dryRun, outcome: "unchanged", changes: [], messages: ["Nothing to update or repair.", ...messages], errors: [] };
+  if (opts.dryRun) return { ok: true, dryRun: true, outcome: "preview", changes, messages, errors };
+  return { ok: !failedAny, dryRun: false, outcome: failedAny ? "partial" : "success", steps, changes, messages, errors };
+}
+
+/** Remove what ARIA installed for a skill dependency (an ARIA-owned, unmodified copy only). */
+export async function removeDep(id: string, opts: ManageOpts): Promise<OperationResult> {
+  const dep = dependency(id);
+  if (!dep?.skill) return unsupported(opts.dryRun, `${id}: ARIA removes only skills it installed. For MCP integrations use \`aria deps disable ${id}\` (the installed executable is kept)`);
+  const scope = await chooseSkillScope(dep, opts.project, opts.scope);
+  return removeSkill(dep, { scope, project: opts.project, dryRun: opts.dryRun });
+}
+
+async function ensureSkill(dep: Dependency, opts: { scope: Scope; project: string; dryRun: boolean; progress?: Progress; signal?: AbortSignal }): Promise<OperationResult> {
+  const r = await manageDep("install", dep.id, { project: opts.project, dryRun: opts.dryRun, ...(opts.progress ? { progress: opts.progress } : {}), ...(opts.signal ? { signal: opts.signal } : {}) });
+  if (opts.dryRun || !r.ok) return r;
+  const st = await depStatus(dep, opts.project);
+  const ok = st.health === "healthy";
+  return { ...r, ok, outcome: ok ? r.outcome : "partial", steps: [...(r.steps ?? []), { name: "verify", status: ok ? "done" : "failed", detail: `${st.health}: ${st.evidence.at(-1) ?? ""}` }], errors: ok ? r.errors : [...r.errors, `${dep.id}: ${st.health}`] };
 }

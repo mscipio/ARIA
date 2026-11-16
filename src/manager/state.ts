@@ -33,7 +33,7 @@ export interface Owned {
   /** Config file and JSON path of an entry ARIA wrote. */
   readonly file: string;
   readonly path: readonly (string | number)[];
-  readonly kind: "plugin" | "mcp";
+  readonly kind: "plugin" | "mcp" | "file";
   /** Fingerprint of the value ARIA wrote; if the file now differs, the user changed it and ARIA no longer owns it. */
   readonly fingerprint: string;
 }

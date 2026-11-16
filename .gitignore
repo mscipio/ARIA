@@ -1,6 +1,7 @@
 node_modules/
 *.log
 *.tgz
+*.tgz.sha256
 *.tsbuildinfo
 .DS_Store
 Thumbs.db

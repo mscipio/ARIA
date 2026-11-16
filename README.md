@@ -3,7 +3,7 @@
 ARIA is an OpenCode plugin for OpenCode v2.3.0 or later. It adds:
 
 - a default coding agent (`aria`)
-- six scoped specialist roles
+- seven scoped specialist roles
 - permission rules, plus two hooks that close gaps native OpenCode leaves open
 - safe per-session scratch space
 - plans owned by sessions
@@ -20,8 +20,8 @@ ARIA ships a manager: `aria` opens a keyboard-driven terminal UI. The same opera
 **First install from a release** (needs Node ≥ 22.18 and npm; nothing else from ARIA has to exist yet):
 
 ```
-mkdir aria-pkg && tar -xzf aria-2.0.0-alpha.6.tgz -C aria-pkg
-node aria-pkg/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.6.tgz --scope global --with zotero-mcp --link-bin --yes
+tmp=$(mktemp -d) && tar -xzf aria-2.0.0-alpha.6.tgz -C "$tmp"   # disposable; remove it afterwards
+node "$tmp"/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.6.tgz --scope global --with zotero-mcp --link-bin --yes
 ```
 
 The bootstrap uses only Node built-ins. It:
@@ -32,7 +32,7 @@ The bootstrap uses only Node built-ins. It:
 
 Without `--yes` it only prints the plan. `--link-bin` adds `~/.local/bin/aria` → the launcher, but never replaces a file that is already there. Otherwise add `ARIA_HOME/bin` to your `PATH`. The launcher always runs the active release, and follows updates and rollbacks.
 
-**Building a release:** `aria pack --out <dir>` writes `aria-<version>.tgz` and its `.sha256`. The archive is deterministic, is written from the exact bytes whose identity it records, and includes `package-lock.json`, which `npm pack` would drop. `aria inspect <dir|tgz>` prints a source's version and release identity without installing anything. Change the version with `npm version <v> --no-git-tag-version`, which updates `package.json` and the lockfile together; a release whose two files disagree is refused.
+**Building a release:** `aria pack` writes `aria-<version>.tgz` and its `.sha256` to `--out <dir>`, by default `<checkout>/../releases` (never the current directory, and never inside the source tree; an installed release must pass `--out`). The archive is deterministic, is written from the exact bytes whose identity it records, and includes `package-lock.json`, which `npm pack` would drop. `aria inspect <dir|tgz>` prints a source's version and release identity without installing anything. Change the version with `npm version <v> --no-git-tag-version`, which updates `package.json` and the lockfile together; a release whose two files disagree is refused.
 
 **Trust boundary.** A sha256 proves that an archive is the one whose checksum you hold. It does not prove who published it: a `.sha256` file downloaded next to an archive can be replaced together with it. Use a checksum you obtained through a channel you trust (or build the release yourself with `aria pack`). ARIA has no signing infrastructure.
 
@@ -45,7 +45,7 @@ Without `--yes` it only prints the plan. `--link-bin` adds `~/.local/bin/aria` �
 | 1 Install | Development install (register a checkout) or release install (copy, verify, register) per scope; repair |
 | 2 Health | Every check with its status and how it was established (`static`, `runtime` or `none`); evidence; repair preview |
 | 3 Models | Per-role model and variant, which config file sets it, the value OpenCode resolved, and availability. Set, change variant, remove pin, undo |
-| 4 Deps | The dependency manifest with ownership: OpenCode, Node, Git, CLI packages, and the Zotero, Context7 and Playwright MCPs. Install, enable, disable, check readiness, and probe a server's real tool list |
+| 4 Deps | The dependency manifest with ownership: OpenCode, Node, Git, CLI packages, the Zotero, Context7 and Playwright MCPs, and the Impeccable skill. Install, update (`u`, or `U` for all), repair, remove, enable, disable, check readiness, and probe a server's real tool list. The same backend as `aria deps` |
 | 5 Updates | Current and previous releases; update from a directory or `.tgz`; rollback |
 | 6 Config | Config files found, entries ARIA owns, paths, and a permission summary |
 
@@ -63,7 +63,7 @@ aria update [--check] --from <dir|tgz> [--sha256 hex] [--force]
 aria rollback [--to version] [--keep-tools]   ·   aria repair [--keep-changed]
 aria pack [--out dir] [--source dir]   ·   aria inspect [dir|tgz]   ·   aria reconcile
 aria models [list|available] [--runtime]  ·  aria models set|reset|restore <role|default> ...
-aria deps [list]  ·  aria deps install|update|enable|disable|probe <id>  ·  aria deps check [id]
+aria deps [list]  ·  aria deps install|update|repair <id> [--scope]  ·  aria deps update --all  ·  aria deps remove|enable|disable|probe <id>  ·  aria deps check [id]
 aria plans  ·  aria scratch list|clean
 ```
 
@@ -110,7 +110,21 @@ A partial result exits `1` and is never reported as success.
     - Context7 (remote): a real MCP `initialize` with the URL and headers of your config entry (`{env:NAME}` is expanded). The response must be valid JSON-RPC with the right id, a supported protocol version (OpenCode 2.3.0's: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07), `serverInfo` and capabilities; SSE answers are read incrementally. Redirects are not followed. ARIA then sends `notifications/initialized` and closes the session with DELETE (also after a rejection). Results distinguish unreachable, timeout, reachable-but-not-MCP, authentication, incompatible, rejected and initialized; `initialized` does not prove the hosted service works.
     - Playwright: always ARIA's pinned copy, `--browser chromium` (channel `chrome-for-testing`), browsers in `ARIA_HOME/tools/playwright-browsers`. Readiness resolves the browser revision through that copy's own `playwright-core`, requires Playwright's `INSTALLATION_COMPLETE` marker and the executable, launches headless once and closes it, then starts the MCP server. A complete browser is never downloaded again. A launch failure caused by missing host libraries is reported as an environment limitation.
   - An integration that isn't ready makes the result `partial`.
-- **Ownership** comes from the manifest: `aria-managed` (ARIA installs, updates, rolls back and repairs it; another copy on `PATH` is not used), `reused` (an existing Zotero MCP; ARIA does not change it), `external` (OpenCode, Node, Git) and `hosted` (Context7). Engram and CodeGraph were removed in alpha.5: nothing in ARIA needs them, and detect-only entries produced warnings without a lifecycle. You can still configure any MCP server yourself; its tools are unclassified, so coding roles are asked before each use and read-only roles can't see them.
+- **Dependency lifecycle** (`aria deps`, the manager's Deps tab and `setup --with` share one backend, `manageDep` in `src/manager/deps.ts`):
+  - `install <id>`: for skills (and `setup --with`) reuses a valid existing installation; `deps install` of an MCP tool installs ARIA's own pinned copy beside an existing one, which then takes precedence. `update <id>`: moves an ARIA-installed copy to the version this ARIA pins (nothing is checked remotely: "outdated" means differing from the pin). `repair <id>`: restores a missing or damaged ARIA-installed copy. `update --all`: does both for every ARIA-installed dependency and leaves the rest listed but untouched. Every mutating command previews first; `--yes` applies. `aria setup` never upgrades an existing installation.
+  - After a change, an enabled MCP integration is re-checked for readiness.
+  - Externally managed (OpenCode, Node, Git), reused (an existing copy ARIA did not install) and hosted (Context7) dependencies are reported, never updated, repaired or removed by ARIA.
+  - Each dependency lists the roles that use it and whether it is `required`, `role` (ARIA works, those roles are not fully ready without it) or `optional`. `aria doctor` shows a readiness line per such role; other roles stay operational.
+- **Impeccable** (design skill for the `visualizer`, Apache-2.0, github.com/pbakaus/impeccable) is installed as a managed skill, not bundled in the release: `aria deps install impeccable [--scope global|project]` (default global, `<OpenCode config>/skills/impeccable`; `setup --with impeccable` and the manager use the same default, and reuse any compatible copy in either scope). Version 4.8.1 at a pinned commit; the archive and the native helper (linux-x64 only; other platforms get the skill without it) are downloaded over HTTPS and checked against pinned SHA-256 values before anything is written. The tree carries `.aria-impeccable.json` with a hash of every file. ARIA updates, repairs or removes a copy only if it wrote it and nothing was modified; a copy without that marker (yours, or any other install) is reused when its version is within `>=4.8.0 <5.0.0` and is never changed. The archive hash was computed locally from GitHub's archive of the pinned commit (upstream publishes none), so the pin proves content, not who published it. Only the `visualizer` can load it. If it is missing or broken, `aria doctor` reports the visualizer as not fully ready, and the visualizer stops and reports the fix instead of substituting another skill.
+- **Engram and Context7 are shared capabilities for all eight roles** (requirement `role`: a missing one degrades readiness, reported by `aria doctor` and the Deps tab, and never stops other agents).
+  - **Engram** (github.com/Gentleman-Programming/engram, MIT; pinned 3.7.1, Linux/macOS builds with SHA-256 from the release's checksums.txt) needs both its MCP server and its OpenCode plugin. `aria deps install|update|repair engram` manages the binary under `ARIA_HOME/tools`; `aria deps enable engram [--scope]` registers `mcp.servers.engram` and writes the plugin file (generated by that binary in a throw-away HOME, recorded as ARIA-owned) into the scope's `plugins/` directory, because OpenCode 2.3.0 loads the plugin only from there. ARIA never runs `engram setup opencode` against your configuration (it also writes an old-form MCP entry and a `tui.json` statusline plugin). An existing install, plugin file or MCP entry of yours (either config form) is reused and never replaced; update and repair apply only to ARIA's own copy, and the plugin file follows the binary.
+  - **Permissions:** every role can recall (`mem_search`, `mem_context`, `mem_get_observation`, `mem_current_project`, `mem_list_projects`, `mem_doctor`, `mem_search_prompts`, `mem_suggest_topic_key`: the tools Engram marks read-only). `aria`, `scientist` and `writer` can also `mem_save`, `mem_update`, `mem_session_summary`. Other Engram tools ask for `aria` and `scientist` and are hidden from everyone else. The Engram plugin itself records sessions, prompts and passive task-output observations for every role, and shell policy does not block `engram` commands: "read-only" holds for model tool calls, not for plugin logging or shell use. Prompts tell roles to use memory selectively and treat it as subordinate to source files, plans and the user.
+  - **Two kinds of memory writes.** *Agent-invoked*: a role calls `engram_mem_save` and friends; ARIA's permissions decide who may (above). *Automatic*: the Engram plugin, once installed, records sessions, prompts and passive task-output observations for every role and injects its own memory protocol, whatever a role's permissions say; ARIA's prompts tell roles to follow ARIA's policy over that protocol, but cannot stop the recording. Only removing the plugin stops it.
+  - **Health.** Engram is operational only when its executable runs, the MCP entry is registered and exactly one copy of the plugin is loaded. Missing or disabled is reported `missing`; MCP without plugin, a foreign file in the plugin's place, or a duplicate plugin is `config-error`; `aria deps check engram` (and `doctor --runtime`) then verify the plugin, the server's tool list and a read-only call.
+  - **Disable and duplicates.** `aria deps disable engram` removes both the MCP entry and the plugin file, but only what ARIA wrote and nobody changed. If you own a plugin file (a `.ts`/`.js` file carrying Engram's marker at the top level of a `plugins/` directory in the project root or global scope) or list it in a config `plugin`/`plugins` array (matched by package or file name `engram`, `engram-opencode`, `engram-plugin`; not by any path that merely contains the word), or you wrote the MCP entry, ARIA leaves it, reports the result `partial` and says "NOT fully disabled" with what keeps recording. Enable never adds a plugin when one is already loaded through any of those routes; if two are loaded, health reports the duplicate and ARIA deletes nothing it did not write. A symlinked config directory is refused before anything is changed. A project-scope plugin file contains an absolute path of this machine: do not commit it; `.opencode` is excluded from release packages.
+  - **Engram's data directory ignores `$HOME`** (it uses the real home unless `ENGRAM_DATA_DIR` is set), and the plugin and MCP talk to the local server on `ENGRAM_PORT` (default 7437). Isolated tests must set both.
+  - **Context7** tools are available to all roles, including reviewer, planner and writer. Anonymous use works; an API key goes in your own entry as a `{env:NAME}` header, never written by ARIA.
+- **Ownership** comes from the manifest: `aria-managed` (ARIA installs, updates, rolls back and repairs it; another copy on `PATH` is not used), `reused` (an existing Zotero MCP; ARIA does not change it), `external` (OpenCode, Node, Git) and `hosted` (Context7). Engram is a managed shared capability again (see above); CodeGraph is not used by any ARIA 2 role. You can still configure any MCP server yourself; its tools are unclassified, so coding roles are asked before each use and read-only roles can't see them.
 - **External tools are never touched.** OpenCode, Node, Git, and existing MCP installations are only detected, never installed, upgraded or removed. A copy ARIA installs itself goes under `ARIA_HOME/tools/`.
 - **Runtime facts are opt-in.** `--runtime` (or `r` in the TUI) runs `opencode debug agents`, `models` and `debug config`, which starts or contacts an OpenCode server and may reach providers. Without it, every result is labelled static.
 
@@ -137,6 +151,7 @@ One `plugins` entry loads both parts: the server plugin (`exports["."]`) and the
 | `researcher` | primary/subagent | Literature and evidence (Zotero, web) |
 | `scout` | subagent | Read-only exploration |
 | `reviewer` | subagent | Independent read-only review |
+| `visualizer` | subagent | UI/UX and frontend specialist (web, Qt Widgets): design analysis, delegated frontend edits, visual QA |
 
 **Models.** ARIA pins no models. Each role uses the model you selected; subagents use their caller's model. Pin one with `aria models set <role> provider/model#variant` (or section 3 of the manager). That writes `agents.<role>.model` to the project or global config, and the change applies to sessions started afterwards.
 
@@ -160,22 +175,22 @@ Your own `permissions` and `agents.<id>.permissions` are applied after ARIA's ru
 
 ### Role matrix
 
-Every cell was checked against OpenCode's evaluate and visibility logic: 184 cases. It has not been checked in a live server.
+The 184-case evaluation covered the seven original roles and was not re-run for `visualizer`. The `visualizer` column was derived by evaluating its resolved rules (from `opencode debug agents` on OpenCode 2.3.0) for 42 sample actions, and spot-checked in a scripted-model delegation run (project edit allowed, own scratch allowed, another session's scratch denied, authority-file edit asks). Neither has been checked against a live provider.
 
-| | aria / scientist | planner | writer | scout / reviewer | researcher |
-|---|---|---|---|---|---|
-| read, glob, grep | yes | yes | yes | yes | yes |
-| `.env` read | ask | ask | ask | ask | ask |
-| credential files (keys, `.ssh`, `.aws`, `.netrc`, auth.json…) | deny | deny | deny | deny | deny |
-| outside the project | read asks, write denied | read asks | read asks | read asks | read asks |
-| edit/write/patch | project, except: config/authority files ask, secrets deny | `.aria/plans/*.md` only (top level) | prose files only (`md tex bib txt rst typ qmd org adoc`); never inside `.aria/ .opencode/ .claude/ .agents/ .git/ .github/ .vscode/ node_modules/` at any depth, nor `AGENTS.md`, `CLAUDE.md` or other authority files | hidden | hidden |
-| shell | yes; installs, history changes, recursive deletes, containers ask; publish, deploy and sudo denied | hidden | hidden | hidden | hidden |
-| Code Mode (`execute`) | yes | hidden | hidden | hidden | hidden |
-| unknown MCP / plugin tools | ask | hidden | hidden | hidden | hidden |
-| Zotero (zotero-mcp) | ask | hidden | hidden | hidden | reads allowed; library/index/authorization changes ask; unclassified tools hidden |
-| web fetch/search | yes | no | no | scout yes, reviewer no | yes |
-| subagents | aria: all six; scientist: scout, reviewer, researcher, writer | scout | researcher | none | none |
-| scheduling, worktree creation, artifact delete | ask | hidden | hidden | hidden | hidden |
+| | aria / scientist | planner | writer | scout / reviewer | researcher | visualizer |
+|---|---|---|---|---|---|---|
+| read, glob, grep | yes | yes | yes | yes | yes | yes |
+| `.env` read | ask | ask | ask | ask | ask | ask |
+| credential files (keys, `.ssh`, `.aws`, `.netrc`, auth.json…) | deny | deny | deny | deny | deny | deny |
+| outside the project | read asks, write denied | read asks | read asks | read asks | read asks | read asks, write denied |
+| edit/write/patch | project, except: config/authority files ask, secrets deny | `.aria/plans/*.md` only (top level) | prose files only (`md tex bib txt rst typ qmd org adoc`); never inside `.aria/ .opencode/ .claude/ .agents/ .git/ .github/ .vscode/ node_modules/` at any depth, nor `AGENTS.md`, `CLAUDE.md` or other authority files | hidden | hidden | project, except: config/authority files ask, secrets deny (same as aria) |
+| shell | yes; installs, history changes, recursive deletes, containers ask; publish, deploy and sudo denied | hidden | hidden | hidden | hidden | same policy as aria (to run the app and existing checks) |
+| Code Mode (`execute`) | yes | hidden | hidden | hidden | hidden | hidden |
+| unknown MCP / plugin tools | ask | hidden | hidden | hidden | hidden | ask (`playwright_*` browser tools ask on every call) |
+| Zotero (zotero-mcp) | ask | hidden | hidden | hidden | reads allowed; library/index/authorization changes ask; unclassified tools hidden | hidden |
+| web fetch/search | yes | no | no | scout yes, reviewer no | yes | yes |
+| subagents | aria: all seven; scientist: scout, reviewer, researcher, writer | scout | researcher | none | none | none |
+| scheduling, worktree creation, artifact delete | ask | hidden | hidden | hidden | hidden | hidden |
 
 The coding roles start from **ask** for anything unknown, instead of OpenCode's default allow-all. A newly connected MCP server or plugin tool cannot act without a prompt. Normal development runs without prompts: read, search, project edits, shell, todo, web reads and Code Mode.
 
@@ -235,7 +250,7 @@ Each session that can write gets `.aria/scratch/<root-session>/<session>/` for t
 - **Layout.** Single files go directly in the session directory. To group related files an agent makes an activity directory named `YYYYMMDD-HHMMSS-short-kebab-description` with plain `mkdir` (it fails if the name exists; add a suffix). Names are organisation only: ownership is decided by the two session ids, and nested paths below the session directory are allowed.
 - **Creation.** It is created one directory at a time from the real project root. A symlinked `.aria` or `.aria/scratch` disables scratch rather than being followed. Session IDs are validated before being used as paths.
 - **Ignored by Git.** `.aria/scratch/.gitignore` contains `*`.
-- **Delivery.** For the `aria` and `scientist` roles (the only ones with a shell or project edits) the absolute path is added to the system context on every model request, after the directory has been re-created if it was removed. If scratch cannot be provisioned, the context says so and forbids `/tmp` instead of naming another place. Read-only roles get no scratch and no write access. A subagent has its own directory under the same root; it cannot write its caller's, and the caller shares a file by giving the subagent its path.
+- **Delivery.** For the `aria`, `scientist` and `visualizer` roles (the only ones with a shell or project edits) the absolute path is added to the system context on every model request, after the directory has been re-created if it was removed. If scratch cannot be provisioned, the context says so and forbids `/tmp` instead of naming another place. Read-only roles get no scratch and no write access. A subagent has its own directory under the same root; it cannot write its caller's, and the caller shares a file by giving the subagent its path.
 - **Shell.** OpenCode starts every shell command with `OPENCODE_SESSION_ID` set, but its `shell` hook does not say which session a command belongs to, so ARIA does not set `TMPDIR` automatically. The context gives the path and tells the agent to run tools that choose their own temporary location as `TMPDIR=<scratch> command`, or to use `mktemp -d -p <scratch>`. The host's own `TMPDIR` (e.g. a cluster's `/home/scratch`) otherwise applies to `mktemp`.
 - **Limits.** This is a convention, not containment. What is enforced: the `edit`/`write`/`patch` tools may write only the caller's own scratch (guard), `edit` to absolute paths outside the project is denied, and reading outside the project asks. Anything a shell does depends on the model following the instruction in its context.
 - **DONE marker.** The root session marks completion with `.aria/scratch/<root>/DONE`. It must be a regular file; a link is ignored. If any session of that root is active more than ten minutes after DONE was written, the marker is treated as stale and the scratch is kept.

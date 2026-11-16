@@ -1,13 +1,13 @@
 import { resolve } from "node:path";
 import { cleanScratch, listScratch } from "../scratch.ts";
 import { describePlan, loadPlans } from "../plans.ts";
-import { allDeps, disableDep, enableDep, installDep, probeDep, readiness } from "./deps.ts";
+import { allDeps, disableDep, enableDep, manageDep, probeDep, readiness, removeDep, updateAll } from "./deps.ts";
 import { MANIFEST } from "./manifest.ts";
 import { doctor, failing } from "./doctor.ts";
 import { isAriaPackage } from "./config.ts";
 import { packageRoot } from "./env.ts";
 import { checkUpdate, repair, rollback, setup, update } from "./install.ts";
-import { pack } from "./pack.ts";
+import { defaultOutDir, pack } from "./pack.ts";
 import { inspect } from "./release.ts";
 import { reconcile } from "./reconcile.ts";
 import { modelView, restoreModel, setModel } from "./models.ts";
@@ -31,9 +31,9 @@ export const USAGE = `aria ${version()} — ARIA manager
   aria ui                      same
   aria doctor [--runtime]      health report (--runtime also queries OpenCode)
   aria setup [--scope global|project] [--dev [path] | --release [--from <dir|tgz>] [--sha256 <hex>]]
-             [--with zotero-mcp,context7,playwright-mcp] [--adopt] [--link-bin] [--force]
+             [--with required | zotero-mcp,context7,playwright-mcp,impeccable,engram] [--adopt] [--link-bin] [--force]
   aria update [--check] --from <dir|tgz> [--sha256 <hex>] [--force]
-  aria pack [--out <dir>] [--source <dir>]   build aria-<version>.tgz + .sha256 from the release inventory
+  aria pack [--out <dir>] [--source <dir>]   build aria-<version>.tgz + .sha256 (default out: <checkout>/../releases)
   aria inspect [<dir|tgz>] [--sha256 <hex>]  release identity, version and file count (read-only)
   aria reconcile               would this package work with the current environment? (read-only)
   aria rollback [--to <version>] [--keep-tools]   journaled; --keep-tools leaves ARIA-managed tool paths alone
@@ -45,7 +45,11 @@ export const USAGE = `aria ${version()} — ARIA manager
   aria models restore <role|default>                            undo ARIA's last change
   aria models available        models OpenCode lists for this project
   aria deps [list]
-  aria deps install|update <id> · enable <id> [--scope] [--replace] · disable <id> · probe <id>
+  aria deps install|update|repair <id> [--scope global|project]   install a missing managed dependency, update it to
+                               ARIA's pinned version, or restore a damaged one (reuses a valid existing one)
+  aria deps update --all       update/repair every managed dependency that needs it (preview first)
+  aria deps remove <id>        remove a skill ARIA installed (unmodified copies only)
+  aria deps enable <id> [--scope] [--replace] · disable <id> · probe <id>
   aria deps check [<id>]       operational readiness of enabled integrations (may use the network)
   aria plans · aria scratch list · aria scratch clean [--stale N]
   aria version
@@ -147,7 +151,8 @@ async function dispatch(argv: readonly string[]): Promise<number> {
       console.log(version());
       return EXIT.ok;
     case "pack": {
-      const r = pack(str(args, "out") ?? process.cwd(), resolve(str(args, "source") ?? packageRoot));
+      const source = resolve(str(args, "source") ?? packageRoot);
+      const r = pack(str(args, "out") ?? defaultOutDir(source), source);
       if (json) console.log(JSON.stringify(r));
       else console.log(`${r.file}\nsha256   ${r.sha256}\nidentity ${r.identity} (${r.files} files)`);
       return EXIT.ok;
@@ -253,11 +258,11 @@ async function dispatch(argv: readonly string[]): Promise<number> {
         const deps = await allDeps(project);
         if (json) console.log(JSON.stringify(deps, null, 2));
         else for (const d of deps) {
-          console.log(`${d.id.padEnd(16)}${d.requirement.padEnd(10)}${(d.kind === "mcp" ? (d.enabled ? "enabled" : "disabled") : "-").padEnd(10)}${(d.version ?? "-").padEnd(10)}${d.ownership.padEnd(14)}${d.health}`);
+          console.log(`${d.id.padEnd(16)}${d.requirement.padEnd(10)}${(d.kind === "mcp" ? (d.enabled ? "enabled" : "disabled") : "-").padEnd(10)}${(d.version ?? "-").padEnd(10)}${d.ownership.padEnd(14)}${d.health}${d.requirement === "role" ? `  (needed by: ${d.roles.join(", ")})` : ""}`);
           for (const e of d.evidence) console.log(`${"".padEnd(16)}${e}`);
           if (d.actions.length) console.log(`${"".padEnd(16)}actions: ${d.actions.join(", ")}`);
         }
-        return deps.some((d) => d.requirement === "required" && !["healthy", "unverified"].includes(d.health)) ? EXIT.problem : EXIT.ok;
+        return deps.some((d) => d.requirement === "required" && !["healthy", "unverified", "outdated"].includes(d.health)) ? EXIT.problem : EXIT.ok;
       }
       if (action === "check") {
         const ids = rest[0] ? [rest[0]] : MANIFEST.filter((d) => d.mcp).map((d) => d.id);
@@ -269,12 +274,15 @@ async function dispatch(argv: readonly string[]): Promise<number> {
         }
         return results.every((r) => r.ok) ? EXIT.ok : EXIT.problem;
       }
+      const manage = { project, dryRun: !apply, progress, ...(str(args, "scope") ? { scope: str(args, "scope") as "project" | "global" } : {}) };
+      if (action === "update" && args.flags.has("all")) return printResult(await updateAll(manage), json);
       const id = rest[0];
       if (!id) {
-        console.error(`usage: aria deps ${action} <id>`);
+        console.error(`usage: aria deps ${action} <id>${action === "update" ? " | --all" : ""}`);
         return EXIT.usage;
       }
-      if (action === "install" || action === "update") return printResult(await installDep(id, { dryRun: !apply, progress }), json);
+      if (action === "install" || action === "update" || action === "repair") return printResult(await manageDep(action, id, manage), json);
+      if (action === "remove") return printResult(await removeDep(id, manage), json);
       if (action === "enable") return printResult(await enableDep(id, { scope, project, dryRun: !apply, replace: args.flags.has("replace") }), json);
       if (action === "disable") return printResult(await disableDep(id, { project, dryRun: !apply }), json);
       if (action === "probe") {

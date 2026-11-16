@@ -6,7 +6,15 @@ The MIT license in LICENSE applies to the whole repository.
   kept unchanged. Material derived from that repository: the skills under skills/ that were
   copied and edited (aria-academic-writing, aria-document-design, aria-paper-self-review,
   aria-research-evidence, aria-research-planning, aria-results-analysis, aria-review-response,
-  aria-writing-anti-ai, aria-zotero-tutor) and parts of the role prompts.
+  aria-writing-anti-ai, aria-zotero-tutor, aria-web-ui, aria-qt-ui) and parts of the role prompts.
+  The Visualizer role and its two UI skills come from that repository; the skills' offline
+  Qt reference notes keep their own upstream attributions in
+  skills/aria-qt-ui/references/sources-and-licenses.md and references/icons/.
+- Engram (MIT, github.com/Gentleman-Programming/engram) is not bundled; `aria deps install engram` downloads a pinned release at the user's request.
+- The `impeccable` design skill (Apache-2.0, github.com/pbakaus/impeccable) is NOT bundled in
+  or redistributed with ARIA. `aria deps install impeccable` downloads a pinned upstream
+  version at the user's request into their OpenCode skills directory, where it keeps its own
+  LICENSE; the visualizer role loads it from there.
 - Copyright (c) 2026 Michele Scipioni: the ARIA 2 implementation (src/, bin/, prompts/, the
   skills aria-plan, aria-review, aria-investigate, aria-numerics, documentation).
 

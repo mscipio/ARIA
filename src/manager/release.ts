@@ -36,7 +36,7 @@ import type { Progress } from "./types.ts";
 
 export const REQUIRED_FILES = [
   "package.json", "package-lock.json", "src/index.ts", "src/tui.tsx", "bin/aria.mjs",
-  ...["aria", "scout", "reviewer", "planner", "scientist", "writer", "researcher"].map((r) => `prompts/${r}.md`),
+  ...["aria", "scout", "reviewer", "planner", "scientist", "writer", "researcher", "visualizer"].map((r) => `prompts/${r}.md`),
 ];
 
 export class ReleaseError extends Error {

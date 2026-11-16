@@ -229,6 +229,43 @@ export const ZOTERO_MUTATE: readonly string[] = [
   "zotero_update_search_database", "zotero_switch_library", "zotero_authorize_local_writes",
 ];
 
+/**
+ * Engram (github.com/Gentleman-Programming/engram) MCP tools, from its `agent` profile at v3.7.1
+ * (`engram mcp --tools=agent`, 23 tools). READ is exactly the tools Engram itself annotates
+ * `readOnlyHint: true`. SAVE is the durable-memory writes ARIA lets authorized roles make. Every
+ * other tool (judge, compare, pin, review, consolidate, session start/end/finalize, capture) can
+ * change or reorganise memory: coding roles are asked, other roles cannot see them. OpenCode names
+ * MCP tools `<server>_<tool>`; the server is registered as `engram`.
+ */
+export const ENGRAM_SERVER = "engram";
+export const ENGRAM_READ: readonly string[] = [
+  "mem_context", "mem_current_project", "mem_doctor", "mem_get_observation", "mem_list_projects", "mem_search", "mem_search_prompts", "mem_suggest_topic_key",
+];
+export const ENGRAM_SAVE: readonly string[] = ["mem_save", "mem_update", "mem_session_summary"];
+/** The remaining agent-profile tools: they change or reorganise memory or sessions. */
+export const ENGRAM_OTHER_MUTATING: readonly string[] = [
+  "mem_capture_passive", "mem_compare", "mem_consolidate", "mem_judge", "mem_judge_many", "mem_pin", "mem_review", "mem_save_prompt",
+  "mem_session_end", "mem_session_finalize", "mem_session_start", "mem_unpin",
+];
+
+/**
+ * Engram rules by capability. `recall`: read tools only, every other Engram tool hidden (a role
+ * that otherwise asks about unknown tools must not be able to mutate memory). `save`: recall plus
+ * the three durable-write tools; the rest keep the role's default (ask for coding roles).
+ * A deny-by-default role (`readOnlyRules`) needs only the allows.
+ */
+export function engramRules(capability: "recall" | "save" | "save-only-hidden-rest"): Rule[] {
+  const ns = ENGRAM_SERVER;
+  const reads = ENGRAM_READ.map((t) => allow(`${ns}_${t}`));
+  const saves = ENGRAM_SAVE.map((t) => allow(`${ns}_${t}`));
+  if (capability === "recall") return [deny(`${ns}_*`), ...reads];
+  if (capability === "save-only-hidden-rest") return [deny(`${ns}_*`), ...reads, ...saves];
+  return [...reads, ...saves];
+}
+
+/** Context7 documentation tools (public documentation only; read-only). */
+export const context7Rules = (): Rule[] => [allow("context7_*")];
+
 /** OpenCode's MCP namespace for a server name (tool/runtime.ts `normalizedName` + `.` → `_`). */
 export const mcpNamespace = (server: string) => server.replace(/[^a-zA-Z0-9_-]/g, "_").replaceAll(".", "_");
 

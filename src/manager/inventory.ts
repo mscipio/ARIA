@@ -45,7 +45,8 @@ export interface Inventory {
 export const IDENTITY_ALGORITHM = "inventory-v1";
 
 const CLUTTER = new Set([".DS_Store", "Thumbs.db", "desktop.ini", "ehthumbs.db"]);
-const EXCLUDED_DIRS = new Set(["node_modules", ".git"]);
+// `.opencode` holds per-machine generated files (e.g. an integration plugin with absolute paths); never distributed.
+const EXCLUDED_DIRS = new Set(["node_modules", ".git", ".opencode"]);
 const MARKER = ".aria-staging";
 
 /** Excluded from every inventory at any depth (never distributed, never hashed). */

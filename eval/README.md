@@ -43,7 +43,7 @@ Options: `--timeout` (seconds per run, default 1800), `--opencode <bin>`, `--con
 | | Vanilla | ARIA |
 | --- | --- | --- |
 | Model, variant | `--model` | same |
-| Default agent | `build` | `aria` (six specialists available) |
+| Default agent | `build` | `aria` (seven specialists available) |
 | Prompts | OpenCode's | ARIA's role prompts and skills |
 | Tools | OpenCode built-ins | built-ins + `aria_git`, `aria_status`, review verdict tool (reviewer only) |
 | Permissions | OpenCode defaults | ARIA's scoped rules and tool gate |

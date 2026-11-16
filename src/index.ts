@@ -44,7 +44,7 @@ function packageVersion(): string {
   }
 }
 
-const SCRATCH_ROLES = new Set(["aria", "scientist"]);
+const SCRATCH_ROLES = new Set(["aria", "scientist", "visualizer"]);
 const PLAN_ROLES = new Set(["aria", "scientist", "planner"]);
 
 export default Plugin.define({

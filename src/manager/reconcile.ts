@@ -22,7 +22,7 @@ export interface Reconciliation {
   readonly advisory: string[];
 }
 
-const ROLES = ["aria", "scout", "reviewer", "planner", "scientist", "writer", "researcher"];
+const ROLES = ["aria", "scout", "reviewer", "planner", "scientist", "writer", "researcher", "visualizer"];
 
 export async function reconcile(project: string): Promise<Reconciliation> {
   const blocking: string[] = [];

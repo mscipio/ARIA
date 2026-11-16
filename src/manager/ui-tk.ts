@@ -2,7 +2,7 @@ import termkit, { type ScreenBuffer } from "terminal-kit";
 import { ROLE_IDS } from "../roles.ts";
 import { configFile, staticLayers } from "./config.ts";
 import { dependency } from "./manifest.ts";
-import { allDeps, disableDep, enableDep, ensureIntegration, installDep, probeDep, readiness, type DepStatus } from "./deps.ts";
+import { allDeps, disableDep, enableDep, ensureIntegration, manageDep, probeDep, readiness, removeDep, setupTargets, updateAll, type DepStatus } from "./deps.ts";
 import { doctor, type DoctorReport } from "./doctor.ts";
 import { ariaHome, globalConfigDir, packageRoot, releasesDir } from "./env.ts";
 import { checkUpdate, registrations, repair, rollback, setup, update } from "./install.ts";
@@ -261,7 +261,7 @@ export function runUi(project: string): Promise<number> {
       { label: "Config files (static discovery, lowest to highest)", detail: layers.length ? layers.map((l) => `${l.kind}: ${l.path}`) : ["none found"] },
       { label: "ARIA-owned entries", detail: state.owned.length ? state.owned.map((o) => `${o.kind} in ${o.file}`) : ["none"] },
       { label: "Paths", detail: [`ARIA_HOME: ${ariaHome()}`, `releases: ${releasesDir()}`, `global config: ${globalConfigDir()}`, `plans: ${project}/.aria/plans/*.md`, `scratch: ${project}/.aria/scratch/<root>/<session>/`] },
-      { label: "Roles and permissions", detail: [`roles: ${ROLE_IDS.join(", ")}`, "aria/scientist: edit in project, shell (policy only), unknown tools ask", "planner: plan files only · writer: prose files only · scout/reviewer/researcher: read-only, no shell", "WARNING: shell rules are command-text policy, not a sandbox. A broad allow rule in your own `permissions` overrides every ARIA restriction."] },
+      { label: "Roles and permissions", detail: [`roles: ${ROLE_IDS.join(", ")}`, "aria/scientist: edit in project, shell (policy only), unknown tools ask", "visualizer: project edits and shell like aria, but no Code Mode, no subagents, browser tools ask", "planner: plan files only · writer: prose files only · scout/reviewer/researcher: read-only, no shell", "WARNING: shell rules are command-text policy, not a sandbox. A broad allow rule in your own `permissions` overrides every ARIA restriction."] },
     ];
 
     const count = tab === "Install" ? installRows.length : tab === "Health" ? checks.length : tab === "Models" ? modelRows.length : tab === "Deps" ? depRows.length : tab === "Updates" ? updateRows.length : configRows.length;
@@ -273,7 +273,7 @@ export function runUi(project: string): Promise<number> {
       if (tab === "Updates") return updateRows[sel]?.actions ?? [];
       if (tab === "Health") {
         const c = checks[sel];
-        const fix: Action[] = c?.repair?.automatic && c.repair.id === "repair" ? [{ key: "f", label: "repair", run: () => void propose("Repair", (dryRun) => repair({ project, dryRun })) }] : c?.repair?.automatic && c.repair.id === "install" ? [{ key: "f", label: "install", network: true, run: () => void propose(`Install ${c.component}`, (dryRun, progress, signal) => installDep(c.id.replace(/^dep\./, ""), { dryRun, progress, ...(signal ? { signal } : {}) })) }] : [];
+        const fix: Action[] = c?.repair?.automatic && c.repair.id === "repair" ? [{ key: "f", label: "repair", run: () => void propose("Repair", (dryRun) => repair({ project, dryRun })) }] : c?.repair?.automatic && c.repair.id === "install" && c.id.startsWith("dep.") ? [{ key: "f", label: c.repair.command?.split(" ")[2] ?? "install", network: true, run: () => void propose(`${c.repair?.command?.split(" ")[2] ?? "install"} ${c.component}`, (dryRun, progress, signal) => manageDep((c.repair?.command?.split(" ")[2] ?? "install") as "install" | "update" | "repair", c.id.replace(/^dep\./, ""), { project, scope: undefined, dryRun, progress, signal })) }] : [];
         return [{ key: "enter", label: "details", run: () => setDetail(!detail) }, ...fix, ...common];
       }
       if (tab === "Models") {
@@ -295,11 +295,15 @@ export function runUi(project: string): Promise<number> {
       }
       if (tab === "Deps") {
         const d = depRows[sel];
-        if (!d) return common;
-        const acts: Action[] = [{ key: "enter", label: "details", run: () => setDetail(!detail) }];
-        if (d.actions.includes("install") || d.actions.includes("update")) acts.push({ key: "i", label: d.actions.includes("update") ? "reinstall/update" : "install", network: true, run: () => void propose(`Install ${d.name}`, (dryRun, progress, signal) => installDep(d.id, { dryRun, progress, ...(signal ? { signal } : {}) })) });
+        const updateEverything: Action = { key: "U", label: "update all", network: true, run: () => void propose("Update all managed dependencies", (dryRun, progress, signal) => updateAll({ project, dryRun, progress, signal })) };
+        if (!d) return [updateEverything, ...common];
+        const acts: Action[] = [{ key: "enter", label: "details", run: () => setDetail(!detail) }, updateEverything];
+        for (const [key, intent] of [["i", "install"], ["u", "update"], ["f", "repair"]] as const) {
+          if (d.actions.includes(intent)) acts.push({ key, label: intent, network: true, run: () => void propose(`${intent[0]?.toUpperCase()}${intent.slice(1)} ${d.name}`, (dryRun, progress, signal) => manageDep(intent, d.id, { project, scope: undefined, dryRun, progress, signal })) });
+        }
+        if (d.actions.includes("remove")) acts.push({ key: "d", label: "remove", run: () => void propose(`Remove ${d.name}`, (dryRun) => removeDep(d.id, { project, scope: undefined, dryRun })) });
         if (d.actions.includes("enable")) acts.push({ key: "e", label: `enable (${scope})`, run: () => void propose(`Enable ${d.name} (${scope})`, (dryRun) => enableDep(d.id, { scope, project, dryRun })) });
-        if (dependency(d.id)?.mcp?.config) acts.push({ key: "a", label: "set up fully + check", network: true, run: () => void propose(`Set up ${d.name} (${scope})`, (dryRun, progress, signal) => ensureIntegration(d.id, { scope, project, dryRun, progress, ...(signal ? { signal } : {}) })) });
+        if (setupTargets().some((t) => t.id === d.id)) acts.push({ key: "a", label: "set up fully + check", network: true, run: () => void propose(`Set up ${d.name} (${scope})`, (dryRun, progress, signal) => ensureIntegration(d.id, { scope, project, dryRun, progress, ...(signal ? { signal } : {}) })) });
         if (d.actions.includes("disable")) acts.push({ key: "x", label: "disable", run: () => void propose(`Disable ${d.name}`, (dryRun) => disableDep(d.id, { project, dryRun })) });
         if (d.kind === "mcp" && d.enabled) acts.push({ key: "c", label: "check readiness", network: Boolean(dependency(d.id)?.mcp?.remoteUrl), run: () => void (async () => {
           setLoading(`checking ${d.name}…`);
@@ -480,7 +484,7 @@ export function runUi(project: string): Promise<number> {
     } else if (tab === "Deps") {
       list = depRows.map((d, i) => line(i, `${MARK[d.health].text} ${d.id.padEnd(15)} ${d.requirement.padEnd(9)} ${(d.kind === "mcp" ? (d.enabled ? "on" : "off") : "").padEnd(4)} ${(d.version ?? "-").padEnd(9)} ${d.ownership}`, MARK[d.health].color));
       const d = depRows[sel];
-      detailLines = d ? [d.name, d.purpose, `health: ${d.health} (${d.basis})`, ...d.evidence.map((e) => `- ${e}`), `ownership: ${d.ownership}${d.installed === false ? " (not installed yet)" : ""}`, `actions: ${d.actions.join(", ") || (d.ownership === "aria-managed" ? "none needed" : `none: ${d.ownership === "hosted" ? "hosted service" : "you manage it"}`)}`] : [];
+      detailLines = d ? [d.name, d.purpose, `${d.requirement}${d.roles.length ? `; used by: ${d.roles.join(", ")}` : ""}${d.pinned ? `; pinned ${d.pinned}` : ""}`, `health: ${d.health} (${d.basis})`, ...d.evidence.map((e) => `- ${e}`), `ownership: ${d.ownership}${d.installed === false ? " (not installed yet)" : ""}`, `actions: ${d.actions.join(", ") || (d.ownership === "aria-managed" ? "none needed" : `none: ${d.ownership === "hosted" ? "hosted service" : "you manage it"}`)}`] : [];
     } else if (tab === "Updates") {
       list = updateRows.map((r, i) => line(i, r.label));
       detailLines = updateRows[sel]?.detail ?? [];

@@ -102,12 +102,38 @@ export async function doctor(input: DoctorInput): Promise<DoctorReport> {
   }
 
   // Dependencies (manifest)
-  for (const d of await allDeps(input.project)) {
+  const depStates = await allDeps(input.project);
+  for (const d of depStates) {
+    const broken = !["healthy", "unverified", "disabled"].includes(d.health);
+    const fixCmd = !broken ? undefined : d.health === "outdated" ? "update" : d.actions.includes("install") ? "install" : d.actions.includes("repair") ? "repair" : undefined;
     checks.push(check({
       id: `dep.${d.id}`, component: d.name, status: d.health, basis: d.basis,
-      summary: `${d.requirement}${d.kind === "mcp" ? `, ${d.enabled ? "enabled" : "disabled"}` : ""}${d.version ? `, ${d.version}` : ""}`,
+      summary: `${d.requirement === "role" ? `required by ${d.roles.length === ROLE_IDS.length ? "all roles" : d.roles.join(", ")}` : d.requirement}${d.kind === "mcp" ? `, ${d.enabled ? "enabled" : "disabled"}` : ""}${d.version ? `, ${d.version}` : ""}${d.health === "outdated" && d.pinned ? ` (pinned ${d.pinned})` : ""}`,
       evidence: d.evidence,
-      ...(d.actions.includes("install") && d.ownership !== "external" ? { repair: { id: "install", automatic: true, changes: [`install ${d.name} under ARIA_HOME/tools`], network: true, command: `aria deps install ${d.id}` } } : {}),
+      ...(fixCmd && d.ownership !== "external" && d.ownership !== "reused" ? { repair: { id: "install", automatic: true, changes: [`${fixCmd} ${d.name}`], network: true, command: `aria deps ${fixCmd} ${d.id}` } } : {}),
+    }));
+  }
+  // Role readiness: a role is not fully ready while a dependency it requires is missing or broken.
+  // Roles with the same gaps are reported together; other roles are unaffected.
+  const groups = new Map<string, { roles: string[]; bad: typeof depStates }>();
+  for (const role of ROLE_IDS) {
+    const bad = depStates.filter((d) => d.requirement === "role" && d.roles.includes(role) && !["healthy", "unverified"].includes(d.health));
+    if (bad.length === 0) continue;
+    const key = bad.map((d) => d.id).join(",");
+    const g = groups.get(key) ?? { roles: [], bad };
+    g.roles.push(role);
+    groups.set(key, g);
+  }
+  const fixable = (d: (typeof depStates)[number]) => d.actions.some((a) => ["install", "update", "repair", "enable"].includes(a));
+  const fixVerb = (d: (typeof depStates)[number]) => (d.health === "outdated" ? "update" : d.actions.includes("repair") ? "repair" : d.actions.includes("install") ? "install" : "enable");
+  for (const g of groups.values()) {
+    const label = g.roles.length === ROLE_IDS.length ? "all roles" : g.roles.join(", ");
+    checks.push(check({
+      id: `role.${g.roles[0]}`, component: `${label} readiness`, basis: "static",
+      status: g.bad.every((d) => d.health === "outdated") ? "outdated" : "config-error",
+      summary: `not fully ready: ${g.bad.map((d) => `${d.id} ${d.health}`).join(", ")}. Everything else keeps working`,
+      evidence: g.bad.map((d) => `${d.id}: ${d.evidence.at(-1) ?? d.health}`),
+      ...(g.bad.some(fixable) ? { repair: { id: "install", automatic: true, changes: g.bad.filter(fixable).map((d) => `${fixVerb(d)} ${d.name}`), network: true, command: g.bad.filter(fixable).map((d) => `aria deps ${fixVerb(d)} ${d.id}`).join(" && ") } } : {}),
     }));
   }
 
@@ -131,7 +157,7 @@ export async function doctor(input: DoctorInput): Promise<DoctorReport> {
       checks.push(check({
         id: "runtime.server", component: "ARIA server plugin", basis: "runtime",
         status: missing.length === 0 ? "healthy" : missing.length === ROLE_IDS.length ? "runtime-error" : "config-error",
-        summary: missing.length === 0 ? "all 7 ARIA agents registered in the running server" : `agents not registered: ${missing.join(", ")}`,
+        summary: missing.length === 0 ? `all ${ROLE_IDS.length} ARIA agents registered in the running server` : `agents not registered: ${missing.join(", ")}`,
         evidence: [`${agents.command}: ${[...ids].sort().join(", ")}`],
       }));
     }
@@ -166,5 +192,5 @@ export async function doctor(input: DoctorInput): Promise<DoctorReport> {
   return { checks, runtimeProbed, summary };
 }
 
-/** Problems that matter for exit codes: anything broken in a required component or configuration. */
-export const failing = (r: DoctorReport) => r.checks.filter((c) => ["missing", "incompatible", "config-error", "runtime-error"].includes(c.status) && !(c.id.startsWith("dep.") && c.summary.startsWith("optional")));
+/** Problems that matter for exit codes: anything broken in a required component or configuration. A role companion (e.g. Impeccable for the visualizer) is reported, but does not fail the run: other roles keep working. */
+export const failing = (r: DoctorReport) => r.checks.filter((c) => ["missing", "incompatible", "config-error", "runtime-error"].includes(c.status) && !(c.id.startsWith("dep.") && (c.summary.startsWith("optional") || c.summary.startsWith("required by"))) && !c.id.startsWith("role."));
