@@ -11,7 +11,7 @@ ARIA is an OpenCode plugin for OpenCode v2.3.0 or later. It adds:
 
 Everything else is native OpenCode.
 
-**Status: experimental alpha (2.0.0-alpha.9).** Everything has been typechecked against `@opencode/plugin` 2.3.0, and the logic has been checked against disposable fixtures using OpenCode's own rule semantics. The plugin loaded and resolved its roles under OpenCode 2.3.2; the alpha.9 sidebar change has not been visually exercised in a running TUI. See `.aria/plans/aria2-implementation-map.md` for exactly what has been verified.
+**Status: 2.0.0.** Everything has been typechecked against `@opencode/plugin` 2.3.0, and the logic has been checked against disposable fixtures using OpenCode's own rule semantics. The plugin loaded and resolved its roles under OpenCode 2.3.2; the alpha.9 sidebar change has not been visually exercised in a running TUI. See `.aria/plans/aria2-implementation-map.md` for exactly what has been verified.
 
 ## Install and manage
 
@@ -20,8 +20,8 @@ ARIA ships a manager: `aria` opens a keyboard-driven terminal UI. The same opera
 **First install from a release** (needs Node ≥ 22.18 and npm; nothing else from ARIA has to exist yet):
 
 ```
-tmp=$(mktemp -d) && tar -xzf aria-2.0.0-alpha.9.tgz -C "$tmp"   # disposable; remove it afterwards
-node "$tmp"/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.9.tgz --scope global --with zotero-mcp --link-bin --yes
+tmp=$(mktemp -d) && tar -xzf aria-2.0.0.tgz -C "$tmp"   # disposable; remove it afterwards
+node "$tmp"/package/bin/bootstrap.mjs --from aria-2.0.0.tgz --scope global --with zotero-mcp --link-bin --yes
 ```
 
 The bootstrap uses only Node built-ins. It:
