@@ -21,6 +21,6 @@ export default [
     },
   },
   {
-    ignores: ['**/node_modules/**', '**/dist/**', '**/scratch/**'],
+    ignores: ['**/node_modules/**', '**/scratch/**'],
   },
 ];

@@ -1,486 +1,183 @@
-import { createHash, randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
-import { promisify } from "node:util";
-
-import {
-  assertContained,
-  canonicalWorktree,
-  ensureSafeDirectory,
-  safeProjectFile,
-  verifySafeParent,
-  withFileLock,
-} from "./paths.js";
-import { isFilesystemRoot } from "./plan-tool.js";
-
-const execFileAsync = promisify(execFile);
+import { lstatSync } from "node:fs";
+import { join } from "node:path";
+import { UnsafePath, createExclusive, entries, kindOf, realRoot, removeOwnedDirectory, secureDir, touchDirectory } from "./safe-fs.ts";
 
 /**
- * T002 — Canonical workspace/scratch policy.
+ * Per-session scratch: `.aria/scratch/<root-session>/<session>/`.
  *
- * All ARIA-controlled generated output (task working state, test fixtures
- * and results, logs, captures, caches, builds, environments, runtime state,
- * experiments) lives under `<canonical-worktree>/scratch/`, never under the
- * ambient temp dir, never under `/home/scratch` staging, and never under a
- * caller-global location. The scratch root is derived from the verified
- * canonical project worktree and every path below it is fail-closed through
- * the `src/paths.ts` guards (`canonicalWorktree`, `ensureSafeDirectory`,
- * `safeProjectFile`, `assertContained`, `verifySafeParent`) plus the
- * filesystem-root sentinel shared with the plan tool (`isFilesystemRoot`):
- * `..` traversal, symlink escapes, filesystem roots, and ambiguous
- * (empty/whitespace) roots are rejected before anything is created.
- *
- * What this module never does:
- * - No process-wide `HOME`/`XDG_*`/`TMPDIR`/`ENGRAM_DATA_DIR` mutation. The
- *   task scope below returns a per-call `env` record only, merged by the
- *   caller into a single `ExecutorOptions.env` (the T011 precedent). Global
- *   config resolution (`~/.config/opencode`, Engram data) is preserved
- *   byte-identical.
- * - No `TMPDIR`-via-executor-env steering. `node:os.tmpdir()` and
- *   `mkdtemp()` read the ambient process environment at call time, so a
- *   per-call env merge does not steer them (TMPDIR-via-executor-env is NOT
- *   proven safe). Callers route temp output through the explicit `tmp`
- *   directory returned here instead.
- * - No migration or deletion of historical artifacts outside `scratch/`.
- *   Pre-existing repo clutter stays untouched; only needed `scratch/`
- *   subdirectories are created.
-  * - Scratch confinement applies only to transient/generated artifacts (logs,
-  *   fixtures, temporary outputs, verification evidence, etc.), not intentional
-  *   edits to authorized repository code, tests, configuration, or documentation.
-  *   Scratch artifacts are never staged. `ensureScratchGitignore` never runs
-  *   `git add`/`git rm` and never deletes already-tracked `scratch/` paths;
-  *   tracked content and the index are left byte-identical. Staging explicitly
-  *   approved source changes is permitted only during human-authorized Git
-  *   operations; editing files does not itself authorize staging.
- *
- * Explicit exceptions (not promised): tools that do not accept explicit
- * output paths or per-call env — hardcoded `~/.cache` writers, absolute
- * `/tmp` writers, and call sites that resolve `os.tmpdir()` ambiently at
- * call time (e.g. the Engram download path in `src/deps.ts`, which cleans up
- * with `finally rm -rf`) — remain ambient until those call sites accept
- * explicit directories. This module provides no OS sandbox (no chroot,
- * mount, or user namespace); containment is path-level fail-closed checks
- * plus explicit-path routing for cooperative operations.
- *
- * Approvals/workflow note: workspace/scratch instructions and RDC approvals
- * remain required but are not OS-sandbox enforcement (the Unix account can
- * still write outside those locations). Increased Visualizer authority under
- * T003 edit/shell parity changes nothing here.
+ * Safety rules (all fail closed):
+ * - every component from the real project root down is a real directory, never a symlink;
+ *   a symlinked `.aria` or `.aria/scratch` disables scratch instead of being followed;
+ * - session identifiers are validated before they become path components;
+ * - cleanup removes only `<root>` directories that are real directories, whose DONE marker is a
+ *   regular file (not a link), or that are explicitly stale; it renames and identity-checks each
+ *   target before deleting, never follows links, and never crosses filesystems;
+ * - every provisioning refreshes the session directory's mtime (activity signal for cleanup), and a DONE
+ *   marker only counts if no session was active more than DONE_GRACE_MS after it;
+ * - anything malformed is reported and kept.
  */
 
-export const SCRATCH_DIR_NAME = "scratch";
+export const SCRATCH_DIR = ".aria/scratch";
 
-export const SCRATCH_GITIGNORE_RULE = "/scratch/";
+/** POSIX single-quoting of one word (no command parsing): safe for spaces, quotes, `$`, backticks, newlines. */
+export const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const SCRATCH_COMPONENTS = [".aria", "scratch"] as const;
 
-export const SCRATCH_SUBDIRS = [
-  "tmp",
-  "tests/fixtures",
-  "tests/results",
-  "logs",
-  "captures/screenshots",
-  "captures/videos",
-  "caches/npm",
-  "caches/pip",
-  "caches/python",
-  "builds",
-  "environments",
-  "runtime",
-  "experiments",
-] as const;
+/** OpenCode v2 session IDs are `ses` + `_` + an opaque sortable token. Anything else is not used as a path. */
+const SESSION_ID = /^ses_[A-Za-z0-9]{8,64}$/;
+export const validSessionID = (id: string) => SESSION_ID.test(id);
 
-export type ScratchSubdir = (typeof SCRATCH_SUBDIRS)[number];
-
-export type ScratchTaskScope = {
-  root: string;
-  scratch: string;
-  taskDir: string;
-  dirs: {
-    tmp: string;
-    testFixtures: string;
-    testResults: string;
-    logs: string;
-    screenshots: string;
-    videos: string;
-    npmCache: string;
-    pipCache: string;
-    pythonCache: string;
-    builds: string;
-    environments: string;
-    runtime: string;
-    experiments: string;
-  };
-  /**
-   * Per-call environment additions only. Merge into a single
-   * `ExecutorOptions.env`; never assign to `process.env`. Deliberately
-   * carries no `HOME`, `XDG_*`, `ENGRAM_*`, or `TMPDIR` entries.
-   */
-  env: Record<string, string>;
-};
-
-/** Resolve and verify the canonical scratch root for a worktree (fail closed). */
-export async function resolveScratchRoot(worktree: string): Promise<{ root: string; scratch: string }> {
-  if (typeof worktree !== "string" || worktree.trim().length === 0) {
-    throw new Error("Scratch policy requires a meaningful project worktree (empty/ambiguous roots rejected)");
-  }
-  if (isFilesystemRoot(worktree)) {
-    throw new Error("Scratch policy rejects filesystem-root worktrees");
-  }
-  const root = await canonicalWorktree(worktree);
-  if (isFilesystemRoot(root)) {
-    throw new Error("Scratch policy rejects filesystem-root worktrees (canonical root)");
-  }
-  const scratch = resolve(root, SCRATCH_DIR_NAME);
-  assertContained(root, scratch, "Scratch root");
-  return { root, scratch };
-}
-
-function validateScopeSegments(scope: string): string[] {
-  if (typeof scope !== "string" || scope.trim().length === 0) {
-    throw new Error("Scratch scope cannot be empty");
-  }
-  const trimmed = scope.trim();
-  if (isAbsolute(trimmed)) {
-    throw new Error(`Scratch scope escapes the workspace: ${scope}`);
-  }
-  const segments = trimmed.split("/").filter((segment) => segment.length > 0);
-  if (segments.length === 0) {
-    throw new Error("Scratch scope cannot be empty");
-  }
-  for (const segment of segments) {
-    if (segment === "." || segment === "..") {
-      throw new Error(`Scratch scope escapes the workspace: ${scope}`);
-    }
-    if (segment.includes("\\") || segment.includes("\0")) {
-      throw new Error(`Scratch scope is not a portable path component: ${scope}`);
-    }
-  }
-  return segments;
-}
-
-async function resolveScratchDir(
-  root: string,
-  scratch: string,
-  scope: string,
-  create: boolean,
-): Promise<string> {
-  const segments = validateScopeSegments(scope);
-  const candidate = resolve(scratch, ...segments);
-  assertContained(scratch, candidate, "Scratch scope");
-  assertContained(root, candidate, "Scratch scope");
-  return ensureSafeDirectory(root, candidate, create);
-}
-
-/** Create the scratch root plus the requested subdirectories (defaults to the full layout). */
-export async function ensureScratchDirs(
-  worktree: string,
-  subdirs: readonly string[] = SCRATCH_SUBDIRS,
-): Promise<{ root: string; scratch: string }> {
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  await ensureSafeDirectory(root, scratch, true);
-  for (const subdir of subdirs) {
-    await resolveScratchDir(root, scratch, subdir, true);
-  }
-  return { root, scratch };
-}
-
-function sanitizePrefix(prefix: string): string {
-  const cleaned = (prefix ?? "").trim().replaceAll(/[^A-Za-z0-9._-]+/g, "-").replaceAll(/-+/g, "-").replace(/^-|-$/g, "");
-  const sliced = cleaned.slice(0, 32);
-  return sliced.length > 0 ? sliced : "run";
+/**
+ * Create (if needed) and return the session's scratch directory. Throws `UnsafePath` with a
+ * specific reason when the location is unsafe; the caller reports scratch as unavailable.
+ */
+export function ensureScratch(projectDir: string, root: string, session: string): string {
+  if (!validSessionID(root) || !validSessionID(session)) throw new UnsafePath(`invalid session id (${root} / ${session})`);
+  const projectRoot = realRoot(projectDir);
+  const base = secureDir(projectRoot, SCRATCH_COMPONENTS, true) as string;
+  createExclusive(join(base, ".gitignore"), "*\n");
+  const dir = secureDir(projectRoot, [...SCRATCH_COMPONENTS, root, session], true) as string;
+  // Activity signal for cleanup: every provisioning (each model request of the session) refreshes
+  // the session directory's mtime, so deeper file changes need not be scanned to see it is in use.
+  touchDirectory(dir);
+  return dir;
 }
 
 /**
- * Create a concurrent-safe unique directory under `scratch/<scope>/` via
- * `mkdtemp` (atomic unique naming; sibling `mkdir` races resolve through
- * the `ensureSafeDirectory` EEXIST path). The scope parent stays inside the
- * verified scratch root; symlink escapes fail closed.
+ * A DONE marker only counts if the session tree stopped after it. Provisioning on later requests
+ * moves a session directory's mtime past DONE by more than this grace (the final replies of the turn
+ * that wrote DONE come within it), which shows the session continued.
  */
-export async function createUniqueScratchDir(
-  worktree: string,
-  scope: string,
-  prefix: string,
-): Promise<string> {
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  const scopeDir = await resolveScratchDir(root, scratch, scope, true);
-  const created = await mkdtemp(join(scopeDir, `${sanitizePrefix(prefix)}-`));
-  assertContained(scratch, created, "Scratch directory");
-  assertContained(root, created, "Scratch directory");
-  return created;
+export const DONE_GRACE_MS = 10 * 60_000;
+
+export interface ScratchEntry {
+  readonly root: string;
+  readonly sessions: readonly string[];
+  /** DONE marker present and no session activity after it (beyond the grace). */
+  readonly done: boolean;
+  /** DONE marker present but a session was active after it; such an entry is kept. */
+  readonly reopened: boolean;
+  readonly modified: Date;
+  /** Present when the entry is malformed; such entries are never removed. */
+  readonly problem?: string;
+  readonly identity: { dev: number; ino: number };
 }
 
-function validateTaskId(taskId: string): string {
-  if (typeof taskId !== "string" || taskId.trim().length === 0) {
-    throw new Error("Scratch task id cannot be empty");
-  }
-  const id = taskId.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id)) {
-    throw new Error(`Scratch task id is not a safe path component: ${taskId}`);
-  }
-  return id;
+export interface ScratchListing {
+  readonly entries: readonly ScratchEntry[];
+  /** Why scratch could not be inspected, or names that were skipped as unsafe. */
+  readonly problems: readonly string[];
 }
 
-function taskSlug(taskId: string, taskName?: string): string {
-  const source = taskName?.trim() || taskId.replace(/([a-z])([A-Z0-9])/g, "$1 $2");
-  const slug = source.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 56).replace(/-+$/g, "");
-  return slug || "task";
-}
-
-/** Date-scoped task directory. Repeated task IDs resolve to the same path only within the same UTC day. */
-async function resolveTaskDir(
-  worktree: string,
-  id: string,
-  taskName?: string,
-): Promise<{ root: string; scratch: string; taskDir: string }> {
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  const date = new Date().toISOString().slice(0, 10); // UTC date is the deterministic date rule.
-  const dateDir = await resolveScratchDir(root, scratch, date, true);
-  const slug = taskSlug(id, taskName);
-  const marker = ".aria-task-id";
-  const identity = `${id}\n${taskName?.trim() ?? ""}\n`;
-  const idSuffix = createHash("sha256").update(id).digest("hex").slice(0, 6);
-
-  // Serialize allocation so parallel processes cannot split the same task
-  // between the unsuffixed and collision paths.
-  const taskDir = await withFileLock(dateDir, async () => {
-    const unsuffixed = join(dateDir, slug);
-    for (const candidate of [unsuffixed, join(dateDir, `${slug}-${idSuffix}`)]) {
-      try {
-        await mkdir(candidate);
-        await writeFile(join(candidate, marker), identity, { flag: "wx" });
-        return candidate;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
-      await ensureSafeDirectory(root, candidate, false);
-      try {
-        if ((await readFile(join(candidate, marker), "utf8")) === identity) return candidate;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    throw new Error(`Unable to allocate a unique scratch directory for task ${id}`);
-  });
-  assertContained(scratch, taskDir, "Scratch task directory");
-  return { root, scratch, taskDir };
-}
-
-/** Per-day deterministic directory: `<scratch>/<UTC date>/<task name>/`; a new UTC day intentionally gets a new path. */
-export async function createTaskScratch(worktree: string, taskId: string, taskName?: string): Promise<string> {
-  const id = validateTaskId(taskId);
-  return (await resolveTaskDir(worktree, id, taskName)).taskDir;
-}
-
-/** Concurrent-safe unique run directory under the per-task directory. */
-export async function createTaskRunDir(worktree: string, taskId: string, prefix = "run", taskName?: string): Promise<string> {
-  const id = validateTaskId(taskId);
-  const { root, scratch, taskDir } = await resolveTaskDir(worktree, id, taskName);
-  return createUniqueScratchDir(root, relative(scratch, taskDir), prefix);
-}
-
-/**
- * Task-scoped directories plus per-call env for ARIA-controlled operations.
- * Route caches, logs, captures, builds, and test outputs through `dirs`
- * (or explicit CLI flags pointed at them); merge `env` per call via
- * `ExecutorOptions.env`. Nothing here touches `process.env`, `HOME`,
- * `XDG_*`, or global config, and atomic sibling-temp + `withFileLock`
- * semantics are preserved by `writeScratchFileAtomically` for file writes.
- *
- * Non-collision layout: every task-owned output (`tmp`, `tests/fixtures`,
- * `tests/results`, `logs`, `captures/*`, `builds`, `environments`,
- * `runtime`, `experiments`) lives beneath the per-task directory
- * (`<scratch>/<taskId>/`), so two distinct task scopes return disjoint
- * task-owned paths and cooperative callers following `ARIA_LOG_DIR`/
- * `ARIA_CAPTURE_DIR`/`ARIA_BUILD_DIR` (and the other `ARIA_*` task env
- * values, which all point beneath `taskDir`) cannot overwrite another
- * task's same-named output. Deliberately shared across tasks (content-
- * addressed caches safe for reuse): `caches/npm`, `caches/pip`,
- * `caches/python` under the scratch root, surfaced as `NPM_CONFIG_CACHE`,
- * `PIP_CACHE_DIR`, and `PYTHONPYCACHEPREFIX`.
- */
-export async function scratchTaskScope(worktree: string, taskId: string, taskName?: string): Promise<ScratchTaskScope> {
-  const id = validateTaskId(taskId);
-  const { root, scratch, taskDir } = await resolveTaskDir(worktree, id, taskName);
-  await ensureSafeDirectory(root, scratch, true);
-  const taskScope = relative(scratch, taskDir);
-  const [tmp, testFixtures, testResults, logs, screenshots, videos, capturesDir, npmCache, pipCache, pythonCache, builds, environments, runtime, experiments] =
-    await Promise.all([
-      resolveScratchDir(root, scratch, `${taskScope}/tmp`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/tests/fixtures`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/tests/results`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/logs`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/captures/screenshots`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/captures/videos`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/captures`, true),
-      resolveScratchDir(root, scratch, "caches/npm", true),
-      resolveScratchDir(root, scratch, "caches/pip", true),
-      resolveScratchDir(root, scratch, "caches/python", true),
-      resolveScratchDir(root, scratch, `${taskScope}/builds`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/environments`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/runtime`, true),
-      resolveScratchDir(root, scratch, `${taskScope}/experiments`, true),
-    ]);
-  return {
-    root,
-    scratch,
-    taskDir,
-    dirs: {
-      tmp,
-      testFixtures,
-      testResults,
-      logs,
-      screenshots,
-      videos,
-      npmCache,
-      pipCache,
-      pythonCache,
-      builds,
-      environments,
-      runtime,
-      experiments,
-    },
-    env: {
-      ARIA_SCRATCH_ROOT: scratch,
-      ARIA_SCRATCH_TASK_DIR: taskDir,
-      ARIA_SCRATCH_TMP: tmp,
-      NPM_CONFIG_CACHE: npmCache,
-      PIP_CACHE_DIR: pipCache,
-      PYTHONPYCACHEPREFIX: pythonCache,
-      ARIA_TEST_RESULTS_DIR: testResults,
-      ARIA_TEST_FIXTURES_DIR: testFixtures,
-      ARIA_LOG_DIR: logs,
-      ARIA_CAPTURE_DIR: capturesDir,
-      ARIA_BUILD_DIR: builds,
-    },
-  };
-}
-
-/**
- * Atomically write a file under `scratch/` (path relative to the scratch
- * root, e.g. `logs/run.log`): sibling-temp + `verifySafeParent` + rename,
- * serialized with `withFileLock` like the plan persistence. Paths escaping
- * `scratch/` (absolute, `..`) fail closed; the sibling temp is contained
- * iff the target is contained. Historical files outside `scratch/` are
- * never touched.
- */
-export async function writeScratchFileAtomically(
-  worktree: string,
-  scratchRelativePath: string,
-  content: string | Uint8Array,
-  options: { signal?: AbortSignal } = {},
-): Promise<string> {
-  if (typeof scratchRelativePath !== "string" || scratchRelativePath.trim().length === 0) {
-    throw new Error("Scratch file path cannot be empty");
-  }
-  if (isAbsolute(scratchRelativePath)) {
-    throw new Error(`Scratch file path escapes the workspace: ${scratchRelativePath}`);
-  }
-  const { root, scratch } = await resolveScratchRoot(worktree);
-  const candidate = resolve(scratch, scratchRelativePath);
-  assertContained(scratch, candidate, "Scratch file path");
-  assertContained(root, candidate, "Scratch file path");
-  const file = await safeProjectFile(root, relative(root, candidate), { createParent: true });
-  assertContained(scratch, file.path, "Scratch file path");
-  await withFileLock(
-    file.path,
-    async () => {
-      await verifySafeParent(root, file.path);
-      const temporaryPath = `${file.path}.${process.pid}.${randomUUID()}.tmp`;
-      try {
-        await writeFile(temporaryPath, content, { flag: "wx" });
-        await verifySafeParent(root, temporaryPath);
-        if (options.signal?.aborted) {
-          throw options.signal.reason instanceof Error ? options.signal.reason : new Error("Operation aborted");
-        }
-        await rename(temporaryPath, file.path);
-      } catch (error) {
-        await unlink(temporaryPath).catch(() => undefined);
-        throw error;
-      }
-    },
-    options.signal,
-  );
-  return file.path;
-}
-
-async function trackedScratchPaths(root: string): Promise<string[]> {
+function scratchBase(projectDir: string): { base?: string; problem?: string } {
   try {
-    const { stdout } = await execFileAsync("git", ["ls-files", "-z", "--", SCRATCH_DIR_NAME], { cwd: root });
-    return stdout
-      .split("\0")
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0);
-  } catch {
-    return [];
-  }
-}
-
-/**
- * Ensure exactly one root `/scratch/` rule exists in `<worktree>/.gitignore`:
- * append it when missing, collapse exact duplicates to the first occurrence,
- * and otherwise preserve every existing rule byte-identical. The write is
- * atomic (sibling-temp + rename). Already-tracked `scratch/` paths are
- * detected via `git ls-files` and reported; their contents and the git index
- * are left untouched (never staged, never removed).
- */
-export async function ensureScratchGitignore(worktree: string): Promise<{
-  gitignorePath: string;
-  added: boolean;
-  deduped: boolean;
-  tracked: string[];
-}> {
-  const { root } = await resolveScratchRoot(worktree);
-  const gitignorePath = resolve(root, ".gitignore");
-  assertContained(root, gitignorePath, "Gitignore path");
-  let existing: string | undefined;
-  try {
-    existing = await readFile(gitignorePath, "utf8");
+    const base = secureDir(realRoot(projectDir), SCRATCH_COMPONENTS, false);
+    return base ? { base } : {};
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return { problem: error instanceof UnsafePath ? error.message : `cannot inspect ${SCRATCH_DIR}: ${(error as Error).message}` };
   }
+}
 
-  const isRule = (line: string): boolean => line.trim() === SCRATCH_GITIGNORE_RULE;
-  let next: string;
-  let added = false;
-  let deduped = false;
-  if (existing === undefined || existing === "") {
-    next = `${SCRATCH_GITIGNORE_RULE}\n`;
-    added = true;
-  } else {
-    const lines = existing.split("\n");
-    const count = lines.filter(isRule).length;
-    if (count === 0) {
-      added = true;
-      next = existing.endsWith("\n") ? `${existing}${SCRATCH_GITIGNORE_RULE}\n` : `${existing}\n${SCRATCH_GITIGNORE_RULE}\n`;
-    } else if (count === 1) {
-      next = existing;
-    } else {
-      deduped = true;
-      let kept = false;
-      next = lines
-        .filter((line) => {
-          if (!isRule(line)) return true;
-          if (!kept) {
-            kept = true;
-            return true;
-          }
-          return false;
-        })
-        .join("\n");
+export function listScratch(projectDir: string): ScratchListing {
+  const { base, problem } = scratchBase(projectDir);
+  if (!base) return { entries: [], problems: problem ? [problem] : [] };
+  const out: ScratchEntry[] = [];
+  const problems: string[] = [];
+  for (const { name, kind } of entries(base)) {
+    if (name === ".gitignore" || name.startsWith(".trash-")) continue;
+    if (!validSessionID(name)) {
+      problems.push(`skipped ${JSON.stringify(name)}: not a session id`);
+      continue;
     }
-  }
-
-  if (next !== existing) {
-    const temporaryPath = `${gitignorePath}.${process.pid}.${randomUUID()}.tmp`;
-    try {
-      await writeFile(temporaryPath, next, { encoding: "utf8", flag: "wx" });
-      await verifySafeParent(root, temporaryPath);
-      await rename(temporaryPath, gitignorePath);
-    } catch (error) {
-      await unlink(temporaryPath).catch(() => undefined);
-      throw error;
+    if (kind !== "directory") {
+      problems.push(`skipped ${name}: ${kind === "symlink" ? "symbolic link (never followed)" : `not a directory (${kind})`}`);
+      continue;
     }
+    const dir = join(base, name);
+    const stat = lstatSync(dir);
+    let latest = stat.mtime;
+    let activeAt = 0;
+    let doneAt = 0;
+    const sessions: string[] = [];
+    let entryProblem: string | undefined;
+    let done = false;
+    for (const child of entries(dir)) {
+      if (child.name === "DONE") {
+        if (child.kind === "file") {
+          done = true;
+          doneAt = lstatSync(join(dir, "DONE")).mtime.getTime();
+        } else entryProblem = `DONE is a ${child.kind}, not a regular file`;
+      } else if (validSessionID(child.name) && child.kind === "directory") {
+        sessions.push(child.name);
+        activeAt = Math.max(activeAt, lstatSync(join(dir, child.name)).mtime.getTime());
+      } else {
+        entryProblem ??= `unexpected entry ${JSON.stringify(child.name)} (${child.kind})`;
+      }
+      if (child.kind === "file" || child.kind === "directory") {
+        const m = lstatSync(join(dir, child.name)).mtime;
+        if (m > latest) latest = m;
+      }
+    }
+    const reopened = done && activeAt > doneAt + DONE_GRACE_MS;
+    out.push({ root: name, sessions, done: done && !reopened, reopened, modified: latest, identity: { dev: stat.dev, ino: stat.ino }, ...(entryProblem ? { problem: entryProblem } : {}) });
   }
+  out.sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  return { entries: out, problems };
+}
 
-  return { gitignorePath, added, deduped, tracked: await trackedScratchPaths(root) };
+export interface CleanOptions {
+  /** Also remove unfinished scratch untouched for this many days. Off unless given. */
+  readonly staleDays?: number;
+  readonly dryRun: boolean;
+  readonly now?: Date;
+}
+
+export interface CleanResult {
+  readonly removed: readonly string[];
+  readonly kept: readonly { root: string; reason: string }[];
+  readonly problems: readonly string[];
+}
+
+export function cleanScratch(projectDir: string, options: CleanOptions): CleanResult {
+  if (options.staleDays !== undefined && !(Number.isSafeInteger(options.staleDays) && options.staleDays >= 1)) {
+    throw new Error("--stale must be a whole number of days >= 1");
+  }
+  const { base } = scratchBase(projectDir);
+  const listing = listScratch(projectDir);
+  const now = (options.now ?? new Date()).getTime();
+  const removed: string[] = [];
+  const kept: { root: string; reason: string }[] = [];
+  const problems = [...listing.problems];
+  for (const entry of listing.entries) {
+    if (entry.problem) {
+      kept.push({ root: entry.root, reason: `malformed: ${entry.problem}` });
+      continue;
+    }
+    const age = (now - entry.modified.getTime()) / 86_400_000;
+    const stale = options.staleDays !== undefined && age >= options.staleDays;
+    if (!entry.done && !stale) {
+      kept.push({ root: entry.root, reason: entry.reopened ? "DONE marker is older than later session activity (kept)" : "not marked DONE (kept for recovery)" });
+      continue;
+    }
+    if (!base || kindOf(base) !== "directory") {
+      problems.push("scratch base changed during cleanup; stopped");
+      break;
+    }
+    if (!options.dryRun) {
+      // Re-read just before deleting: a session that became active since the listing keeps its scratch.
+      const fresh = listScratch(projectDir).entries.find((e) => e.root === entry.root);
+      if (!fresh || fresh.problem || fresh.modified.getTime() !== entry.modified.getTime() || fresh.done !== entry.done) {
+        kept.push({ root: entry.root, reason: "changed while cleaning (kept)" });
+        continue;
+      }
+      try {
+        removeOwnedDirectory(base, entry.root, entry.identity);
+      } catch (error) {
+        kept.push({ root: entry.root, reason: `not removed: ${(error as Error).message}` });
+        continue;
+      }
+    }
+    removed.push(entry.root);
+  }
+  return { removed, kept, problems };
 }

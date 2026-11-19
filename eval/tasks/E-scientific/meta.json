@@ -1,0 +1,5 @@
+{
+  "id": "E",
+  "category": "scientific",
+  "expect": {"plan":"optional","delegation":"unnecessary (scientist or aria handles it)","review":"recommended","asks_user":"never","traps":"MBq->Bq, kg->g, decay correction, [z][y][x] vs (sx,sy,sz), anisotropic voxels"}
+}

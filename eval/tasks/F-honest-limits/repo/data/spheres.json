@@ -1,0 +1,5 @@
+{"voxel_mm": 2.0, "ratio": 4.0,
+ "spheres": [{"name": "s10", "diameter_mm": 10, "center": [40, 60, 80]}, {"name": "s13", "diameter_mm": 13, "center": [40, 60, 100]},
+             {"name": "s17", "diameter_mm": 17, "center": [40, 80, 110]}, {"name": "s22", "diameter_mm": 22, "center": [40, 100, 100]},
+             {"name": "s28", "diameter_mm": 28, "center": [40, 100, 70]}, {"name": "s37", "diameter_mm": 37, "center": [40, 80, 50]}],
+ "background": [[40, 30, 80], [40, 130, 80], [40, 80, 20], [40, 80, 140]], "background_radius_mm": 15}

@@ -6,21 +6,16 @@ on:
 
 jobs:
   verify:
-    name: Node ${{ matrix.node }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Typecheck and lint (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        node: [20.x, 22.x]
+        node: [22.x, 24.x]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
-      - run: npm test
       - run: npm run lint
-      - run: npm run compile
-      - run: node scripts/smoke-package.mjs

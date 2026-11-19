@@ -1,0 +1,5 @@
+{
+  "id": "B",
+  "category": "multi-file",
+  "expect": {"plan":"expected","delegation":"allowed","review":"recommended","asks_user":"never"}
+}

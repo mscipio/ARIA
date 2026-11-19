@@ -2,7 +2,7 @@
 
 Status of Qt Quick/QML as an *optional, disposable* design-prototyping
 aid. Production UI remains Qt Widgets/PySide6. Evidence for the verdict
-below lives in `./scratch/task-p5/qml-smoke/` (`EVIDENCE.md`, QML source,
+below lived in the previous ARIA repository's scratch area (`EVIDENCE.md`, QML source,
 runner, three inspected captures, runner log).
 
 ## Feasibility verdict (verified 2026-10-19, this runtime)
@@ -51,11 +51,10 @@ by a future plan, not by the prototype:
   keep text+shape redundancy, never color-alone state.
 - Validation evidence differs: QML captures are design-orientation
   only; Widgets claims require `QWidget.grab` + `QTest` + human review
-  per `visual-validation.md` (T001 tiers).
+  per `visual-validation.md` (tiers).
 
 ## Rules
 
-- Design-only: no PIANO migration/embedding, no production adoption
+- Design-only: no migration/embedding, no production adoption
   from a prototype, no automatic conversion tooling.
-- Prototypes, captures, logs, and caches live under `./scratch/`
-  (task-scoped), offline only, preserving v1.2.0 behavior.
+- Prototypes, captures, logs, and caches live under your ARIA scratch directory, offline only.

@@ -12,16 +12,16 @@ Use this skill whenever the researcher is asked to tutor, explain, or guide a le
 
 ## Resolve the paper
 
-1. Call `zotpilot_get_paper_for_tutor` with the title or item key the learner gave.
+1. Find the paper with `zotero_search_items` (title, author or key the learner gave), then read it with `zotero_get_item_metadata` and `zotero_get_item_fulltext` (or `zotero_read_pdf_pages` / `zotero_get_pdf_outline` for a section). Existing highlights come from `zotero_get_annotations`.
 2. **Disambiguate before continuing**: if the response reports multiple matches, list the candidates briefly (title, authors, year), ask which one, and stop until the learner picks exactly one. Never tutor a guess.
-3. **Stop clearly on tool errors**: if the tool reports no text layer or a scanned PDF, tell the learner the PDF needs OCR and stop. For any other tool error, surface it and stop — do not retry blindly or invent the paper's content.
+3. **Stop clearly on tool errors**: if no full text is returned (no text layer or a scanned PDF), tell the learner the PDF needs OCR and stop. For any other tool error, surface it and stop — do not retry blindly or invent the paper's content.
 
 ## Calibrate with the learner — infer first, ask low-friction
 
 - **Infer learner signals before asking.** Use what the learner already said ("I want to reproduce the method", "I'm new to this field", "explain in Spanish") as given; do not re-ask it.
 - Calibrate goal/purpose, familiarity, target section/concept, and depth. Ask at most a small set of short, partial-answer-friendly questions: every axis may stay unanswered and falls back to a sensible default. Never block on a full profile; a one-word answer ("reproduce", "section 3") is enough.
 - **Adapt explanation depth, background, and style** from the learner's answers and signals — never from hardcoded reading levels or personas.
-- Use pre-existing learner annotations from the paper response as an optional signal of what the learner has already worked on, only to the extent they actually demonstrate understanding. They confer no write or persona permission.
+- Use pre-existing learner annotations as an optional signal of what the learner has already worked on, only to the extent they actually demonstrate understanding. They confer no write or persona permission.
 
 ## Modes
 
@@ -49,14 +49,11 @@ Keep tutoring compact and adaptive; use these modes as needed, never as a mandat
 
 - **This skill teaches from an identified scholarly source and learner context — it is not evidence acquisition or evaluation.** External evidence, discovery, verification, citation support, disagreement, and gaps return to the normal `aria-research-evidence` workflow.
 - **Task `scientist` only** for nontrivial scientific interpretation — mechanism, hypothesis, experimental-design judgment, or implications materially beyond what the source establishes — and never task `scientist` when it is an active ancestor (nor any other active ancestor).
-- Explain, paraphrase, quiz, and summarize source material. Do not silently become polished prose or manuscript drafting; that is `writer` work. Add no archivist coupling.
+- Explain, paraphrase, quiz, and summarize source material. Do not silently become polished prose or manuscript drafting; that is `writer` work.
 
-## Optional existing operations — never automatic
+## Writing to Zotero — never automatic
 
-`zotpilot_annotate_pdf` and `zotpilot_save_reading_persona` are optional exception paths, never normal tutor completion steps. Each is an existing ZotPilot operation that is approval-gated (`ask`), and the `ask` gate is necessary but insufficient: before either call, obtain the user's explicit approval for that specific proposed operation. Never surface these operations automatically, never bundle annotation and persona under one approval, and never treat a request like "teach me this paper" as approval for any mutation.
-
-- **Annotation** (`zotpilot_annotate_pdf`): consider it only when the learner asks to annotate the PDF. Identify the exact Zotero item/document, state exactly what annotation will be added or changed, obtain explicit approval for that annotation operation, and only then invoke the existing ask-gated tool. Never annotate after an explanation as a default follow-up.
-- **Reading persona** (`zotpilot_save_reading_persona`): consider it only when the learner asks to persist a preference. State exactly what learner preference/context would be persisted, obtain explicit approval for that save or update, and only then invoke the existing ask-gated tool. Never automatically suggest persona saving after routine tutoring, and never infer durable preferences from one-session behavior.
+Annotations (`zotero_create_annotation`) and notes (`zotero_manage_note`) change the user's library. They ask for approval, and the approval prompt is necessary but not sufficient: use them only when the learner asks for that specific annotation or note, state exactly what will be added to which item, and get explicit agreement first. Never annotate or save notes as a default follow-up to an explanation.
 
 ## Rejected legacy scope
 

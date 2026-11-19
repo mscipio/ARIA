@@ -1,655 +1,275 @@
-import { isAbsolute, join, relative } from "node:path";
-
-import { getPackageRoot } from "./defaults.js";
-import {
-  PLAN_PREMISE_RECOVERY_ROLES,
-  PLAN_PREMISE_RECOVERY_TOOL_NAME,
-} from "./plan-premise-recovery-tool.js";
-import type { RoleName } from "./types.js";
-
-export interface AgentRule {
-  action: string;
-  resource: string;
-  effect: "allow" | "deny" | "ask";
-}
-
 /**
- * T004 — Canonical V2 permission/model/delegation parity source.
+ * Permission rules for ARIA roles.
  *
- * V1 (`src/register.ts`) grouped effects by tool (`permission: { bash: ... }`);
- * V2 uses one ordered `permissions: Rule[]` where the last matching rule wins
- * (opencode.ai/v2/docs/agents, opencode.ai/v2/docs/permissions, and
- * `@opencode/schema@2.0.23` `Session.Info` field doc: "Evaluated after the
- * agent's rules; the last matching rule wins."). Construction below is
- * intentional: broad rules precede exceptions, deny follows broader allows
- * where deny must prevail (e.g. `read * allow` then `read *.env ask`), and
- * allow follows deny where allow must prevail (e.g. `read *.env.* ask` then
- * `read *.env.example allow`). Never assume inherent deny precedence.
+ * Semantics verified against OpenCode v2.3.0 source (packages/core/src/permission.ts,
+ * util/wildcard.ts, tool.ts, tool/mcp.ts, tool/plugin/*, schema/src/agent.ts):
  *
- * V1→V2 renames (opencode.ai/v2/docs/migrate-v1: "`bash` is now `shell`,
- * `task` is now `subagent`, and `write` and `patch` are now `edit`"):
- * `bash`→`shell`, `task`→`subagent`. Explicit MCP/tool actions keep their
- * `<server>_<tool>` form with resource `*` (opencode.ai/v2/docs/tools,
- * opencode.ai/v2/docs/mcp-servers). Never emit legacy `bash`/`task`/`plan`/
- * `todowrite` (nor `list`/`lsp`/`doom_loop`, where `lsp`/`doom_loop` are
- * explicitly "not current V2 Core permission actions" per
- * opencode.ai/v2/docs/permissions) without 2.0.23 evidence.
- *
- * Native evaluation merges the permissive 2.0.23 builtin
- * (`Agent.Info.default`: `{action:"*",resource:"*",effect:"allow"}` first,
- * then external/`.env` asks) with the configured agent rules appended after
- * (`core/agent.ts` `Info.default()` + `config/plugin/agent.ts` push at
- * 0fd7e282). Under last-match-wins an unmatched action would therefore fall
- * through to the builtin allow-all (repro: scientist `engram_mem_save` or an
- * unknown action evaluates to `allow` merged but `ask` isolated). Every role
- * below therefore emits an explicit first-position
- * `{action:"*",resource:"*",effect:"ask"}` fallback: it sits after the
- * builtin allow-all so it overrides the native default for unmatched
- * operations, while every later specific rule still overrides it (so no
- * intended allow/deny is shadowed and no later blanket allow is emitted).
- * Every security-relevant field stays explicit per agent so denied
- * specialist MCP boundaries are preserved.
+ * - Rules are ordered; the LAST matching rule wins; no match asks. A new agent starts from
+ *   `* * allow` plus `.env` read asks. User config (`permissions`, `agents.<id>.permissions`) is
+ *   appended AFTER these rules, and `policies` can still deny on top.
+ * - A tool is removed from the model's tool list when the last rule matching its name (any
+ *   resource) is `deny` with resource `*` ("wholly disabled"). Code Mode is the `execute` tool and
+ *   only exposes tools that survive the same filter.
+ * - Per-call checks happen only where a tool calls `permission.assert`. Native file, shell, web,
+ *   skill, subagent, question and todo tools do; every MCP tool does, with action
+ *   `<server>_<tool>`. Some built-in `opencode_*` tools and any third-party plugin tool may not, so
+ *   an `ask` rule alone would not stop them: ARIA's tool gate (tool-gate.ts) asserts on their
+ *   behalf before they run.
+ * - Paths are matched lexically (relative inside the project, absolute outside). Symlinks are
+ *   handled by guard.ts. Shell resources are command text: policy, not a sandbox.
  */
 
-// Verified ZotPilot MCP inventory (same 22 IDs as V1 `src/register.ts`,
-// zotpilot 0.5.3 live tools/list 2026-08-13): 14 research/read (allow) and
-// 8 mutation (ask). No wildcard grant; unlisted tools fall back to ask.
-const ZOTPILOT_READ: readonly string[] = [
-  "zotpilot_search_papers",
-  "zotpilot_search_topic",
-  "zotpilot_search_boolean",
-  "zotpilot_search_formulas",
-  "zotpilot_advanced_search",
-  "zotpilot_search_academic_databases",
-  "zotpilot_browse_library",
-  "zotpilot_get_paper_details",
-  "zotpilot_get_notes",
-  "zotpilot_get_annotations",
-  "zotpilot_get_citations",
-  "zotpilot_get_passage_context",
-  "zotpilot_get_index_stats",
-  "zotpilot_get_paper_for_tutor",
+export type Effect = "allow" | "ask" | "deny";
+
+export interface Rule {
+  readonly action: string;
+  readonly resource: string;
+  readonly effect: Effect;
+}
+
+export const allow = (action: string, resource = "*"): Rule => ({ action, resource, effect: "allow" });
+export const ask = (action: string, resource = "*"): Rule => ({ action, resource, effect: "ask" });
+export const deny = (action: string, resource = "*"): Rule => ({ action, resource, effect: "deny" });
+
+/** OpenCode v2.3.0 wildcard matching (packages/core/src/util/wildcard.ts), used by the guard and diagnostics. */
+export function matches(input: string, pattern: string): boolean {
+  const normalized = input.replaceAll("\\", "/");
+  let escaped = pattern
+    .replaceAll("\\", "/")
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  if (escaped.endsWith(" .*")) escaped = escaped.slice(0, -3) + "( .*)?";
+  return new RegExp("^" + escaped + "$", process.platform === "win32" ? "si" : "s").test(normalized);
+}
+
+/** Credential material nobody reads or edits by default. */
+export const SECRET_PATHS: readonly string[] = [
+  "*/.ssh/*", ".ssh/*", "*/.gnupg/*", ".gnupg/*", "*/.aws/*", ".aws/*", "*/.azure/*", ".azure/*",
+  "*/.config/gcloud/*", "*/.kube/config", "*/.docker/config.json", "*/.npmrc", ".npmrc", "*/.pypirc", ".pypirc",
+  "*id_rsa*", "*id_ed25519*", "*id_ecdsa*", "*id_dsa*", "*.pem", "*.key", "*.p12", "*.pfx", "*.kdbx", "*.keystore", "*.jks",
+  "*/.netrc", ".netrc", "*/.git-credentials", ".git-credentials", "*/.config/gh/hosts.yml",
+  "*/.local/share/opencode/auth.json", "*/.config/opencode/auth.json",
 ];
 
-const ZOTPILOT_MUTATION: readonly string[] = [
-  "zotpilot_index_library",
-  "zotpilot_index_formulas",
-  "zotpilot_ingest_by_identifiers",
-  "zotpilot_create_note",
-  "zotpilot_manage_tags",
-  "zotpilot_manage_collections",
-  "zotpilot_annotate_pdf",
-  "zotpilot_save_reading_persona",
+/** Files that define an agent's own authority or instructions. */
+export const AUTHORITY_PATHS: readonly string[] = [
+  "opencode.json", "opencode.jsonc", "*/opencode.json", "*/opencode.jsonc",
+  ".opencode/*", "*/.opencode/*", ".claude/*", "*/.claude/*", ".agents/*", "*/.agents/*",
+  "*AGENTS.md", "*CLAUDE.md", ".git/config", ".git/hooks/*", ".gitattributes",
+];
+
+/** Reading: allowed, `.env` gated, credentials denied. Read and write are separate decisions. */
+export function readRules(): Rule[] {
+  return [
+    allow("read"),
+    ask("read", "*.env"),
+    ask("read", "*.env.*"),
+    allow("read", "*.env.example"),
+    ...SECRET_PATHS.map((p) => deny("read", p)),
+  ];
+}
+
+export const searchRules = (): Rule[] => [allow("glob"), allow("grep")];
+
+/** Outside-the-project access needs a decision, for every role that can read at all. */
+export const externalRules = (): Rule[] => [ask("external_directory")];
+
+/**
+ * Editing for a write-capable role (`edit` covers the edit, write and patch tools). External
+ * absolute paths are denied (POSIX `/*`, Windows `X:/*`); the user opens specific directories in
+ * their own config. Authority files ask; `.aria/scratch` ownership is enforced by the guard.
+ */
+export function editRules(): Rule[] {
+  return [
+    allow("edit"),
+    deny("edit", "/*"),
+    deny("edit", "?:/*"),
+    ask("edit", "*.env"),
+    ask("edit", "*.env.*"),
+    allow("edit", "*.env.example"),
+    ...AUTHORITY_PATHS.map((p) => ask("edit", p)),
+    ...SECRET_PATHS.map((p) => deny("edit", p)),
+  ];
+}
+
+/** Commands that change history, install software, build distributables or delete recursively. */
+const SHELL_ASK: readonly string[] = [
+  "git push *", "git * push *", "git commit *", "git * commit *", "git reset --hard *", "git clean *",
+  "git rebase *", "git checkout -- *", "git restore *", "git stash drop *", "git stash clear *",
+  "git branch -D *", "git tag *", "git config *", "git remote *", "git filter-branch *", "git filter-repo *",
+  "npm install *", "npm i *", "npm ci *", "npm uninstall *", "npm update *", "npm link *", "npm exec *", "npx *",
+  "pnpm add *", "pnpm install *", "pnpm i *", "pnpm remove *", "pnpm update *", "pnpm dlx *",
+  "yarn add *", "yarn install *", "yarn remove *", "bun add *", "bun install *", "bunx *",
+  "pip install *", "pip3 install *", "pip uninstall *", "python -m pip *", "python3 -m pip *", "py -m pip *",
+  "conda install *", "conda create *", "conda remove *", "conda update *", "conda env *", "mamba *", "micromamba *",
+  "uv add *", "uv sync *", "uv pip *", "uv tool *", "uvx *", "poetry add *", "poetry install *", "pipx *",
+  "cargo install *", "cargo add *", "go install *", "gem install *", "brew *", "apt *", "apt-get *",
+  "dnf *", "yum *", "pacman *", "winget *", "choco *", "scoop *", "curl * | *", "wget * | *",
+  "npm run build *", "npm run compile *", "npm run pack *", "npm pack *", "pnpm build *", "pnpm pack *",
+  "yarn build *", "python -m build *", "python3 -m build *", "pyinstaller *", "docker *", "podman *",
+  "rm -*", "rm * -*", "rmdir *", "find * -delete*", "find * -exec rm*", "Remove-Item *", "rd /s *", "rmdir /s *", "del *",
+  "chmod -R *", "chown *", "mv * /*", "cp * /*", "ln -s *", "dd *", "mkfs*", "truncate *",
+  "crontab *", "systemctl *", "launchctl *", "schtasks *", "ssh *", "scp *", "rsync *",
+  "opencode *",
+];
+
+/** Publishing, deploying, privilege escalation: never. */
+const SHELL_DENY: readonly string[] = [
+  "npm publish *", "pnpm publish *", "yarn publish *", "yarn npm publish *", "cargo publish *", "bun publish *",
+  "twine upload *", "python -m twine upload *", "python3 -m twine upload *", "uv publish *", "poetry publish *",
+  "docker push *", "podman push *", "gh release *", "gh pr merge *", "gh repo delete *",
+  "vercel *", "netlify deploy *", "terraform apply *", "terraform destroy *", "kubectl apply *", "kubectl delete *",
+  "helm install *", "helm upgrade *", "ansible-playbook *",
+  "sudo *", "su *", "doas *", "runas *", "pkexec *",
 ];
 
 /**
- * Explicit first-position fallback overriding the native builtin allow-all.
- * Placed before every specific rule so later allows/denies still prevail
- * under last-match-wins; never emit a later blanket allow.
+ * Shell for a coding role: allowed, with narrow ask/deny rules on the command text. This is a
+ * practical policy for an authorized agent, not containment: `sh -c`, interpreters, compound
+ * commands and scripts can do anything the user can. Only OS isolation is a boundary.
  */
-function fallbackAskRule(): AgentRule {
-  return { action: "*", resource: "*", effect: "ask" };
+export function shellRules(): Rule[] {
+  return [allow("shell"), ...SHELL_ASK.map((c) => ask("shell", c)), ...SHELL_DENY.map((c) => deny("shell", c))];
 }
 
-const PLAN_PREMISE_RECOVERY_ROLE_SET = new Set<string>(PLAN_PREMISE_RECOVERY_ROLES);
+export const skillRules = (...ids: string[]): Rule[] => [deny("skill"), ...ids.map((id) => allow("skill", id))];
 
-function planPremiseRecoveryRule(role: RoleName): AgentRule {
-  return {
-    action: PLAN_PREMISE_RECOVERY_TOOL_NAME,
-    resource: "*",
-    effect: PLAN_PREMISE_RECOVERY_ROLE_SET.has(role) ? "allow" : "deny",
-  };
+export const subagentRules = (...ids: string[]): Rule[] => [deny("subagent"), ...ids.map((id) => allow("subagent", id))];
+
+/**
+ * Built-in OpenCode tools that do not assert per call (v2.3.0 tool/plugin/opencode.ts,
+ * schedule.ts, artifact.ts). ARIA's tool gate asserts these names; this decides the answer.
+ */
+export function opencodeToolRules(): Rule[] {
+  return [
+    allow("opencode_models"),
+    allow("opencode_session_rename"),
+    allow("opencode_worktree_list"),
+    allow("opencode_artifact_read"),
+    allow("opencode_artifact_create"),
+    allow("opencode_artifact_update"),
+    ask("opencode_artifact_delete"),
+    ask("opencode_session_move"),
+    ask("opencode_worktree_create"),
+    ask("opencode_schedule_*"),
+    allow("opencode_schedule_list"),
+    allow("opencode_list_mcp_resources"),
+    allow("opencode_read_mcp_resource"),
+    allow("opencode_watch_mcp_event"),
+  ];
 }
 
 /**
- * V2 path semantics (opencode.ai/v2/docs/permissions Actions + Directories):
- * `read`/`edit` resources are Location-relative internal paths or canonical
- * absolute external paths; a path outside both the active Location and its
- * non-root project worktree needs `external_directory` approval first.
- * External targets therefore scope as canonical absolute paths, internal
- * targets as worktree-relative paths. Backslashes are normalized to slashes
- * (matching is whole-value `*`/`?` wildcards).
+ * The coding policy shared by `aria` and `scientist`. Unknown actions ASK (instead of OpenCode's
+ * allow-all), so a newly connected MCP server or plugin tool cannot act silently; normal
+ * development (read, search, edit inside the project, shell, todo, web reads, Code Mode) runs
+ * without prompts.
  */
-function scopeBase(worktree: string, target: string): string {
-  const normalizedTarget = target.replaceAll("\\", "/");
-  const rel = relative(worktree, target).replaceAll("\\", "/");
-  if (rel === "") return "*";
-  if (rel === ".." || rel.startsWith("../") || isAbsolute(rel)) return normalizedTarget;
-  return rel;
-}
-
-function scopeResources(worktree: string, target: string): string[] {
-  const base = scopeBase(worktree, target);
-  if (base === "*") return ["*"];
-  return [base, `${base}/**`];
-}
-
-/** Protected `.env`: broad allow, then ask, then example-allow exception. */
-function protectedReadRules(): AgentRule[] {
+export function codingRules(): Rule[] {
   return [
-    { action: "read", resource: "*", effect: "allow" },
-    // Intentionally `ask` (not V1 `deny`) to match the 2.0.23 builtin
-    // (`Agent.Info.default`: `read *.env ask`) and the approved T004
-    // wording ("*.env.example allow after *.env.* ask"). Note: weaker
-    // than V1 deny (user approval can grant); documented risk.
-    { action: "read", resource: "*.env", effect: "ask" },
-    { action: "read", resource: "*.env.*", effect: "ask" },
-    { action: "read", resource: "*.env.example", effect: "allow" },
+    ask("*"),
+    allow("todowrite"),
+    allow("question"),
+    allow("execute"),
+    allow("webfetch"),
+    allow("websearch"),
+    allow("experimental_image_generate"),
+    ...searchRules(),
+    ...externalRules(),
+    ...readRules(),
+    ...editRules(),
+    ...shellRules(),
+    ...opencodeToolRules(),
+    allow("aria_git"),
+    allow("aria_status"),
+    deny("aria_review_verdict"),
+    allow("context7_*"),
   ];
 }
 
-/** Implementer edit: broad allow with `.env` ask gates (mirrors V1). */
-function protectedEditRules(): AgentRule[] {
-  return [
-    { action: "edit", resource: "*", effect: "allow" },
-    { action: "edit", resource: "*.env", effect: "ask" },
-    { action: "edit", resource: "*.env.*", effect: "ask" },
-    { action: "edit", resource: "*.env.example", effect: "allow" },
-  ];
+/**
+ * Read-only base: everything denied (and therefore hidden, including Code Mode, shell and any MCP
+ * or plugin tool), then reading and searching inside the project. No scratch, no plan edits.
+ */
+export function readOnlyRules(): Rule[] {
+  return [deny("*"), ...externalRules(), ...readRules(), ...searchRules(), allow("aria_git"), allow("aria_status")];
 }
 
-function denyRule(action: string): AgentRule {
-  return { action, resource: "*", effect: "deny" };
-}
+/** Read-only documentation lookups (Context7 tools only read public docs). */
+export const docsRules = (): Rule[] => [allow("context7_*"), allow("webfetch"), allow("websearch")];
 
-function allowRule(action: string): AgentRule {
-  return { action, resource: "*", effect: "allow" };
-}
-
-/** Skill deny-by-default with explicit allows after (allows prevail). */
-function skillRules(...allowed: string[]): AgentRule[] {
-  return [{ action: "skill", resource: "*", effect: "deny" }, ...allowed.map((name) => ({
-    action: "skill",
-    resource: name,
-    effect: "allow" as const,
-  }))];
-}
-
-/** Subagent deny-by-default with explicit allows after. */
-function subagentRules(...allowed: string[]): AgentRule[] {
-  return [{ action: "subagent", resource: "*", effect: "deny" }, ...allowed.map((agent) => ({
-    action: "subagent",
-    resource: agent,
-    effect: "allow" as const,
-  }))];
-}
-
-const CODING_MCP: AgentRule[] = [
-  { action: "engram_*", resource: "*", effect: "allow" },
-  { action: "context7_*", resource: "*", effect: "allow" },
-  { action: "codegraph_*", resource: "*", effect: "allow" },
+/**
+ * Zotero via zotero-mcp (github.com/54yyyu/zotero-mcp, PyPI `zotero-mcp-server`), tool names
+ * taken from its source at commit 71df195 (2026-11-14). OpenCode names MCP tools
+ * `<server>_<tool>`; the server name defaults to `zotero` and can be changed with the plugin
+ * option `zoteroServer`. Tools not listed here (e.g. added by a newer release) stay denied for the
+ * researcher until classified.
+ */
+export const ZOTERO_READ: readonly string[] = [
+  "search", "fetch",
+  "zotero_search_items", "zotero_advanced_search", "zotero_search_by_tag", "zotero_search_by_citation_key",
+  "zotero_search_collections", "zotero_semantic_search", "zotero_get_search_database_status",
+  "zotero_get_item_metadata", "zotero_get_item_fulltext", "zotero_get_item_children", "zotero_get_item_related",
+  "zotero_get_attachment_path", "zotero_get_annotations", "zotero_get_notes", "zotero_get_tags", "zotero_get_recent",
+  "zotero_get_collections", "zotero_get_collection_items", "zotero_list_libraries", "zotero_list_feeds",
+  "zotero_get_feed_items", "zotero_get_pdf_outline", "zotero_read_pdf_pages", "zotero_get_page_layout",
+  "zotero_synthesize_annotations", "zotero_export_bibliography", "zotero_find_duplicates",
+  "zotero_find_related_papers", "zotero_library_coverage", "zotero_write_capabilities",
+  "scite_check_retractions", "scite_enrich_item", "scite_enrich_search",
 ];
 
-// Implementer shell: broad allow first, then deny-list after so denies
-// prevail (last-match-wins). Mirrors V1 `bash` object verbatim.
-const IMPLEMENTER_SHELL_DENIES: readonly string[] = [
-  "rm",
-  "rm *",
-  "rmdir",
-  "rmdir *",
-  "del",
-  "del *",
-  "Remove-Item*",
-  "npm publish*",
-  "pnpm publish*",
-  "yarn publish*",
-  "bun publish*",
+/** Tools that change the library, its index, the active library, or write authority: always a human decision. */
+export const ZOTERO_MUTATE: readonly string[] = [
+  "zotero_add_item", "zotero_update_item", "zotero_batch_update", "zotero_delete_item", "zotero_attach_file",
+  "zotero_set_item_parent", "zotero_set_item_collections", "zotero_add_item_relation", "zotero_remove_item_relation",
+  "zotero_copy_items_between_libraries", "zotero_merge_duplicates",
+  "zotero_create_collection", "zotero_update_collection", "zotero_delete_collection", "zotero_manage_collection",
+  "zotero_manage_note", "zotero_create_annotation", "zotero_update_annotation", "zotero_delete_annotation",
+  "zotero_update_search_database", "zotero_switch_library", "zotero_authorize_local_writes",
 ];
 
-function implementerShellRules(): AgentRule[] {
-  return [
-    { action: "shell", resource: "*", effect: "allow" },
-    ...IMPLEMENTER_SHELL_DENIES.map((resource) => ({
-      action: "shell",
-      resource,
-      effect: "deny" as const,
-    })),
-  ];
-}
+/**
+ * Engram (github.com/Gentleman-Programming/engram) MCP tools, from its `agent` profile at v3.7.1
+ * (`engram mcp --tools=agent`, 23 tools). READ is exactly the tools Engram itself annotates
+ * `readOnlyHint: true`. SAVE is the durable-memory writes ARIA lets authorized roles make. Every
+ * other tool (judge, compare, pin, review, consolidate, session start/end/finalize, capture) can
+ * change or reorganise memory: coding roles are asked, other roles cannot see them. OpenCode names
+ * MCP tools `<server>_<tool>`; the server is registered as `engram`.
+ */
+export const ENGRAM_SERVER = "engram";
+export const ENGRAM_READ: readonly string[] = [
+  "mem_context", "mem_current_project", "mem_doctor", "mem_get_observation", "mem_list_projects", "mem_search", "mem_search_prompts", "mem_suggest_topic_key",
+];
+export const ENGRAM_SAVE: readonly string[] = ["mem_save", "mem_update", "mem_session_summary"];
+/** The remaining agent-profile tools: they change or reorganise memory or sessions. */
+export const ENGRAM_OTHER_MUTATING: readonly string[] = [
+  "mem_capture_passive", "mem_compare", "mem_consolidate", "mem_judge", "mem_judge_many", "mem_pin", "mem_review", "mem_save_prompt",
+  "mem_session_end", "mem_session_finalize", "mem_session_start", "mem_unpin",
+];
 
 /**
- * T003 — Visualizer/Implementer effective edit/shell parity.
- *
- * The Visualizer reuses the canonical Implementer definitions directly
- * (`protectedEditRules()` + `implementerShellRules()`, same helpers, same
- * order) so equivalent edit/shell actions/resources receive the SAME
- * effective decision under `evaluatePermission` last-match-wins. There is
- * intentionally no `visualizerShellRules()` and no visualizer-only shell
- * ask/deny list: the former blanket `shell: ask` fallback and the former
- * `VISUALIZER_SHELL_DENIES` entries (network egress, package-manager
- * install/add, git publish/mutating) diverged from the Implementer and are
- * superseded by exact parity — deleted, not aligned elsewhere.
- *
- * Increased-authority note: ordinary dev shell commands (python scripts,
- * pytest, capture scripts, Qt launching, ls/pwd/mkdir, git status, and —
- * matching the Implementer — curl/wget egress, npm/pip installs, git
- * push/reset) now evaluate `allow` for the Visualizer instead of `ask`/`deny`.
- * Workspace/scratch instructions and RDC approvals remain required but are
- * NOT OS-level sandbox enforcement: the Unix account can still write outside
- * those locations, and confinement is enforced only where ARIA controls
- * paths/environment (explicit-path routing + fail-closed guards). No
- * process-wide HOME/XDG/TMPDIR redirection; explicit exceptions from T002
- * (non-cooperative external tools) still apply.
- *
- * Implementer restrictions are preserved exactly (destructive-command denies,
- * protected read/edit `.env` gates); the Implementer posture is untouched.
+ * Engram rules by capability. `recall`: read tools only, every other Engram tool hidden (a role
+ * that otherwise asks about unknown tools must not be able to mutate memory). `save`: recall plus
+ * the three durable-write tools; the rest keep the role's default (ask for coding roles).
+ * A deny-by-default role (`readOnlyRules`) needs only the allows.
  */
-
-/**
- * Unscoped (deny-by-default) archivist Rule[] for managed files.
- *
- * Global agent files cannot embed worktree-relative read/edit scopes (the
- * worktree varies per project); files stay deny-by-default (safe) and the
- * scoped expansion below applies at runtime when `WIKI_DIR` + worktree are
- * known. Python allowlist needs no worktree (absolute `pipelineRun`) but is
- * also runtime-only so files never promise access the file cannot scope.
- */
-function archivistBaseRules(): AgentRule[] {
-  return [
-    fallbackAskRule(),
-    denyRule("read"),
-    denyRule("edit"),
-    denyRule("glob"),
-    denyRule("grep"),
-    denyRule("shell"),
-    denyRule("webfetch"),
-    denyRule("websearch"),
-    denyRule("question"),
-    denyRule("external_directory"),
-    ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
-    ...subagentRules(),
-    planPremiseRecoveryRule("archivist"),
-  ];
+export function engramRules(capability: "recall" | "save" | "save-only-hidden-rest"): Rule[] {
+  const ns = ENGRAM_SERVER;
+  const reads = ENGRAM_READ.map((t) => allow(`${ns}_${t}`));
+  const saves = ENGRAM_SAVE.map((t) => allow(`${ns}_${t}`));
+  if (capability === "recall") return [deny(`${ns}_*`), ...reads];
+  if (capability === "save-only-hidden-rest") return [deny(`${ns}_*`), ...reads, ...saves];
+  return [...reads, ...saves];
 }
 
-/**
- * Scoped archivist Rule[] for runtime use when `WIKI_DIR` is set.
- *
- * V2 path semantics (opencode.ai/v2/docs/permissions Actions + Directories):
- * `read`/`edit` take Location-relative internal paths or canonical absolute
- * external paths; `external_directory` stays absolute. External wiki/pipeline
- * roots therefore scope as absolute paths (repro `/tmp/aria-wiki/page.md`
- * denied under the old worktree-relative scope), internal roots as
- * worktree-relative paths. `shell` uses the absolute python pipeline
- * allowlist (never `python *`). Returns the deny-by-default base when
- * `WIKI_DIR` is absent.
- */
-export function getArchivistScopedPermissions(worktree: string): AgentRule[] {
-  const wikiDir = process.env.WIKI_DIR;
-  if (!wikiDir) return archivistBaseRules();
-  const packageRoot = getPackageRoot();
-  const pipelineRoot = join(packageRoot, "wiki-pipeline");
-  const pipelineRun = join(pipelineRoot, "run.py");
-  const wikiScopes = scopeResources(worktree, wikiDir);
-  const pipelineScopes = scopeResources(worktree, pipelineRoot);
-  return [
-    fallbackAskRule(),
-    // Read scope: deny first, then scoped allows after.
-    { action: "read", resource: "*", effect: "deny" },
-    ...wikiScopes.map((resource) => ({
-      action: "read",
-      resource,
-      effect: "allow" as const,
-    })),
-    ...pipelineScopes.map((resource) => ({
-      action: "read",
-      resource,
-      effect: "allow" as const,
-    })),
-    // Edit scope: deny first, then wiki allows after (pipeline read-only).
-    { action: "edit", resource: "*", effect: "deny" },
-    ...wikiScopes.map((resource) => ({
-      action: "edit",
-      resource,
-      effect: "allow" as const,
-    })),
-    denyRule("glob"),
-    denyRule("grep"),
-    // Shell: deny first, then exact python allowlist after (never wildcards).
-    { action: "shell", resource: "*", effect: "deny" },
-    { action: "shell", resource: `python ${pipelineRun} archive-opencode`, effect: "allow" },
-    { action: "shell", resource: `python ${pipelineRun} archive-engram`, effect: "allow" },
-    { action: "shell", resource: `python ${pipelineRun} archive-all`, effect: "allow" },
-    { action: "shell", resource: `python ${pipelineRun} lint`, effect: "allow" },
-    { action: "shell", resource: `python ${pipelineRun} primer`, effect: "allow" },
-    denyRule("webfetch"),
-    denyRule("websearch"),
-    denyRule("question"),
-    // External directories stay absolute.
-    { action: "external_directory", resource: "*", effect: "deny" },
-    { action: "external_directory", resource: `${wikiDir}/**`, effect: "allow" },
-    { action: "external_directory", resource: `${pipelineRoot}/**`, effect: "allow" },
-    ...skillRules("aria-wiki-lookup", "aria-wiki-archive", "aria-wiki-compile"),
-    ...subagentRules(),
-    planPremiseRecoveryRule("archivist"),
-  ];
-}
+/** Context7 documentation tools (public documentation only; read-only). */
+export const context7Rules = (): Rule[] => [allow("context7_*")];
 
-/**
- * Canonical V2 Rule[] per role, ordered last-match-wins.
- *
- * Every role starts with an explicit `{action:"*",resource:"*",effect:"ask"}`
- * fallback (first position) overriding the native builtin allow-all; later
- * specific rules still prevail. Archivist here is the unscoped
- * deny-by-default base for managed files; use
- * `getArchivistScopedPermissions(worktree)` at runtime when `WIKI_DIR` is
- * set. No legacy `bash`/`task`/`plan`/`todowrite`/`list`/`lsp`/`doom_loop`
- * actions are emitted.
- */
-export function getPermissionsForRole(role: RoleName): AgentRule[] {
-  switch (role) {
-    case "coder":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        allowRule("webfetch"),
-        allowRule("websearch"),
-        // Coder coordinates via questions; other roles deny (V1: coder had
-        // no `question` entry so default-allowed, others explicit-deny).
-        { action: "question", resource: "*", effect: "allow" },
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        allowRule("scratch_task"),
-        // Shell: V1 `bash: deny` → V2 `shell * deny`.
-        denyRule("shell"),
-        // Delegation: deny first, then the 9 V1 `TASK_PERMISSIONS` allows
-        // after (writer intentionally excluded, as in V1).
-        ...subagentRules(
-          "explorer",
-          "visualizer",
-          "planner",
-          "architect",
-          "implementer",
-          "reviewer",
-          "researcher",
-          "archivist",
-          "scientist",
-        ),
-        // Skills: broad allow first, then adversarial-review deny after so
-        // the deny prevails (preserves V1 default-allow + explicit deny).
-        { action: "skill", resource: "*", effect: "allow" },
-        { action: "skill", resource: "rdc-adversarial-review", effect: "deny" },
-        planPremiseRecoveryRule("coder"),
-      ];
-    case "explorer":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        denyRule("webfetch"),
-        denyRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        denyRule("shell"),
-        ...subagentRules(),
-        ...skillRules("rdc-code-exploration"),
-        planPremiseRecoveryRule("explorer"),
-      ];
-    case "visualizer":
-      // T003 exact edit/shell parity with the implementer: same
-      // `protectedEditRules()` and same `implementerShellRules()` helpers,
-      // same order, so `evaluatePermission` last-match-wins yields IDENTICAL
-      // effective decisions for equivalent edit/shell actions/resources.
-      // Shell therefore allows ordinary dev commands (python/pytest/capture
-      // scripts, Qt launching, ls/pwd/mkdir, git status) and denies only the
-      // shared destructive/publish list — matching the implementer exactly.
-      // Increased authority is intentional: workspace/scratch instructions
-      // and RDC approvals remain required but are NOT OS-level sandbox
-      // enforcement (the Unix account can write outside those locations;
-      // enforcement holds only where ARIA controls paths/env). Unrelated
-      // research MCP tools stay denied via
-      // the explicit `zotpilot_*` deny after the fallback (last-match-wins
-      // grants below never match it). Skill is grant-only `aria-qt-ui` per
-      // T003 (replaces `rdc-visual-analysis`). MCP stays the coding triple;
-      // everything else (webfetch/websearch/question/external/subagent)
-      // stays denied.
-      //
-      // Plan-tool access is denied at execution by `authorizePlan`
-      // (`PLAN_ACTIONS_BY_ROLE` in `src/plan-tool.ts` excludes visualizer),
-      // not by a Rule[]: `plan` stays a legacy-banned V2 action (header
-      // convention, `LEGACY_ACTIONS`, doctor `LEGACY_AGENT_ACTIONS`) and
-      // `mcp_plan` matches no registered tool (`PLAN_TOOL_NAME` is "plan";
-      // verified zero references), so no Rule[] is emitted for either (no
-      // action keys outside the supported set). Unmatched `plan` therefore
-      // falls back to `ask`, with `authorizePlan` as the denial backstop.
-      //
-      // Coder-mediated approval is a prompt-level RDC workflow convention,
-      // NOT host-enforced plan-state containment: a directly invoked
-      // edit-capable visualizer subagent may not be plan-state constrained.
-      // These Rule[] do not imply stronger enforcement than OpenCode
-      // provides.
-      return [
-        fallbackAskRule(),
-        denyRule("zotpilot_*"),
-        ...protectedReadRules(),
-        ...protectedEditRules(),
-        allowRule("glob"),
-        allowRule("grep"),
-        denyRule("webfetch"),
-        denyRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        allowRule("scratch_task"),
-        ...implementerShellRules(),
-        ...subagentRules(),
-        ...skillRules("aria-qt-ui"),
-        planPremiseRecoveryRule("visualizer"),
-      ];
-    case "planner":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        allowRule("webfetch"),
-        allowRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        denyRule("shell"),
-        ...subagentRules(),
-        ...skillRules("rdc-implementation-planning", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("planner"),
-      ];
-    case "architect":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        allowRule("webfetch"),
-        allowRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        denyRule("shell"),
-        ...subagentRules(),
-        ...skillRules("rdc-plan-review", "rdc-scope-assessment", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("architect"),
-      ];
-    case "implementer":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        ...protectedEditRules(),
-        allowRule("glob"),
-        allowRule("grep"),
-        denyRule("webfetch"),
-        denyRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        allowRule("scratch_task"),
-        ...implementerShellRules(),
-        ...subagentRules(),
-        ...skillRules("rdc-code-implementation", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("implementer"),
-      ];
-    case "reviewer":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        allowRule("webfetch"),
-        allowRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        ...CODING_MCP,
-        allowRule("scratch_task"),
-        // Reviewer shell is unrestricted for inspection (V1 `bash: allow`).
-        allowRule("shell"),
-        ...subagentRules(),
-        ...skillRules("rdc-implementation-review", "rdc-adversarial-review", "rdc-testing-discipline"),
-        planPremiseRecoveryRule("reviewer"),
-      ];
-    case "researcher":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        allowRule("webfetch"),
-        allowRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        // Researcher MCP: Context7 only (no Engram/CodeGraph), plus the
-        // 22 verified ZotPilot tools (14 allow, 8 ask). No wildcards.
-        { action: "context7_*", resource: "*", effect: "allow" },
-        ...ZOTPILOT_READ.map((tool) => ({
-          action: tool,
-          resource: "*",
-          effect: "allow" as const,
-        })),
-        ...ZOTPILOT_MUTATION.map((tool) => ({
-          action: tool,
-          resource: "*",
-          effect: "ask" as const,
-        })),
-        // Shell deny-by-default with only the zotpilot executable family
-        // approval-gated (never allowed, never the primary MCP interface).
-        { action: "shell", resource: "*", effect: "deny" },
-        { action: "shell", resource: "zotpilot", effect: "ask" },
-        { action: "shell", resource: "zotpilot *", effect: "ask" },
-        // Delegation: scientist only (deny first, allow after).
-        ...subagentRules("scientist"),
-        ...skillRules("aria-research-evidence", "aria-zotero-tutor"),
-        planPremiseRecoveryRule("researcher"),
-      ];
-    case "archivist":
-      return archivistBaseRules();
-    case "writer":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        denyRule("glob"),
-        denyRule("grep"),
-        denyRule("webfetch"),
-        denyRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        // No MCP authority (writing-only).
-        denyRule("shell"),
-        ...subagentRules("archivist", "researcher", "scientist"),
-        ...skillRules(
-          "aria-academic-writing",
-          "aria-writing-anti-ai",
-          "aria-review-response",
-          "aria-paper-self-review",
-          "aria-document-design",
-        ),
-        planPremiseRecoveryRule("writer"),
-      ];
-    case "scientist":
-      return [
-        fallbackAskRule(),
-        ...protectedReadRules(),
-        denyRule("edit"),
-        allowRule("glob"),
-        allowRule("grep"),
-        denyRule("webfetch"),
-        denyRule("websearch"),
-        denyRule("question"),
-        denyRule("external_directory"),
-        // No MCP authority of any kind.
-        denyRule("shell"),
-        ...subagentRules("researcher", "writer", "coder"),
-        ...skillRules("aria-research-planning", "aria-results-analysis"),
-        planPremiseRecoveryRule("scientist"),
-      ];
-  }
-}
+/** OpenCode's MCP namespace for a server name (tool/runtime.ts `normalizedName` + `.` → `_`). */
+export const mcpNamespace = (server: string) => server.replace(/[^a-zA-Z0-9_-]/g, "_").replaceAll(".", "_");
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function patternToRegExp(pattern: string): RegExp {
-  return new RegExp(`^${pattern.split("*").map(escapeRegExp).join(".*")}$`);
-}
-
-function actionMatches(ruleAction: string, requestedAction: string): boolean {
-  if (ruleAction === "*") return true;
-  if (ruleAction.includes("*")) return patternToRegExp(ruleAction).test(requestedAction);
-  return ruleAction === requestedAction;
-}
-
-function resourceMatches(ruleResource: string, requestedResource: string): boolean {
-  if (ruleResource === "*") return true;
-  if (ruleResource.includes("*")) return patternToRegExp(ruleResource).test(requestedResource);
-  return ruleResource === requestedResource;
-}
-
-/**
- * 2.0.23-style evaluator for tests: last matching rule wins
- * (`Array.findLast`-equivalent reverse scan); no match falls back to `ask`
- * ("If no rule matches, OpenCode uses `ask`"). Supports `*` wildcards in
- * both fields (including `prefix_*` MCP actions and glob-like resources).
- */
-export function evaluatePermission(
-  rules: readonly AgentRule[],
-  action: string,
-  resource: string,
-): "allow" | "deny" | "ask" {
-  for (let index = rules.length - 1; index >= 0; index -= 1) {
-    const rule = rules[index];
-    if (!rule) continue;
-    if (actionMatches(rule.action, action) && resourceMatches(rule.resource, resource)) {
-      return rule.effect;
-    }
-  }
-  return "ask";
-}
-
-interface ExperimentalDepthConfig {
-  experimental?: { subagent_depth?: number | null | undefined } | undefined;
-}
-
-/**
- * Desired default `experimental.subagent_depth: 3` only when absent.
- *
- * Preserves every explicit value including 0/1/2/>=3 (and only fills
- * `undefined`/`null`); never emits top-level `subagent_depth` (V1 key).
- * Runtime wiring of this default is T008 work; this helper is the
- * canonical T004 source with ordering-free semantics.
- */
-export function applyExperimentalSubagentDepthDefault<T extends ExperimentalDepthConfig>(config: T): T {
-  const depth = config.experimental?.subagent_depth;
-  if (depth === undefined || depth === null) {
-    config.experimental ??= {};
-    (config.experimental as { subagent_depth?: number }).subagent_depth = 3;
-  }
-  return config;
+export function zoteroRules(server: string): Rule[] {
+  const ns = mcpNamespace(server);
+  return [...ZOTERO_READ.map((t) => allow(`${ns}_${t}`)), ...ZOTERO_MUTATE.map((t) => ask(`${ns}_${t}`))];
 }

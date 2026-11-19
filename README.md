@@ -1,485 +1,301 @@
-# ARIA v1.3.2 — Native OpenCode 2
+# ARIA 2
 
-**ARIA** — **A**rchival, **R**esearch, **I**mplementation, and **A**uthoring — is a multi-role OpenCode workstation. Its `coder` implements Review-Driven Coding (RDC), while `scientist`, `writer`, `archivist`, and `researcher` own scientific specification and interpretation, writing, knowledge, and evidence-research workflows.
+ARIA is an OpenCode plugin for OpenCode v2.3.0 or later. It adds:
 
-## Features
+- a default coding agent (`aria`)
+- seven scoped specialist roles
+- permission rules, plus two hooks that close gaps native OpenCode leaves open
+- safe per-session scratch space
+- plans owned by sessions
+- a read-only git tool, a status report, and a TUI plan view
 
-- **Conversational coder** — answers questions directly; creates plans only for non-trivial implementation requests
-- **Specialized roles** — coding specialists plus opt-in Wiki, scientific/professional writing, and scientific-authority specialists, each with focused authority
-- **Architect plan review** — QA before implementation: `READY` or `REVISED` with the smallest corrections needed
-- **Explicit human approval** — the coder summarizes the plan and **stops and waits** for the user to approve before any code is written
-- **Independent reviewer verification** — compares implementation against each approved requirement as `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE`
-- **Optional adversarial review** — after normal review passes, the reviewer may run a second adversarial pass that attacks plausible counterexamples, hidden assumptions, and hostile edge/error/security/ordering paths; risk-based invocation, not universal
-- **Autonomous remediation within approved scope** — blocking findings trigger `remediate` (preserves approval) for an implementation-fix-review loop
-- **Renewed approval for material scope changes** — if review reveals work outside the approved scope, the coder tasks the architect for a scope assessment, adds scope via `add` (invalidates approval), and stops for renewed approval
-- **First-class MCP evidence** — coder and coding specialists can use CodeGraph, Context7, and Engram when they materially improve the work; Wiki, writer, and scientist remain intentionally isolated
-- **Evidence-bounded researcher** — `mode: all` literature specialist with direct ZotPilot library research tools, approval-gated Zotero mutation, explicit evidence-level/uncertainty reporting, claim-level citation verification of source identity and claim-source support, and chat-first tutoring/guided reading of an identified library paper
-- **Bounded scientist authority** — `mode: all` scientific authority for question specification, methodology, and result interpretation, with deny-by-default code/shell/MCP/evidence/persistence authority; delegates evidence to `researcher`, prose to `writer`, and computation to `coder`
+Everything else is native OpenCode.
 
-## Workflow
+**Status: 2.0.0.** Everything has been typechecked against `@opencode/plugin` 2.3.0, and the logic has been checked against disposable fixtures using OpenCode's own rule semantics. The plugin loaded and resolved its roles under OpenCode 2.3.2; the alpha.9 sidebar change has not been visually exercised in a running TUI. See `.aria/plans/aria2-implementation-map.md` for exactly what has been verified.
 
-1. At the start of every turn, the coder calls `plan` action `get` to read `.aria/rdc/TASKS.md`. If an active plan exists, work continues it instead of planning again.
-2. For non-trivial new work, the coder tasks explorer and visualizer (when applicable) to gather the minimum necessary evidence.
-3. The planner calls `plan` `get` then `create` to persist a title and an actionable, ordered task list; each task integrates its acceptance criteria and the relevant tests. The planner does not implement.
-4. The architect always runs as QA of the plan: it calls `plan` `get`, and replies `READY` if the plan is correct, or `plan` `replace` (with `expectedPlanID`/`revision`) to correct it and replies `REVISED` with the changes. Any `replace` invalidates previous approval.
-5. The coder re-reads the plan, summarizes the title, tasks, and any architect changes to the user, and **stops and waits for explicit user approval**.
-6. Only after the user approves, the coder calls `plan` action `approve` to persist the approval. Tasks cannot enter implementation until the current plan revision is approved.
-7. The implementer completes tasks and runs the relevant checks; the coder records evidence by updating tasks.
-8. The reviewer independently reads the plan via `plan` `get`, compares implementation against approved requirements, and reports `PASS`/`FAIL`/`INSUFFICIENT EVIDENCE` per requirement with `BLOCKING`/`NON-BLOCKING` findings.
-9. If reviewer reports blocking findings for tasks within approved scope, the coder uses `plan` action `remediate` (preserves approval) to add remediation tasks, completes them through the implementer, and re-reviews. After any substantive adversarial-origin fix, normal review runs again before adversarial re-review.
-10. Optionally, after normal review passes, the coder may invoke adversarial review based on risk signals (permissions, mutation, security, migration, concurrency, public API, architecture). Adversarial review attacks the apparently correct implementation and follows the same remediation/re-review cycle. Both normal and adversarial review must pass after the last substantive change.
-11. If review reveals a material scope change, the coder tasks the architect for a post-review scope assessment. If the architect determines the work is outside the approved scope (`SCOPE_CHANGE`), the coder adds scope via `plan` action `add` (invalidates approval), presents the amended plan, and stops for renewed approval.
-12. A clean, completed plan is archived under `.aria/rdc/plans/` via `plan` action `close`.
+## Install and manage
 
-The shared plan (`.aria/rdc/TASKS.md`) is scoped to the OpenCode workspace directory, not to one OpenCode conversation. A new session can continue the same active plan without rebuilding context from scratch. Revision checks prevent two sessions from silently overwriting each other.
+ARIA ships a manager: `aria` opens a keyboard-driven terminal UI. The same operations are available as commands for scripts. Both run without OpenCode installed, so they can diagnose a broken setup.
 
-## Team
+**First install from a release** (needs Node ≥ 22.18 and npm; nothing else from ARIA has to exist yet):
 
-| Agent | Responsibility | Default model | Strength |
-|---|---|---|---|
-| coder (`all`) | Coordinates work and maintains the shared plan | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
-| explorer | Maps code, tests, and dependencies | `opencode-go/muse-spark-1.3-contributor` | `high` |
-| visualizer | Interprets screenshots and diagrams | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
-| planner | Persists executable plans with integrated acceptance/tests | `openai/gpt-6-luna` | `xhigh` |
-| architect | QA of the plan: READY or REVISED before implementation; post-review scope assessment | `openai/gpt-6.1-sol` | `high` |
-| implementer | Edits code and runs relevant checks | `opencode-go/muse-spark-1.3-contributor` | `xhigh` |
-| reviewer | Finds regressions, risks, and missing verification | `openai/gpt-6.1-sol` | `medium` |
-| researcher (`all`) | Direct or delegated external literature and evidence research | `openai/gpt-6.1-sol` | `medium` |
-| archivist (`all`) | Direct or delegated Wiki lookup, archival, and curated compilation | `opencode-go/muse-spark-1.3-contributor` | `high` |
-| writer (`all`) | Owns scientific/academic and professional writing objectives; can request read-only Wiki evidence | `openai/gpt-6-luna` | `xhigh` |
-| scientist (`all`) | Scientific authority: question specification, methodology design, and result interpretation | `openai/gpt-6.1-sol` | `medium` |
-
-Only implementer and visualizer can use OpenCode's edit tool for application code, with identical effective edit/shell decisions (T003 parity): both allow ordinary development shell commands and gate protected `.env` files, except destructive removal and package publishing commands, which remain blocked. Workspace/scratch instructions confine transient/generated artifacts, not intentional authorized repo edits; scratch artifacts are never staged, and staging authorized source changes requires human-authorized Git operations (editing alone is not authorization). RDC approvals remain required but are not OS-level sandbox enforcement: the Unix account can still write outside those locations, and confinement is enforced only where ARIA controls paths/environment. Reviewer has unrestricted shell access for inspection and verification; coder cannot edit or run shell commands.
-
-The six RDC coding specialists — explorer, visualizer, planner, architect, implementer, reviewer — run through OpenCode's native `task` tool. The five durable roles — `coder`, `researcher`, `archivist`, `writer`, and `scientist` — run with OpenCode `mode: all` and are available both directly and through `task`. The coder may task `researcher` for external evidence questions; the writer tasks it for focused literature, Zotero, citation-verification, or claim-support evidence (evidence only, never manuscript prose). Mode availability is not authority: every role's tools are deny-by-default except what is explicitly granted, and `scientist` in particular has no unrestricted code, shell, MCP, evidence, or persistence authority.
-
-## Agent and Skill Architecture
-
-ARIA separates **role authority** from **task methodology**:
-
-- **Agent prompts** define identity, authority, delegation, hard boundaries, and required output contracts.
-- **Package-owned skills** (`rdc-*` for coding methodology, `aria-*` for broader ARIA capabilities) contain task-specific procedures and reusable expertise, loaded on demand through OpenCode's native `skill` tool.
-- **Tool permissions** enforce what each role can actually read, edit, execute, delegate, or load.
-- **Persisted state** (the Plan and curated Wiki) remains authoritative independently of prompts or skills.
-
-Examples:
-
-- explorer → `rdc-code-exploration`
-- planner → `rdc-implementation-planning` + `rdc-testing-discipline`
-- architect → `rdc-plan-review` or `rdc-scope-assessment`
-- implementer → `rdc-code-implementation` + proportional testing guidance
-- reviewer → `rdc-implementation-review` + `rdc-adversarial-review` (optional, after normal PASS) + proportional testing guidance
-- archivist → `aria-wiki-lookup`, `aria-wiki-archive`, or `aria-wiki-compile`
-- writer → `aria-document-design`, `aria-academic-writing`, `aria-writing-anti-ai`, `aria-review-response`, and `aria-paper-self-review` as needed
-- researcher → `aria-research-evidence` (discovery/verification) or `aria-zotero-tutor` (tutoring an identified paper)
-- scientist → `aria-research-planning` or `aria-results-analysis`
-
-ARIA reserves `aria-*` for package-wide capabilities and retains `rdc-*` specifically for Review-Driven Coding skills. The plugin registers packaged skills through OpenCode's V2 `skills: string[]` configuration, appending to and preserving existing entries. Skills stay version-locked to the loaded ARIA package without copying files into another skill registry.
-
-## Shared Plan
-
-`.aria/rdc/TASKS.md` is the project-wide source of truth for the coder workflow, following the OpenCode workspace/session directory rather than the Git worktree or a single OpenCode conversation. On first Plan access, a legacy `.code-ensemble/` state directory is migrated once to `.aria/rdc/` when the canonical destination does not already exist.
-
-Schema v3 fields:
-
-- `version`: schema version (`3`)
-- `id`: stable Plan ID (UUID) identifying this plan across sessions
-- `revision`: integer incremented on every mutation; callers pass the current Plan ID and revision to detect conflicts
-- `status`: `active` or `closed`
-- `approval`: `pending` or `approved` — a plan must be `approved` before tasks can enter implementation
-- `title`, `createdAt`, `updatedAt`: plan metadata
-- `tasks[]`: ordered tasks with stable `id` (e.g. `T001`), `text` (action plus integrated acceptance/tests), `status` (`pending`/`in_progress`/`completed`/`blocked`), and optional `evidence`
-
-Approval lifecycle:
-- `create` produces a plan with `approval: pending`
-- `approve` (coder only) sets `approval: approved` and increments revision
-- `replace` (architect only) resets `approval: pending` (invalidates any previous approval)
-- `add` (coder only) resets `approval: pending` (scope changes require re-approval)
-- `remediate` (coder only) preserves `approval: approved` (autonomous remediation loop)
-- `update`, `close` require `approval: approved`
-
-```md
-<!-- aria-rdc-plan
-{"version":3,"id":"7e3f1a92-...","revision":4,"status":"active","approval":"approved","title":"Dashboard","createdAt":"2026-07-20T12:00:00.000Z","updatedAt":"2026-07-20T12:05:00.000Z","tasks":[{"id":"T001","text":"Define the data model; schema tests pass","status":"completed","evidence":"schema tests pass"},{"id":"T002","text":"Implement the dashboard; renders without errors","status":"in_progress"},{"id":"T003","text":"Review responsive behavior; no layout regressions at common breakpoints","status":"pending"}]}
--->
-
-# Plan: Dashboard
-
-Status: **active**
-Approval: **approved**
-Revision: **4**
-
-## Tasks
-
-- [x] **T001** Define the data model; schema tests pass
-  - Evidence: schema tests pass
-- [~] **T002** Implement the dashboard; renders without errors
-- [ ] **T003** Review responsive behavior; no layout regressions at common breakpoints
+```
+tmp=$(mktemp -d) && tar -xzf aria-2.0.0.tgz -C "$tmp"   # disposable; remove it afterwards
+node "$tmp"/package/bin/bootstrap.mjs --from aria-2.0.0.tgz --scope global --with zotero-mcp --link-bin --yes
 ```
 
-## Plan Tool ACL
+The bootstrap uses only Node built-ins. It:
+1. checks the tarball's sha256 (`--sha256`, or the `.sha256` file next to it), validates every member, and rejects any entry outside the release inventory;
+2. installs the manager's packages with `npm ci --omit=dev --ignore-scripts` from the release's lockfile, checks every installed package against that lockfile, smoke-tests the release, and asks the release itself whether the environment fits (OpenCode and Node versions);
+3. moves it to `ARIA_HOME/releases/<version>/` and writes the `aria` launcher to `ARIA_HOME/bin/aria`;
+4. hands over to that release's own `aria setup --release`.
 
-Only the `coder`, planning specialists, and reviewer can call `plan`; every other agent has `plan: deny`.
+Without `--yes` it only prints the plan. `--link-bin` adds `~/.local/bin/aria` → the launcher, but never replaces a file that is already there. Otherwise add `ARIA_HOME/bin` to your `PATH`. The launcher always runs the active release, and follows updates and rollbacks.
 
-| Agent | Allowed `plan` actions |
+**Building a release:** `aria pack` writes `aria-<version>.tgz` and its `.sha256` to `--out <dir>`, by default `<checkout>/../releases` (never the current directory, and never inside the source tree; an installed release must pass `--out`). The archive is deterministic, is written from the exact bytes whose identity it records, and includes `package-lock.json`, which `npm pack` would drop. `aria inspect <dir|tgz>` prints a source's version and release identity without installing anything. Change the version with `npm version <v> --no-git-tag-version`, which updates `package.json` and the lockfile together; a release whose two files disagree is refused.
+
+**Trust boundary.** A sha256 proves that an archive is the one whose checksum you hold. It does not prove who published it: a `.sha256` file downloaded next to an archive can be replaced together with it. Use a checksum you obtained through a channel you trust (or build the release yourself with `aria pack`). ARIA has no signing infrastructure.
+
+**Development checkout:** run `npm install`, then `node bin/aria.mjs …` (or `aria setup --dev`). The OpenCode plugins themselves need none of the manager's packages.
+
+### What the manager does
+
+| Section | What it covers |
 |---|---|
-| coder | `get`, `create`, `update`, `add`, `remediate`, `approve`, `close` |
-| planner | `get`, `create` |
-| architect | `get`, `replace` |
-| reviewer | `get` |
-| researcher | none |
-| explorer | none |
-| visualizer | none |
-| implementer | none |
-| scientist | none |
+| 1 Install | Development install (register a checkout) or release install (copy, verify, register) per scope; repair |
+| 2 Health | Every check with its status and how it was established (`static`, `runtime` or `none`); evidence; repair preview |
+| 3 Models | Per-role model and variant, which config file sets it, the value OpenCode resolved, and availability. Set, change variant, remove pin, undo |
+| 4 Deps | The dependency manifest with ownership: OpenCode, Node, Git, CLI packages, the Zotero, Context7 and Playwright MCPs, and the Impeccable skill. Install, update (`u`, or `U` for all), repair, remove, enable, disable, check readiness, and probe a server's real tool list. The same backend as `aria deps` |
+| 5 Updates | Current and previous releases; update from a directory or `.tgz`; rollback |
+| 6 Config | Config files found, entries ARIA owns, paths, and a permission summary |
 
-- `get` returns the active plan (or `No active plan.`).
-- `create` writes a new plan with `approval: pending` and returns the initial `revision` (`1`); rejected when an active plan already exists.
-- `approve` accepts the current `expectedPlanID` and `expectedRevision`, sets `approval: approved`, and increments the revision. Only the coder may approve.
-- `replace` accepts the current `expectedPlanID` and `expectedRevision` plus the corrected `title` and `tasks`, produces a new revision, and resets `approval: pending`. Used only by the architect before implementation starts.
-- `update`, `add`, `remediate`, and `close` require both `expectedPlanID` and `expectedRevision` to detect conflicts.
-- `update` requires `approval: approved`.
-- `add` resets `approval: pending` (scope changes require renewed approval).
-- `remediate` requires `approval: approved` and all existing tasks completed; preserves `approval: approved` (autonomous remediation loop).
-- `close` requires `approval: approved` and all tasks completed; archives the plan.
+Keys: `1`–`6` or arrows switch sections, `↑↓` select, Enter runs a row's main action or opens details, `r` queries OpenCode for runtime facts, `s` switches scope (project/global), `?` help, `q` quit.
 
-The coder is the only agent allowed to approve, update plan status, add remediation tasks, and archive. OpenCode todos may mirror current progress in the UI, but the Markdown file remains the durable source of truth.
-
-## Plan Ownership
-
-- **Planner** owns plan creation: it turns evidence into an actionable, ordered task list with integrated acceptance/tests and persists it with `create`.
-- **Architect** owns plan correctness: it reviews the planner's plan with `get`, and either accepts it (`READY`) or corrects it with `replace` (`REVISED` + changes). Replace invalidates any previous approval. After review, the architect performs scope assessment: `SCOPE_CHANGE` or `WITHIN_SCOPE`.
-- **Coder** owns plan lifecycle: it re-reads the plan after the architect, summarizes to the user, waits for explicit approval, then drives implementation through implementer/reviewer, records evidence with `update`, adds remediation with `remediate`, adds scope changes with `add` (requiring re-approval), and archives completed work with `close`.
-- **Reviewer** independently reads the plan via `get` and evaluates each approved requirement against the actual implementation as `PASS`, `FAIL`, or `INSUFFICIENT EVIDENCE`.
-
-## Workspace execution policy
-
-Canonical source: `src/scratch.ts` via `src/paths.ts` guards. Confine transient/generated artifacts (logs, fixtures, temporary outputs, verification evidence, etc.) to `<worktree>/scratch/` (per-task noncolliding subdirs, single `/scratch/` gitignore, task-scoped env/helper with explicit output paths); this does not restrict intentional edits to authorized repository code, tests, configuration, or documentation. Never stage scratch artifacts. Staging explicitly approved source changes is permitted only during human-authorized Git operations; editing does not itself authorize staging. `HOME`/`XDG`/global config preserved; atomic sibling-tmp/file-lock preserved; no OS-sandbox promise (approvals remain required). External tools that cannot accept explicit paths are documented exceptions in the canonical header. See `src/scratch.ts` for the full fail-closed policy.
-
-## Install
-
-Canonical install is the released global package `github:mscipio/ARIA#v1.3.2`:
-
-```sh
-NPM_CONFIG_ALLOW_GIT=all npm install -g 'github:mscipio/ARIA#v1.3.2'
-aria setup
-aria doctor
-```
-
-Bare `aria` is the globally installed released package: it runs that install's own assets and never infers or requires a development checkout. From a development checkout, run the local CLI explicitly (`node ./bin/aria.mjs ...`); `npm link` is not a supported workflow.
-
-`NPM_CONFIG_ALLOW_GIT=all` is process-local to that install invocation only — no global `npm config` change, no environment export, and no `.npmrc` edit. A bare install without it fails with `EALLOWGIT` on Git specs.
-
-Restart OpenCode after setup to load the registered plugin.
-
-Tags before v1.1.0 predate the current v1.1.x line and are retained unchanged.
-
-## Configuration
-
-ARIA resolves role model and variant overrides from two optional JSON files sharing the same schema. Project `aria.json` is read-only; the global file may be created manually or written interactively by `aria models --config` (see below).
-
-| File | Path | Scope |
-|------|------|-------|
-| Global | `~/.config/opencode/aria.json` | Per-user, applies to every project |
-| Project | `aria.json` in the worktree root (or an explicit path via the plugin `configPath` option) | Per-project |
-
-For transition compatibility, ARIA still reads the legacy `~/.config/opencode/review-driven-code.json` and project `review-driven-code.json` filenames when the corresponding `aria.json` file is absent. Legacy filenames are read-only fallbacks and are never written or migrated. `aria.json` is canonical and wins when both names exist; `aria models --config` writes only the canonical global `~/.config/opencode/aria.json`.
-
-```json
-{
-  "roles": {
-    "planner": { "model": "openai/gpt-6-luna", "variant": "xhigh" },
-    "architect": { "model": "openai/gpt-6.1-sol" },
-    "explorer": { "variant": "xhigh" }
-  }
-}
-```
-
-Every model identifier must use `provider/model` format. Variant is optional.
-
-### Per-field resolution
-
-For each role and field (`model`, `variant`), the first defined value wins:
-
-1. **Project** override
-2. **Global** override
-3. **Built-in default**
-
-Missing a field at one level inherits the value from the level below — there is no merging or blocking between levels. Setting only `variant` at the project level leaves the `model` to be resolved from global or defaults independently.
-
-## Required Integrations
-
-ARIA currently requires three external integrations. ARIA does not fork, vendor, or duplicate their internal implementation — updates track their latest stable upstream releases and services.
-
-| Integration | Purpose | Upstream |
-|---|---|---|
-| [Engram](https://github.com/Gentleman-Programming/engram) | Durable semantic/project memory | `engram setup opencode` |
-| [Context7](https://github.com/upstash/context7) | Current external library, framework, and API documentation | Remote MCP endpoint |
-| [CodeGraph](https://github.com/colbymchenry/codegraph) | Codebase intelligence for structure and impact | `@colbymchenry/codegraph` |
-
-### Quota 5 (optional, safety-gated)
-
-OpenCode Quota 5 is optional: the setup bootstrap lifecycle installs it only when positively absent (install-missing-only with validation and rollback where feasible; setup never upgrades present installs). Ambiguous, observed, or unsupported targets stay observed-but-unmanaged with zero mutation — setup leaves present installs untouched. `aria deps` remains a read-only inventory and does not independently chase or install Quota (`SyncResult` carries no quota field). Quota is therefore absent from the required-dependency plan above. A Quota 5 version upgrade belongs exclusively to `aria deps --upgrade` and proceeds only when its installed npm target is positively identified as Quota 5 and the native update preview demonstrates a safe change that preserves the TUI and server surfaces, with validation and rollback where feasible; any unknown or unsafe target stays observed-but-unmanaged with zero mutation.
+**Every change is previewed first** (a dry run of the same backend) and needs `y`. On the command line, mutating commands preview by default and apply with `--yes`.
 
 ### Commands
 
-Public CLI surface (see `aria --help`):
-
-```bash
-aria setup                # Register ARIA with OpenCode; install missing dependencies (idempotent; never upgrades present deps)
-aria doctor               # Read-only health check of ARIA (package, config, routes/models, integrations, skills, ZotPilot, Wiki)
-aria upgrade              # Show upgrade inventory without mutation (requires --yes to apply; ARIA-only)
-aria upgrade --check      # Read-only upgrade inventory (current + available releases, component table)
-aria upgrade --yes        # Approve and run the ARIA-only upgrade pipeline
-aria models               # Print resolved model routes for each ARIA role (compact role/model/effort table)
-aria models --config      # Interactively configure ARIA role models (the v1.1.x configuration surface)
-aria deps                 # Read-only dependency inventory (plugins/MCPs with observed versions)
-aria deps --upgrade       # Check and propose managed dependency upgrades (zero mutation; re-run with --yes to apply)
-aria deps --upgrade --yes # Apply managed upgrades (unknown/unmanaged stay report-only)
-aria --help               # Show help
-aria --version            # Show version
+```
+aria doctor [--runtime] [--json]
+aria setup [--scope project|global] [--dev [path] | --release [--from dir|tgz] [--sha256 hex]]
+           [--with zotero-mcp,context7,playwright-mcp] [--adopt] [--link-bin] [--force]
+aria update [--check] --from <dir|tgz> [--sha256 hex] [--force]
+aria rollback [--to version] [--keep-tools]   ·   aria repair [--keep-changed]
+aria pack [--out dir] [--source dir]   ·   aria inspect [dir|tgz]   ·   aria reconcile
+aria models [list|available] [--runtime]  ·  aria models set|reset|restore <role|default> ...
+aria deps [list]  ·  aria deps install|update|repair <id> [--scope]  ·  aria deps update --all  ·  aria deps remove|enable|disable|probe <id>  ·  aria deps check [id]
+aria plans  ·  aria scratch list|clean
 ```
 
-`/aria-push` and `/aria-release` are OpenCode TUI slash commands, not CLI subcommands. Setup installs their managed command files in `~/.config/opencode/commands/`; invoke them in the TUI as `/aria-push [natural-language instructions]` and `/aria-release [natural-language instructions]`.
+Exit codes: `0` ok, `1` problem, `2` usage, `3` preview only (add `--yes`), `4` blocked: a conflict that needs your decision, another ARIA operation holds the lock, or an interrupted operation is waiting for `aria repair`.
 
-Retired commands are rejected with guidance and are not supported: `aria configure` → `aria models --config`; `aria routes` → `aria models`; `aria update` → `aria upgrade` (ARIA release moves) or `aria setup` (install missing dependencies); `aria deps sync` → `aria deps` (read-only inventory), `aria deps --upgrade` (managed upgrades), or `aria setup` (install missing). The v1.1.x public configuration surface is `aria models` / `aria models --config`.
+**Results.** Each operation reports one of these outcomes, with each step marked done, FAILED or skipped:
+- `success`
+- `partial`: ARIA itself was installed, but a requested integration failed or isn't ready
+- `failed`: nothing durable changed
+- `blocked`
+- `unchanged`
 
-### `aria setup`
+A partial result exits `1` and is never reported as success.
 
-First install and bootstrap: registers the ARIA plugin globally with OpenCode, then idempotently reconciles registration, global configuration, managed agent files, packaged skills, and the two managed slash-command files in `~/.config/opencode/commands/`. Existing unmanaged conflicts are backed up; unrelated user commands are preserved. It installs required managed dependencies only when missing and never version-chases present ones — upgrades belong to `aria deps --upgrade`. Package-owned skills use OpenCode's V2 `skills: string[]` configuration and are resolved from the durable skills root below. Setup uses OpenCode CLI introspection when available to check whether the plugin is already registered:
+### Guarantees and limits
 
-- **First run**: registers the plugin, then installs missing dependencies.
-- **Repeated runs**: reports `already registered`, skips duplicate global registration, and still reconciles configuration/agents/skills and installs anything missing (itself idempotent) — without upgrading anything already present.
-- **Compatibility fallback**: when introspection is unavailable or returns an unrecognized format, setup attempts registration and treats a non-zero exit only as `already registered` when the output explicitly indicates a duplicate entry. Every other registration error is treated as a failure and blocks the dependency install.
+- **Ownership.** ARIA records each config entry it writes and changes only those. If an entry of yours occupies the same key, the operation stops and reports a conflict.
+- **Edits are minimal.** Changes are targeted JSONC edits that keep comments and formatting, are written atomically, and are refused if the file changed since the preview. Existing file permissions are preserved; new config/state files are private by default.
+- **Releases:**
+  - Stored in `ARIA_HOME/releases/<version>/`, where `ARIA_HOME` defaults to `~/.local/share/aria` and `%LOCALAPPDATA%\aria` on Windows. Versions are validated (semver, no path characters), and every release path must be a real directory inside the real releases directory.
+  - **One definition of release content** (`src/manager/inventory.ts`) is used by pack, inspect, staging, the same-version check and the rollback integrity check: `package.json`, `package-lock.json` and the `files` entries, minus `node_modules`, `.git` and OS clutter. The release identity is a sha256 over each file's relative path, execute bit and content, so a checkout, its tarball, its staging directory and the installed release have the same identity wherever they are. Symlinks (including a symlinked parent of a `files` entry), special files, and a lockfile that disagrees with `package.json` are rejected.
+  - A `.tgz` **must** match a sha256 (`--sha256` or `<file>.sha256`). Its members are validated before anything is written: no `..`, absolute paths, links, devices, anything outside `package/`, or any file or directory outside the release inventory (so a release never ships `node_modules`).
+  - Staging directories are created exclusively and carry a random marker that is also recorded in `state.json`. The staged copy is written from the bytes that were hashed and must have the source's identity. It then gets `npm ci --omit=dev --ignore-scripts` from its own lockfile (always; a release that already contains `node_modules` is refused), every installed package is checked against the lockfile (version, name, nothing extra), it is smoke-tested, and it is checked against the environment by the new release's own manifest. Incompatibilities such as an OpenCode outside its range block activation unless you pass `--force`. A failed install never activates the release; the previous one stays.
+  - **Same version, different content is a conflict.** A version that is already installed is reused only if its identity is the same and nothing was added to it.
+  - Activation repoints the one ARIA-owned plugin entry and `ARIA_HOME/current`. Release directories are never edited, so running sessions keep their files.
+  - **Rollback** is journaled, because no filesystem or OpenCode mechanism makes several files change atomically:
+    1. Everything is validated first: the target release's integrity, every config file's syntax, ARIA's ownership of every entry it will change, and the tool copies the target release recorded. A user-modified MCP entry or a missing tool copy blocks the rollback (exit 4) before anything is written; `--keep-tools` rolls back only the package.
+    2. A journal records each file's exact content before and after, then an interrupted-operation marker is set.
+    3. Files are written in order: MCP config files, the plugin config file, the launcher (`ARIA_HOME/current`), then `state.json`. Each write is atomic and the journal records `{written, inflight}`.
+    4. A handled error reverts at once (only this invocation's journal). A crash leaves the journal; `aria repair` puts back every file that still holds what ARIA wrote and never overwrites a file you changed afterwards. `aria repair --keep-changed` keeps your changes, takes the active release from the registration OpenCode actually loads, re-adopts only values that are still ARIA's, and reports `partial` if the package and a tool path now come from different releases.
+  - **Tool records.** Each release keeps the full records of the ARIA-managed tools it ran with: written when the release is left and on every tool change. Tool adoption journals the generated integration plugins, MCP entries and state together, using the same recovery path as rollback. A handled failure reverts those writes; an incomplete recovery retains the copy and journal for `aria repair` and reports `partial`. An entry you changed is left alone and reported. Rollback also restores the matching ARIA-owned generated integration plugin; a modified plugin blocks it unless you use `--keep-tools`.
+  - **Reuse and rollback also check dependencies**: an installed release whose `node_modules` no longer matches its lockfile is not reused or rolled back to. This includes releases installed by alpha.4 or earlier from an archive that vendored `node_modules` (alpha.4 skipped `npm ci` then): if their modules differ from the lockfile, roll back to them is refused; remove that release directory and install it again.
+  - Up to three releases are retained beyond the active and previous ones; unknown directories are never deleted.
+  - One operation at a time: a lock file in `ARIA_HOME` makes a second operation stop with exit code 4.
+- **No update channel yet.** ARIA isn't published, so updates come from a local directory or tarball.
+- **Interrupted operations.**
+  - A handled failure leaves nothing pending; an invocation clears only the marker it wrote.
+  - A crash leaves a marker (and, for rollback, a journal). While one is recorded, every other mutating operation refuses with exit 4; `aria doctor` reports it, including what each journaled file holds now.
+  - `aria repair` resolves journals as described above, removes only staging directories whose marker matches ARIA's record, and re-records the active release from config. Anything it can't prove it owns is listed and left alone. A journal without a marker counts as complete only if the active release is its target.
+- **Integrations (`--with`):**
+  - Each one is either reused, if a compatible executable exists, or installed as a pinned version under `ARIA_HOME/tools/` (zotero-mcp-server 0.17.2, @playwright/mcp 0.0.85).
+  - It is then configured and checked for readiness. One check (`readiness()`) is behind `aria deps check`, `aria doctor --runtime`, `setup --with` and the management TUI (`c` on the Deps tab), and it never calls a mutating tool:
+    - Zotero: the server starts, lists its tools, and answers `zotero_get_recent` (needs Zotero desktop with its local API). An answer that starts with "Error" counts as a failure, because zotero-mcp reports errors as plain text.
+    - Context7 (remote): a real MCP `initialize` with the URL and headers of your config entry (`{env:NAME}` is expanded). The response must be valid JSON-RPC with the right id, a supported protocol version (OpenCode 2.3.0's: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05, 2024-10-07), `serverInfo` and capabilities; SSE answers are read incrementally. Redirects are not followed. ARIA then sends `notifications/initialized` and closes the session with DELETE (also after a rejection). Results distinguish unreachable, timeout, reachable-but-not-MCP, authentication, incompatible, rejected and initialized; `initialized` does not prove the hosted service works.
+    - Playwright: always ARIA's pinned copy, `--browser chromium` (channel `chrome-for-testing`), browsers in `ARIA_HOME/tools/playwright-browsers`. Readiness resolves the browser revision through that copy's own `playwright-core`, requires Playwright's `INSTALLATION_COMPLETE` marker and the executable, launches headless once and closes it, then starts the MCP server. A complete browser is never downloaded again. A launch failure caused by missing host libraries is reported as an environment limitation.
+  - An integration that isn't ready makes the result `partial`.
+- **Dependency lifecycle** (`aria deps`, the manager's Deps tab and `setup --with` share one backend, `manageDep` in `src/manager/deps.ts`):
+  - `install <id>`: for skills (and `setup --with`) reuses a valid existing installation; `deps install` of an MCP tool installs ARIA's own pinned copy beside an existing one, which then takes precedence. `update <id>`: moves an ARIA-installed copy to the version this ARIA pins (nothing is checked remotely: "outdated" means differing from the pin). `repair <id>`: restores a missing or damaged ARIA-installed copy. `update --all`: does both for every ARIA-installed dependency and leaves the rest listed but untouched. Every mutating command previews first; `--yes` applies. `aria setup` never upgrades an existing installation.
+  - After a change, an enabled MCP integration is re-checked for readiness.
+  - Externally managed (OpenCode, Node, Git), reused (an existing copy ARIA did not install) and hosted (Context7) dependencies are reported, never updated, repaired or removed by ARIA.
+  - Each dependency lists the roles that use it and whether it is `required`, `role` (ARIA works, those roles are not fully ready without it) or `optional`. `aria doctor` shows a readiness line per such role; other roles stay operational.
+- **Impeccable** (design skill for the `visualizer`, Apache-2.0, github.com/pbakaus/impeccable) is installed as a managed skill, not bundled in the release: `aria deps install impeccable [--scope global|project]` (default global, `<OpenCode config>/skills/impeccable`; `setup --with impeccable` and the manager use the same default, and reuse any compatible copy in either scope). Version 4.8.1 at a pinned commit; the archive and the native helper (linux-x64 only; other platforms get the skill without it) are downloaded over HTTPS and checked against pinned SHA-256 values before anything is written. The tree carries `.aria-impeccable.json` with a hash of every file. ARIA updates, repairs or removes a copy only if it wrote it and nothing was modified; a copy without that marker (yours, or any other install) is reused when its version is within `>=4.8.0 <5.0.0` and is never changed. The archive hash was computed locally from GitHub's archive of the pinned commit (upstream publishes none), so the pin proves content, not who published it. Only the `visualizer` can load it. If it is missing or broken, `aria doctor` reports the visualizer as not fully ready, and the visualizer stops and reports the fix instead of substituting another skill.
+- **Engram and Context7 are shared capabilities for all eight roles** (requirement `role`: a missing one degrades readiness, reported by `aria doctor` and the Deps tab, and never stops other agents).
+  - **Engram** (github.com/Gentleman-Programming/engram, MIT; pinned 3.7.1, Linux/macOS builds with SHA-256 from the release's checksums.txt) needs both its MCP server and its OpenCode plugin. `aria deps install|update|repair engram` manages the binary under `ARIA_HOME/tools`; `aria deps enable engram [--scope]` registers `mcp.servers.engram` and writes the plugin file (generated by that binary in a throw-away HOME, recorded as ARIA-owned) into the scope's `plugins/` directory, because OpenCode 2.3.0 loads the plugin only from there. ARIA never runs `engram setup opencode` against your configuration (it also writes an old-form MCP entry and a `tui.json` statusline plugin). An existing install, plugin file or MCP entry of yours (either config form) is reused and never replaced; update and repair apply only to ARIA's own copy, and the plugin file follows the binary.
+  - **Permissions:** every role can recall (`mem_search`, `mem_context`, `mem_get_observation`, `mem_current_project`, `mem_list_projects`, `mem_doctor`, `mem_search_prompts`, `mem_suggest_topic_key`: the tools Engram marks read-only). `aria`, `scientist` and `writer` can also `mem_save`, `mem_update`, `mem_session_summary`. Other Engram tools ask for `aria` and `scientist` and are hidden from everyone else. The Engram plugin itself records sessions, prompts and passive task-output observations for every role, and shell policy does not block `engram` commands: "read-only" holds for model tool calls, not for plugin logging or shell use. Prompts tell roles to use memory selectively and treat it as subordinate to source files, plans and the user.
+  - **Two kinds of memory writes.** *Agent-invoked*: a role calls `engram_mem_save` and friends; ARIA's permissions decide who may (above). *Automatic*: the Engram plugin, once installed, records sessions, prompts and passive task-output observations for every role and injects its own memory protocol, whatever a role's permissions say; ARIA's prompts tell roles to follow ARIA's policy over that protocol, but cannot stop the recording. Only removing the plugin stops it.
+  - **Health.** Engram is operational only when its executable runs, the MCP entry is registered and exactly one copy of the plugin is loaded. Missing or disabled is reported `missing`; MCP without plugin, a foreign file in the plugin's place, or a duplicate plugin is `config-error`; `aria deps check engram` (and `doctor --runtime`) then verify the plugin, the server's tool list and a read-only call.
+  - **Disable and duplicates.** `aria deps disable engram` removes both the MCP entry and the plugin file, but only what ARIA wrote and nobody changed. If you own a plugin file (a `.ts`/`.js` file carrying Engram's marker at the top level of a `plugins/` directory in the project root or global scope) or list it in a config `plugin`/`plugins` array (matched by package or file name `engram`, `engram-opencode`, `engram-plugin`; not by any path that merely contains the word), or you wrote the MCP entry, ARIA leaves it, reports the result `partial` and says "NOT fully disabled" with what keeps recording. Enable never adds a plugin when one is already loaded through any of those routes; if two are loaded, health reports the duplicate and ARIA deletes nothing it did not write. A symlinked config directory is refused before anything is changed. A project-scope plugin file contains an absolute path of this machine: do not commit it; `.opencode` is excluded from release packages.
+  - **Engram's data directory ignores `$HOME`** (it uses the real home unless `ENGRAM_DATA_DIR` is set), and the plugin and MCP talk to the local server on `ENGRAM_PORT` (default 7437). Isolated tests must set both.
+  - **Context7** tools are available to all roles, including reviewer, planner and writer. Anonymous use works; an API key goes in your own entry as a `{env:NAME}` header, never written by ARIA.
+- **Ownership** comes from the manifest: `aria-managed` (ARIA installs, updates, rolls back and repairs it; another copy on `PATH` is not used), `reused` (an existing Zotero MCP; ARIA does not change it), `external` (OpenCode, Node, Git) and `hosted` (Context7). Engram is a managed shared capability again (see above); CodeGraph is not used by any ARIA 2 role. You can still configure any MCP server yourself; its tools are unclassified, so coding roles are asked before each use and read-only roles can't see them.
+- **External tools are never touched.** OpenCode, Node, Git, and existing MCP installations are only detected, never installed, upgraded or removed. A copy ARIA installs itself goes under `ARIA_HOME/tools/`.
+- **Runtime facts are opt-in.** `--runtime` (or `r` in the TUI) runs `opencode debug agents`, `models` and `debug config`, which starts or contacts an OpenCode server and may reach providers. Without it, every result is labelled static.
 
-Setup fails non-zero at the labeled stage (registration or dependency install). OpenCode must be restarted after setup to load the registered plugin and slash commands. Re-running setup reconciles managed command files without replacing unrelated user commands.
+### Registering by hand
 
-#### Durable packaged skills root
+One `plugins` entry loads both parts: the server plugin (`exports["."]`) and the OpenCode TUI extension (`exports["./tui"]`). Do not add a second entry.
 
-The canonical durable skills root is the running ARIA install. When running through an ephemeral `npx` cache, ARIA uses a verified globally installed ARIA package instead; the ephemeral cache never replaces the durable root. Symlink aliases resolving to the same real path are equivalent. If no verified global package is available, ARIA uses its supported no-global fallback. `aria doctor` is read-only: a stale/missing owned root is reported as FAIL, while an inapplicable environment is SKIP.
-
-If doctor reports a stale owned path, rerun setup or upgrade from the durable install (or run global `aria setup`). Do not hand-edit the registration to point into an `npx` cache. Check `aria doctor`, `npm root -g`, whether the configured path contains `_npx`, and whether symlinks resolve to the expected install.
-
-Setup never creates or overwrites project `aria.json`, commits, pushes, or introduces postinstall, daemon, or background behavior. `aria setup` also accepts `--plugin-spec <spec>` (see `aria --help`) to register a Git package specifier instead of the local checkout; it is not part of the normal install flow.
-
-### `aria models --config`
-
-`aria models --config` is the v1.1.x public configuration surface: an interactive role-model configuration pass with no plugin registration and no dependency install. It discovers the models the installed `opencode` CLI reports (`opencode models`, plus `opencode models --verbose` for names and variants) once per run and shows the eleven configurable roles (`coder`, `explorer`, `visualizer`, `planner`, `architect`, `implementer`, `reviewer`, `researcher`, `archivist`, `writer`, `scientist`) with each role's four-layer precedence: packaged default, global override, project override, and resolved route. A resolved model the CLI did not list is annotated `[not listed by OpenCode]`; the annotation is purely diagnostic — no fallback routing or automatic replacement is added.
-
-From the top-level menu you may:
-
-- **Keep current configuration** — writes nothing; existing overrides are preserved exactly.
-- **Configure roles** — pick roles from a comma-separated list, then for each role keep the current assignment (Enter), reset to the ARIA default (`0`), type an exact model identifier, or search discovered models by case-insensitive substring. A search listing at most ten models offers numbered selection; larger result sets ask you to refine the search.
-
-Choosing a model replaces the role's global `model` field, then a compact variant prompt offers the model's reported variants (`Enter` for no variant, a number to select one), so a stale variant cannot survive a model change. Resetting a role to the ARIA default removes that role's global `model` and `variant` fields rather than writing sentinel or copied values. Only the canonical global `~/.config/opencode/aria.json` is written, atomically, after creating its parent directory. When the canonical file is absent, existing legacy-global choices seed the result only if you make an explicit edit, and no canonical file is created for an unchanged or default-only result when none existed. Project-local `aria.json` files are never written; when a project override masks a global edit, the result reports it and points to `aria models` as the authoritative resolved-routing view. When stdin is not a terminal, the configuration pass is skipped without failure.
-
-`configured`, `unchanged`, and non-TTY `skipped` outcomes exit `0`; discovery/write failures and thrown errors report `Model configuration: [FAIL]` and exit nonzero. Like `setup`, it never writes project-local `aria.json`.
-
-### Retired: `aria update`
-
-`aria update` (checkout pull, reinstall, and re-sync) is retired. To move ARIA itself to a new release use `aria upgrade --yes`; to install missing dependencies use `aria setup`. There is no checkout-based update workflow.
-
-Neither `aria setup` nor any retired command runs as a postinstall script, daemon, background task, or automatic update. Setup is manual. Setup never creates or overwrites project `aria.json`, creates commits, or pushes.
-
-### `aria upgrade`
-
-`aria upgrade` moves ARIA itself to a new release: the global CLI, registration, managed agents, and ARIA-owned config/skills. It does not upgrade third-party dependencies — version upgrades belong exclusively to `aria deps --upgrade`.
-
-- `aria upgrade --check` — strictly read-only: current and available ARIA releases plus a Component|Installed|Available|Status table. Never installs, writes, or repairs.
-- `aria upgrade` (bare) — shows the same inventory without mutation, then stops: explicit `--yes` approval is required before any change is applied.
-- `aria upgrade --yes` — approves the inventoried ARIA-only target and runs the upgrade pipeline. After approval the exact target is validated before the current registration is touched; unrelated entries are preserved; everything stays XDG-contained with no `.npmrc` side effects, and any git allowlist (`NPM_CONFIG_ALLOW_GIT=all`) is process-local only.
-
-Upgrade also reconciles the two managed OpenCode slash-command files in `~/.config/opencode/commands/`; it fails closed on unmanaged same-name command conflicts without backing them up, so users must resolve those conflicts manually. Setup backs up unmanaged conflicts, and unrelated user commands are preserved.
-
-### `/aria-push`
-
-Run `/aria-push` in the OpenCode TUI, optionally followed by natural-language instructions. The coder performs the repository's 11-step review-driven push workflow: inspect status and scope, validate the approved plan, implement and verify, review changes, then prepare and push the authorized result. It may only act within the approved scope and applicable user authorization. It never force-pushes or uses destructive Git operations. Scratch/generated output stays under `./scratch/`; staging requires explicit human authorization, and scratch artifacts are never staged.
-
-### `/aria-release`
-
-Run `/aria-release` in the OpenCode TUI, optionally followed by natural-language release instructions. It reuses the push workflow, then performs release-specific version checks, gates, tag and GitHub Release creation, and verification. It does not auto-deploy. Authorization remains limited to the approved release scope; no force or destructive operations are allowed. Scratch/generated output stays under `./scratch/`, and staging requires explicit human authorization (scratch artifacts are never staged).
-
-### `aria deps`
-
-Read-only inventory first, explicitly approved upgrades second — a two-step with no interactive prompt:
-
-- `aria deps` — read-only inventory/status of managed plugins/MCPs (installed and available versions with per-component status). No changes are made.
-- `aria deps --upgrade` — checks eligible updates and prints a proposal with zero mutation (exits nonzero to signal nothing was applied). Re-run as `aria deps --upgrade --yes` to apply managed upgrades; unknown/unmanaged targets stay report-only either way.
-- Missing dependencies remain `aria setup`'s responsibility, not an upgrade step.
-
-### `aria doctor`
-
-Read-only health check. It inspects — and never writes, installs, or repairs — the packaged assets, configuration, resolved role routes, model discovery, required integrations, packaged skills, managed command files, and the optional ZotPilot and Wiki capabilities. Managed command-file diagnostics are read-only. Every finding is labeled with one of four literal severities:
-
-- **PASS** — the check succeeded.
-- **FAIL** — a required item is missing, invalid, or disconnected. Any FAIL makes `aria doctor` exit **1**.
-- **WARN** — a non-fatal degradation of an optional capability (ZotPilot CLI or MCP, unverifiable variant metadata, or a shallow effective `subagent_depth`). WARN never changes the exit code.
-- **SKIP** — a check that does not apply to the current environment (for example, `WIKI_DIR` unset, or the standalone live-tool-inventory comparison).
-
-Exit code is **0 if and only if no finding is FAIL**, otherwise **1**.
-
-Required checks (FAIL when broken): package `package.json` version, packaged defaults and each defaults-referenced prompt, role route resolution (invalid global or project config), model discovery, every resolved role route against the models `opencode models` lists (with configured variants verified only against observable variant metadata — a variant whose metadata is not observable is WARN, never guessed), the OpenCode/Engram/Context7/CodeGraph integrations, packaged skills (matching `name` and `metadata.owner: aria`), canonical role requirements, and the packaged Wiki pipeline assets. A configured `WIKI_DIR` that does not exist, is not a directory, or lacks read/write accessibility is FAIL; an unset `WIKI_DIR` is SKIP.
-
-One config-area finding evaluates the effective cooperation surface, provenance-neutrally: `aria doctor` reads the effective merged top-level `subagent_depth` reported by a read-only `opencode debug config` probe. An absent field is PASS, stating that ARIA supplies the runtime default/recommendation 3; a finite numeric value >= 3 is PASS, reporting the effective value as sufficient for nested ARIA cooperation; a finite numeric value < 3 is a nonfatal WARN, reporting the effective value and that nested ARIA cooperation may be degraded. Unavailable command/output or malformed JSON/value is handled as a nonfatal WARN. This advisory never FAILs, never writes configuration, and never attributes the value to user configuration or ARIA.
-
-ZotPilot is reported as two clearly separate findings:
-
-- **ZotPilot CLI** — availability and version from the smallest read-only probe (`zotpilot --version`). PASS when identified; WARN when the executable is missing or the probe is nonzero or unparseable, because ZotPilot MCP may still work.
-- **ZotPilot MCP** — server presence/connectivity from a fresh standalone `opencode mcp list` CLI observation (not live-session inventory). Connected is PASS; absent, disconnected, or unknown is WARN.
-
-A dedicated SKIP finding states the standalone limitation: `aria doctor` cannot compare expected/present/missing/unexpected live ZotPilot tool IDs or OpenCode session permissions, because no safe supported `tools/list` mechanism exists — it validates the packaged ZotPilot policy, not a live tool inventory.
-
-`aria doctor` emits plain text only: no ANSI escapes (regardless of `NO_COLOR`), no JSON mode or payload, no prompts, and no repair/install hints. It runs no mutations and touches neither Zotero nor configuration.
-
-### `aria models`
-
-Prints the resolved model (and effort) for every ARIA role as a compact role/model/effort table, following the defaults → global → project precedence: each field resolves from the first defined value at the project, then global, then built-in default level. The effort column is the resolved variant (`-` when the route carries none). If any configuration file is invalid the command fails with a non-zero exit code.
-
-```
-role  model  effort
-coder  opencode-go/muse-spark-1.3-contributor  xhigh
-explorer  opencode-go/muse-spark-1.3-contributor  high
-visualizer  opencode-go/muse-spark-1.3-contributor  xhigh
-planner  openai/gpt-6-luna  xhigh
-architect  openai/gpt-6.1-sol  high
-implementer  opencode-go/muse-spark-1.3-contributor  xhigh
-reviewer  openai/gpt-6.1-sol  medium
-researcher  openai/gpt-6.1-sol  medium
-archivist  opencode-go/muse-spark-1.3-contributor  high
-writer  openai/gpt-6-luna  xhigh
-scientist  openai/gpt-6.1-sol  medium
+```jsonc
+{ "plugins": [{ "package": "/absolute/path/to/aria", "options": { "zoteroServer": "zotero" } }] }
 ```
 
-MCPs are preferred evidence sources, not mandatory routes for every task. Engram is durable project memory, not transactional workflow state. `.aria/rdc/TASKS.md` and the native Plan tool remain authoritative for active plan, task, scope, and approval state.
+- **Entry forms.** An entry can be an absolute path, a `file://` URL, or `./` / `../` relative to the config file's own directory. Any other string is treated as an npm package name.
+- **Auto-loading.** A directory under `.opencode/plugins/` or `~/.config/opencode/plugins/` is also loaded automatically; `aria doctor` reports that as a duplicate.
+- **Build and dependencies.** No build is needed: OpenCode runs on Bun and loads TS/TSX directly. The host supplies `@opencode/plugin`, `effect`, `solid-js` and `@opentui/*`. *(Source-verified, not yet runtime-verified.)*
 
-## Writer
+## Roles
 
-`writer` is a `mode: all` agent for writing objectives rather than a general researcher. Invoke it directly for writing work; its small role prompt selects package-owned writing skills on demand:
+| Role | Mode | Purpose |
+|---|---|---|
+| `aria` | primary/subagent | Default engineer: investigate, implement, verify, report |
+| `scientist` | primary/subagent | Scientific work end to end: method, Python/MATLAB code, analysis, interpretation |
+| `planner` | primary/subagent | Durable plans for large work |
+| `writer` | primary/subagent | Manuscripts, reports, rebuttals |
+| `researcher` | primary/subagent | Literature and evidence (Zotero, web) |
+| `scout` | subagent | Read-only exploration |
+| `reviewer` | subagent | Independent read-only review |
+| `visualizer` | all | UI/UX and frontend specialist (web, Qt Widgets): direct or delegated design analysis, frontend edits, visual QA |
 
-- `aria-academic-writing` — evidence-bounded peer-reviewed scientific prose and section-aware journal style
-- `aria-writing-anti-ai` — removes formulaic LLM prose while preserving technical meaning and appropriate formality
-- `aria-review-response` — reviewer-response/rebuttal strategy, evidence anchoring, and tone; consumes verified researcher evidence but owns rebuttal strategy
-- `aria-paper-self-review` — structure, overclaim, claim-evidence, reproducibility, and submission-readiness audit; may flag citations needing verification but does not perform external verification
-- `aria-document-design` — document information architecture, hierarchy/navigation, progressive disclosure, and representation choices, deferring prose/claims to `aria-academic-writing` and audits to `aria-paper-self-review`
+`all` means the agent can run as either the primary agent or a subagent. The visualizer can use the configured Playwright MCP tools without ARIA prompting on each call; user-level permissions or policies may still deny them. If the configured Zotero server name collides with the `playwright_*` namespace, the Zotero deny takes precedence for safety.
 
-The writer owns final prose and citation placement. It may task `archivist` only for explicitly read-only project/internal evidence. For external literature, Zotero, citation-verification, and claim-support evidence it tasks `researcher` with a focused evidence request (evidence, not manuscript prose). The writer does not query Zotero or the literature itself; it marks external evidence the researcher could not resolve as `[RESEARCH NEEDED]` or `[CITATION NEEDED]`.
+**Models.** ARIA pins no models. Each role uses the model you selected; subagents use their caller's model. Pin one with `aria models set <role> provider/model#variant` (or section 3 of the manager). That writes `agents.<role>.model` to the project or global config, and the change applies to sessions started afterwards.
 
-## Researcher
+The manager keeps three values apart:
 
-`researcher` is the evidence specialist with `mode: all`: you can invoke it directly for literature and citation questions, and the `coder`, `writer`, or `scientist` may delegate focused evidence requests to it. It is read/research-only for the project (protected read plus navigation), with no edit, shell, plan, or Wiki authority.
+- **Configured:** read from the config files (static).
+- **Resolved:** what OpenCode reports through `opencode debug agents`.
+- **Available:** whether `opencode models` lists the model.
 
-ARIA owns the research workflow; **ZotPilot remains the Zotero backend/capability provider**. The researcher uses the available ZotPilot MCP research/read tools directly for library search, metadata/content retrieval, and evidence inspection, plus `websearch`/`webfetch` for external authoritative sources and Context7 for library/API documentation. ARIA does not install a second Zotero backend or MCP, and no user-level ZotPilot skill installation is introduced by this role. Zotero mutation is approval-gated: ingest, note/tag/collection management, PDF annotation, and indexing tools require an explicit per-operation user approval, as does any `zotpilot` CLI fallback; the researcher never mutates the library on its own authority.
+Variants cannot be listed from the OpenCode CLI, so they are checked only when a session starts. Inside a session, `aria_status` shows the effective model.
 
-The packaged `aria-research-evidence` skill defines the repeatable evidence procedure:
+## Permissions
 
-- **Evidence ladder** — inspected full text, passage with expanded context, abstract/snippet, secondary mention; claims are labeled with the level actually used.
-- **Library-vs-external provenance** — every finding states whether its source is a library item (Zotero identity) or an external source (DOI/URL/identifier).
-- **Primary/authoritative-source preference** — original studies, official documentation, standards, and registry records over reviews and summaries.
-- **Passage-context expansion** — surrounding context is retrieved before passage-specific claims.
-- **Disagreement, uncertainty, and evidence-gap reporting** — conflicts across sources and missing evidence are reported explicitly, never smoothed over.
-- **Structured evidence handoffs** — findings with provenance and level, an itemized disagreements/uncertainties/gaps list, and cited sources.
-- **Claim-level citation verification** — source identity/existence is checked separately from claim-source support, so a citation is confirmed to exist and its support for the specific claim is classified, never inferred from topical similarity.
+How rules are evaluated, from OpenCode v2.3.0 source:
 
-`aria-zotero-tutor` is the researcher's skill for a different question: chat-first interactive tutoring and guided reading of a single, already-identified paper in the Zotero library. Unlike `aria-research-evidence` — which owns discovery, verification, citation support, and evidence handoffs — tutoring calibrates goal, familiarity, target, and depth with the learner and explains only from the paper's exposed source content. Any surfaced PDF annotation or reading-persona save uses the existing ZotPilot operation and requires separate explicit approval for that operation; neither is automatic.
+- Rules are ordered and the last matching rule wins.
+- A tool whose name is denied outright is removed from the model's tool list, including from Code Mode.
+- Per-call checks happen only where a tool asserts permission.
 
-Hard boundaries: the researcher verifies source identity and claim-source support, not scientific meaning — interpretation, hypotheses, mechanisms, and nontrivial scientific judgment belong to the `scientist`, whom the researcher may task when claim-to-source alignment exceeds straightforward comparison. The researcher never edits project files, performs software/shell work, maintains the Wiki, drafts manuscript or rebuttal prose, persists to Engram automatically, spawns nested researcher subagents, or mutates Zotero without explicit per-operation approval. It has no Engram, CodeGraph, Wiki, broad MCP, or wildcard ZotPilot authority; its Bash access is deny-by-default with only `zotpilot`/`zotpilot *` approval-gated as a fallback path.
+Your own `permissions` and `agents.<id>.permissions` are applied after ARIA's rules and override them. `policies` can only deny.
 
-### Dogfood scenario
+### Role matrix
 
-A realistic literature task to try once ZotPilot is configured with a library and the MCP server is running:
+The 184-case evaluation covered the seven original roles and was not re-run for `visualizer`. The visualizer's project-edit, scratch, and authority-file rules were checked separately against its resolved rules (from `opencode debug agents` on OpenCode 2.3.0); the Playwright grant is scoped to its `playwright_*` tools. These checks have not been repeated in a live OpenCode session after the current role change.
 
-> Ask `researcher` to investigate susceptibility-distortion correction in diffusion MRI. It should search the Zotero library and external authoritative sources (e.g., primary journal studies) through ZotPilot plus web evidence; compare the primary studies it finds; label each supporting passage as abstract/snippet versus inspected full text; expand passage context before making passage-specific claims; report disagreements between sources and any evidence gaps; and request explicit approval before ingesting selected DOI records into the library.
+| | aria / scientist | planner | writer | scout / reviewer | researcher | visualizer |
+|---|---|---|---|---|---|---|
+| read, glob, grep | yes | yes | yes | yes | yes | yes |
+| `.env` read | ask | ask | ask | ask | ask | ask |
+| credential files (keys, `.ssh`, `.aws`, `.netrc`, auth.json…) | deny | deny | deny | deny | deny | deny |
+| outside the project | read asks, write denied | read asks | read asks | read asks | read asks | read asks, write denied |
+| edit/write/patch | project, except: config/authority files ask, secrets deny | `.aria/plans/*.md` only (top level) | prose files only (`md tex bib txt rst typ qmd org adoc`); never inside `.aria/ .opencode/ .claude/ .agents/ .git/ .github/ .vscode/ node_modules/` at any depth, nor `AGENTS.md`, `CLAUDE.md` or other authority files | hidden | hidden | project, except: config/authority files ask, secrets deny (same as aria) |
+| shell | yes; installs, history changes, recursive deletes, containers ask; publish, deploy and sudo denied | hidden | hidden | hidden | hidden | same policy as aria (to run the app and existing checks) |
+| Code Mode (`execute`) | yes | hidden | hidden | hidden | hidden | hidden |
+| unknown MCP / plugin tools | ask | hidden | hidden | hidden | hidden | ask; `playwright_*` allowed |
+| Zotero (zotero-mcp) | ask | hidden | hidden | hidden | reads allowed; library/index/authorization changes ask; unclassified tools hidden | hidden |
+| web fetch/search | yes | no | no | scout yes, reviewer no | yes | yes |
+| subagents | aria: all seven; scientist: scout, reviewer, researcher, writer | scout | researcher | none | none | none |
+| scheduling, worktree creation, artifact delete | ask | hidden | hidden | hidden | hidden | hidden |
 
-The scenario is a request template, not a claim that it has already run.
+The coding roles start from **ask** for anything unknown, instead of OpenCode's default allow-all. A newly connected MCP server or plugin tool cannot act without a prompt. Normal development runs without prompts: read, search, project edits, shell, todo, web reads and Code Mode.
 
-## Scientist
+### Enforced by ARIA's hooks
 
-`scientist` is the scientific authority with `mode: all`: you can invoke it directly, and `coder`, `researcher`, or `writer` may task it. It owns scientific specification and interpretation — what is being asked, what would count as evidence, methodology and design, what results mean, hypotheses, mechanisms, and nontrivial scientific judgment — and it is not an evidence researcher, a prose writer, or a software engineer.
+Both hooks can only tighten a decision, never loosen one.
 
-### Cooperation graph
+- **Guard** (`permission.evaluate`):
+  - Denies reads and edits whose real path leaves the project through a symlink.
+  - Denies any edit that goes through a symlink inside the project. Otherwise the planner's `.aria/plans/*.md` could be redirected into `src/`.
+  - Denies a read when an innocent-looking link points to an env or credential file.
+  - Enforces scratch ownership per session.
+- **Tool gate** (`tool.execute.before`): asserts permission for every tool except OpenCode's built-in tools that check permission themselves. That includes MCP tools, plugin tools and the built-in `opencode_*` tools that never check, so `ask` and `deny` rules hold for all of them, including inside Code Mode. OpenCode records no tool provenance, so no name prefix is trusted. An MCP tool's own identical check, in the same call, passes once after the gate's approval, so you are not asked twice.
+- **Rejections** (the tool gate, `src/denials.ts`): when you answer a prompt for one of those tools with Reject, OpenCode 2.3.0 gives the model only a bare error (`Tool.Error`, or `Permission.DeclinedError` without ARIA), and inside Code Mode the turn carries on. ARIA replaces that with a message saying you rejected the tool (and why, if you typed a reason), and remembers it. For the rest of that request, until you send your next message, any call to the same tool is refused without asking you again, whatever the arguments, including a call made by a subagent the model launches. Only the tool you actually answered is blocked. OpenCode also cancels every other request pending in the session when you reject one; ARIA recognises those from OpenCode's permission events, tells the model its call was cancelled and not decided, and does not record it, so the model may ask again. If the events cannot establish which request you answered (for example the event stream failed), nothing is recorded, the model is told the refusal could not be confirmed, and the protection against a retry is off for that call. Your next typed message (or command) reopens the question, so you can still approve what you then ask for; an answer given through the model's `question` tool does not. Memory is per session tree and in process only. A plain Reject on one of these tools used to end the model's step when the model called it directly; now the step continues with the explicit message. Tools that OpenCode checks itself (shell, edit, write, web) keep OpenCode's own handling, which is per resource: a plain Reject there ends the step.
 
-Scientist cooperation is explicit and narrow: exactly six scientist-related task edges, never an all-to-all role graph.
+### Not enforced: policy only
 
-- **Inbound** — `coder`, `researcher`, and `writer` may task `scientist` for scientific question framing, methodology design, or result interpretation.
-- **Outbound** — `scientist` tasks `researcher` for external evidence acquisition (evidence, not conclusions — the scientist interprets), `writer` for prose, manuscript, and report drafting (the scientist decides scientific meaning; the writer decides expression), and `coder` for computation, software, or RDC implementation of its specification. When `coder` computes, `scientist` retains ownership of the scientific specification and of the interpretation of what the computation means; the coder owns implementation correctness.
-- **Retained RDC delegation** — a coder delegated by `scientist` keeps its full RDC delegation authority: it still reaches all six RDC coding specialists.
+- **Shell rules match command text.** `sh -c`, interpreters, compound commands and scripts can do anything your user account can, including writing outside the project. For the coding roles this is a practical policy, not containment. Read-only roles have no shell at all, which is the only reason "read-only" holds for them.
+- **Only OS isolation is a boundary**, for example a container, a separate user, or read-only mounts.
+- **MCP servers act with their own privileges.** ARIA controls whether a tool may be called, not what the server does. For example, Zotero semantic search may write its own cache.
+- **The tool gate trusts OpenCode's built-in tool names.** A third-party plugin that registers a tool under a built-in name (for example `read`) replaces the built-in and is not gated.
+- **Remaining races.** Between check and use, a process running as your user can swap a directory for a link. ARIA fails closed where it can (see `src/safe-fs.ts`), but cannot fully close this gap without OS support.
 
-Reciprocal grants cannot bounce: a delegated role must not task any role that is already an active ancestor in the current delegation chain (`scientist` never tasks back whoever tasked it, directly or indirectly). Cycle protection comes from OpenCode's hard depth bound plus this active-ancestor prompt hygiene; ARIA adds no cycle-detection subsystem.
+A denial is a boundary. The agents are instructed to stop and report, not to route around it.
 
-### Prompt and skills
+## Independent review
 
-`scientist`'s packaged prompt (`defaults/prompts/scientist.md`) is deliberately lean: it defines authority, ownership, delegation, boundaries, and the required output contract, and routes methodology to two package-owned skills instead of duplicating their checklists:
+ARIA decides when a change needs an independent review, runs it, fixes blocking findings and asks for a focused re-review. You don't have to request it.
 
-- `aria-research-planning` — tractable question framing (optional 5W1H), cautious gap/novelty and importance/feasibility reasoning, competing hypotheses, evidence needs versus assumptions, falsification/discrimination criteria, measurement/method/control/confounder/information-value planning, and a minimal next decision.
-- `aria-results-analysis` — artifact/comparability and unit/dependence validation, explicit comparisons and metrics, descriptive counts, uncertainty/effect sizes/inference assumptions/multiple comparisons/missingness, practical versus statistical significance, figure/table interpretation, observation versus mechanism, calibrated claims, and explicit blockers/underdetermination.
+| Level | When | What happens |
+|---|---|---|
+| 0 | typos, formatting, small docs, low-risk local edits | self-verification only; no reviewer |
+| 1 | non-trivial local fixes, moderate refactors, uncertain behaviour | aria/scientist decide; a skip is reported with a reason |
+| 2 | architecture, filesystem/paths/cleanup, permissions/security, installer/update/rollback, data loss, concurrency/recovery, public APIs or formats, numerical/scientific algorithms, imaging, units, calibration | review required, however small the diff |
 
-`scientist` runs on `openai/gpt-6.1-sol` (variant `medium`), the same reasoning-model family and variant as `researcher`: interpretation-heavy scientific reasoning at a balanced reasoning budget, distinct from the `xhigh` variants reserved for `planner` and `writer` plan and prose work.
+**The cycle.** implement → self-verify → `reviewer` (read-only, reads the real diff) → **PASS**, **FAIL** (blocking findings with locations) or **INSUFFICIENT_EVIDENCE** (what is missing and how to get it). After FAIL: confirm or rebut each finding, fix it, re-verify, then a focused re-review in the same reviewer session. If disagreement or a missing piece of evidence persists, ARIA reports it rather than looping.
 
-### Authority and permissions
+**Enforced by the plugin:**
+- The verdict is structured data the reviewer records with `aria_review_verdict`. Only a reviewer launched as a subagent can call it; implementing agents can't see the tool.
+- ARIA observes edits, shell runs and reviewer launches. It keeps the state in the root session's metadata and shows it in aria's context, `aria_status` and the TUI sidebar:
+  - `none` / `requested` / `passed` / `failed` / `insufficient`
+  - `stale`: changed after the review started
+- A FAIL stays failed until a later review passes.
+- Forks and unrelated sessions do not inherit the record.
 
-Availability is not authority: although `scientist` runs with `mode: all`, its tools are deny-by-default. It holds protected project read plus `glob`/`grep`/`list`, exactly two skills (`aria-research-planning`, `aria-results-analysis`), and exactly three task targets (`researcher`, `writer`, `coder`). It has no edit, bash, plan, external-directory, web, LSP, or MCP authority (no CodeGraph/Context7/Engram, no ZotPilot), and no persistence authority — it cannot write Engram observations, SDD documents, registries, or other durable state.
+**Not enforced:**
+- Whether a change *needed* review is the agent's judgement under the policy above; nothing blocks completion without one.
+- The final report wording is the model's. ARIA cannot stop a model from misreporting, but the recorded state it is told to report and the state you see are the real ones.
+- Shell commands count conservatively as possible changes, not confirmed edits, because the hook cannot establish what they changed. They can make a review stale; status and sidebar wording identify shell activity explicitly.
 
-### Cooperation depth
+With a plan, tasks carry `- review: required | not-required | skipped: … | pass | fail | insufficient`, which the TUI shows next to the task.
 
-ARIA's nested cooperation (e.g. `scientist → coder → implementer`) needs three subagent levels. The plugin sets `subagent_depth = 3` only as a runtime default when the merged runtime value is absent or nullish; every explicit value — including shallow values such as 0, 1, or 2 and values >= 3 — is preserved untouched, and no user OpenCode config file is read or written for this. Recursion is bounded by OpenCode's hard depth bound plus the active-ancestor prompt rule above. `aria doctor` reports the effective merged top-level `subagent_depth` read-only, and warns nonfatally when the effective value is below 3 (see `aria doctor`).
+## Scratch
 
-## Wiki Compiler
+Each session that can write gets `.aria/scratch/<root-session>/<session>/` for throwaway files: scripts, logs, terminal captures, intermediate output, disposable fixtures. Deliverables and intentional edits go in their proper place.
 
-`archivist` is a separate, opt-in specialist for Wiki operations with `mode: all`: you can invoke it directly for queries, archival, or compilation, and another agent may delegate to it when appropriate. The coder delegates to it only when the user explicitly requests Wiki work. It never runs automatically.
+- **Layout.** Single files go directly in the session directory. To group related files an agent makes an activity directory named `YYYYMMDD-HHMMSS-short-kebab-description` with plain `mkdir` (it fails if the name exists; add a suffix). Names are organisation only: ownership is decided by the two session ids, and nested paths below the session directory are allowed.
+- **Creation.** It is created one directory at a time from the real project root. A symlinked `.aria` or `.aria/scratch` disables scratch rather than being followed. Session IDs are validated before being used as paths.
+- **Ignored by Git.** `.aria/scratch/.gitignore` contains `*`.
+- **Delivery.** For the `aria`, `scientist` and `visualizer` roles (the only ones with a shell or project edits) the absolute path is added to the system context on every model request, after the directory has been re-created if it was removed. If scratch cannot be provisioned, the context says so and forbids `/tmp` instead of naming another place. Read-only roles get no scratch and no write access. A subagent has its own directory under the same root; it cannot write its caller's, and the caller shares a file by giving the subagent its path.
+- **Shell.** OpenCode starts every shell command with `OPENCODE_SESSION_ID` set, but its `shell` hook does not say which session a command belongs to, so ARIA does not set `TMPDIR` automatically. The context gives the path and tells the agent to run tools that choose their own temporary location as `TMPDIR=<scratch> command`, or to use `mktemp -d -p <scratch>`. The host's own `TMPDIR` (e.g. a cluster's `/home/scratch`) otherwise applies to `mktemp`.
+- **Limits.** This is a convention, not containment. What is enforced: the `edit`/`write`/`patch` tools may write only the caller's own scratch (guard), `edit` to absolute paths outside the project is denied, and reading outside the project asks. Anything a shell does depends on the model following the instruction in its context.
+- **DONE marker.** The root session marks completion with `.aria/scratch/<root>/DONE`. It must be a regular file; a link is ignored. If any session of that root is active more than ten minutes after DONE was written, the marker is treated as stale and the scratch is kept.
+- **Activity.** Every model request of a session refreshes its directory's modification time, so cleanup judges activity without scanning nested files. A job that runs for longer than the `--stale` age without any model request is not detected.
+- **Cleanup.** `node bin/aria.mjs scratch clean [--stale N] [--dry-run]` removes only DONE-marked (and not reopened) or explicitly stale root trees; `N` is a whole number of days. Before deleting, it re-reads the tree, renames it and re-checks its identity. It never follows links, never crosses filesystems, and keeps anything malformed or changed meanwhile.
 
-### Modes
+## Instruction files
 
-- **Lookup** (read-only) — reads `WIKI_DIR/wiki/index.json`, selects the strongest curated page matches, and performs one bounded related-term coverage pass. No writes, no pipeline initialization, no archival, and no mandatory primer access. An existing primer may be consulted read-only when useful.
-- **Archival** (write, explicit request only) — archives raw session or observation data to `WIKI_DIR/raw/` as immutable provenance files. Three commands: `archive-opencode` (OpenCode sessions), `archive-engram` (Engram observations), and `archive-all` (both). Archival does not compile, promote raw material, or regenerate the primer; it only writes raw files and updates archive trackers.
-- **Compile / Update** (write, explicit request only) — promotes raw files into curated wiki pages following the manual compilation protocol (`wiki-pipeline/docs/compile-workflow.md`). For each candidate raw file the specialist inspects existing pages, deduplicates, and decides create/update/skip. Updates merge new information while preserving existing content and source provenance, then regenerate `wiki/index.md`, `wiki/index.json`, and append to `wiki/log.md`. An optional primer refresh and lint pass may follow.
+ARIA does not create, read, update or depend on `AGENTS.md` or `CLAUDE.md`. Its behaviour lives in the role prompts and skills, its filesystem rules in code. OpenCode 2.3.0 itself still loads a project's `AGENTS.md` (from the working directory up to the project root) and the one in its global config directory into the model context; it does not load `CLAUDE.md`. The only switch found is `OPENCODE_DISABLE_PROJECT_CONFIG`, which also disables the project's `opencode.jsonc` (plugin, model pins, permissions), so ARIA leaves it alone. ARIA still asks before editing a project's own instruction files.
 
-Ordinary lookup and compile/update do not archive automatically. Archival occurs only when the user explicitly requests it. There is no CLI command for compilation — compilation is a specialist-led manual workflow, not an automated process.
+## Plans
 
-### Configuration
+Plans are plain Markdown files at the top level of `.aria/plans/`, with front matter containing `status` and `session`.
 
-`WIKI_DIR` is the sole external wiki path, required to locate the Wiki. It must be set to a non-empty value before any wiki operation — write-capable (archival, compile, primer generation) and read-only search alike. When `WIKI_DIR` is absent, write work fails with a clear error before creating any file or directory, and read-only search returns a clear no-write configuration error.
+- **Ownership.** `session:` records the root session that owns the plan. A session resumes only its own plan. Other active plans are listed as not its task, unless you refer to them.
+- **State.** A checkbox is plan state. A `verified:` line is recorded evidence, which the UI shows as "evidence recorded", not "verified". A subagent finishing never changes task state.
+- **What is read.** Plans are read by one confined reader. Symlinked directories or files, nested files, odd names, files without front matter and files over 256 KB are skipped with a reason that never includes their content.
 
-ARIA ships its Wiki procedures as package skills and its pipeline/documentation assets under `wiki-pipeline/`. Pipeline assets are published with the package as listed in `package.json`. The coder receives no wiki filesystem paths or package paths — only the `archivist` specialist does.
+## Tools
 
-### Engram-to-Wiki boundary
+- **`aria_git`**: read-only `status`, `diff`, `log` and `show`. It runs with no pager, external diff, textconv, fsmonitor, signature program or submodule recursion. Every configured `filter.*` driver is disabled for that one call. Credential files are excluded, and `rev:path` blob reads are rejected.
+- **`aria_status`**: effective roles, models and availability; plans owned by this session and by others; any skipped plan files; the recorded review state.
+- **`aria_review_verdict`**: reviewer only; records PASS / FAIL / INSUFFICIENT_EVIDENCE as structured state.
 
-Engram-to-Wiki is not an automatic bridge. Engram archival is an explicit user-requested operation. Archived Engram observations remain immutable raw provenance files under `WIKI_DIR/raw/`. Promotion from raw to curated wiki pages is explicit and passes the specialist's deduplicate/create/update/skip curation gate. Engram remains distinct from curated wiki knowledge and from RDC Plan workflow state.
+## TUI
 
-### Out of scope
+- **Sidebar ("ARIA Plan", collapsible):** the plan you selected for this session (`[select]` or `/aria-plan`), or else the plan owned by this session, as a compact task list coloured by state (pending, in progress, executed, evidence recorded, blocked). The choice is remembered per project and session; selection mode and unavailable-selection fallback are labelled. Blocker counts stay visible even when their tasks are outside the window or the widget is collapsed. `/aria-plan-toggle` collapses or expands without a mouse. OpenCode's native sidebar shows the session/agent family; ARIA does not repeat that list or overlay it with agent-lifecycle toasts.
+- **Review reminder:** one line below the header, visible even when collapsed and shown only when it matters: `◌ N changes unreviewed` / `since review` once N observed changes (default 5, set `ARIA_REVIEW_NUDGE_EDITS`) have no review, `◌ review running`, `✗ review failed · n blocking`, or `◌ review: evidence missing`. Shell activity is labelled as possible changes, not confirmed edits. A failed review stays visible during pending or inconclusive re-reviews until a subsequent review passes. Nothing is shown below the threshold or after a PASS for the current changes.
+- **Plan panel:** click the plan title or use `/aria-plan-open`. It shows the selected plan as rendered Markdown (scroll, `y` copy over OSC 52, `m` raw/rendered, `f` fullscreen). Plan files are read through the OpenCode server, so this works over SSH; if that fails the local reader is used, and if nothing can be read the panel says so instead of showing stale data.
+- **Updates:** plan changes appear as toasts. Blocked-task and plan-completion alerts take priority over routine updates; larger alert bursts are summarised with attention preserved. Agent lifecycle is shown in OpenCode's native sidebar; blocked tasks, finished plans, agent failures and root-session completion may produce OS notifications while the terminal is unfocused.
+- **Refresh:** debounced to at most one per 500 ms, plus a 5-second timer.
+- **Read states:** plan reads are reported as absent, empty, complete, partial or unavailable. A partial or failed read never triggers "started"/"done" notifications, and old plans are not shown as current.
 
-The archivist does not reference, require, or support:
+## Zotero
 
-- `REPO_DIR` or workspace-relative configuration
-- `myopencode` runtime dependency, modification, or deletion — myopencode is treated as a source-only upstream
-- Automatic wiki, archive, or primer behavior — every operation is explicit
-- Zotero, biblio, research, writing, or Phase 3 / wiki-bridge workflows
-- Refactors unrelated to wiki integration
+The researcher's Zotero tool names come from the source of [zotero-mcp](https://github.com/54yyyu/zotero-mcp) (PyPI `zotero-mcp-server`). Its read tools are allowed; anything that changes the library, the index, the active library or write authorization asks. Tools that aren't classified yet are hidden.
 
-## Development
+- **Server name.** Tool names are matched as `<server>_<tool>` under the `zoteroServer` option, which defaults to `zotero`.
+- **Running the server.** `aria deps enable zotero-mcp` finds an existing install (PATH, conda/mamba environments, `~/.local/bin`) and writes its absolute path, so no environment needs activating. `aria deps install zotero-mcp` creates an ARIA-owned venv instead (network).
+- **Checking the tool names.** `aria deps probe zotero-mcp` starts the server, lists its real tools without calling any, and reports tools ARIA has not classified (they stay hidden) and expected names the server lacks.
+- **No Zotero.** If the server is missing, the researcher says so and uses web sources.
+- **Not verified live.** The names come from zotero-mcp's source and have been checked only against a fake server; the real server has not been probed yet.
 
-```sh
-npm run typecheck
-npm test
-npm run lint
-npm run compile
-npm run smoke:package
-```
+## Licence
 
-### Release
-
-- `npm run release:check` — seven-stage pre-tag gate (version/package sanity → compile + dist sync → typecheck → targeted ESLint → `git diff --check` → focused lifecycle/hotfix Vitest subset → `npm pack` + isolated install + bare `aria` smoke). Must pass on the commit you intend to tag.
-- `git commit` — land any remaining reviewed preparation work.
-- `git tag -a vX.Y.Z -m "ARIA vX.Y.Z"` — create an annotated tag on the final reviewed HEAD (semver, e.g. `v1.1.2`).
-- `git push` — push the commits, then the tag (`git push origin vX.Y.Z`).
-- `npm run verify:release-tag -- vX.Y.Z` — six-stage post-tag check (tag→commit identity → remote tag identity → isolated install of the exact tag spec → bare version + non-checkout package path → hermetic doctor smoke → `upgrade --check` + `models` dispatch). Short smokes only; it does not rerun behavioral qualification or the full suite.
-- GitHub Release — publish the release notes for the tag.
-
-The tag is the immutable boundary: never move, delete, or re-point a pushed tag to "fix" a release — cut a new version instead. Multiple release-preparation commits are allowed before tagging; only the tag itself is immutable.
-
-## Acknowledgement
-
-ARIA's Review-Driven Coding subsystem is derived from [cgize/code-ensemble](https://github.com/cgize/code-ensemble) and retains its MIT license.
-
-## License
-
-MIT
+MIT. See `LICENSE` and `NOTICE` for the two copyright holders and what each covers.

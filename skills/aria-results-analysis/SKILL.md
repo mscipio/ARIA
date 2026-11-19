@@ -24,13 +24,13 @@ Use this skill whenever the scientist must interpret provided artifacts (files, 
 
 ## Out of scope
 
-- Running code, generating figures, or producing files — this skill interprets what is supplied; computation belongs to `coder`.
+- Running code, generating figures, or producing files — this skill interprets what is supplied; computation belongs to `aria`.
 - Mandated output bundles (analysis reports, statistics appendices, figure catalogs).
 - Universal/rigid statistical defaults and automatic test fallbacks.
 - ML-only framing, paper-writing, Results-section prose, and publication tooling → `writer`.
 - Literature search and external evidence acquisition → `researcher`.
-- Persistence: no Engram observations, SDD documents, registries, or other durable state.
+- Persistence: no durable state; hand results back to the caller.
 
 ## Output
 
-Return the validated comparison questions, the descriptive and inferential findings with uncertainty, practical significance, the strongest calibrated claims, and explicit blockers or underdetermination. Route prose to writer and any needed computation to coder.
+Return the validated comparison questions, the descriptive and inferential findings with uncertainty, practical significance, the strongest calibrated claims, and explicit blockers or underdetermination. Route prose to writer and any needed computation to `aria`.

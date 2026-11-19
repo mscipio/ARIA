@@ -1,0 +1,62 @@
+// Example OpenCode v2 (>= 2.3.0) configuration for ARIA. Copy what you need into a project's
+// opencode.jsonc (one project) or ~/.config/opencode/opencode.jsonc (all projects).
+// ARIA never writes these files. Keys below exist in the v2.3.0 config schema.
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // One entry loads both parts: the server plugin (package.json exports ".") and the TUI
+  // sidebar/panel (exports "./tui"). Use an absolute path, a file:// URL, or a path starting with
+  // ./ or ../ (relative to THIS file's directory); any other string is treated as an npm package
+  // name. Register it once. `aria setup` writes this entry for you; `aria update`/`aria rollback`
+  // repoint it when ARIA manages it.
+  "plugins": [
+    {
+      "package": "/absolute/path/to/aria",
+      // MCP server name under which zotero-mcp is configured below (default "zotero").
+      "options": { "zoteroServer": "zotero" }
+    }
+  ],
+
+  "experimental": {
+    // Delegation depth. 1 (default): aria -> scout/reviewer/planner/...; 2 also lets a delegated
+    // scientist or planner launch its own helpers (e.g. aria -> scientist -> researcher).
+    "subagent_depth": 2
+  },
+
+  // ARIA pins no models: every role uses the model you select (subagents: their caller's model).
+  // Pin a role only if you want it different: `aria models set <role> provider/model#variant`.
+  // "model" at the top level is OpenCode's own default (`aria models default ...`).
+  // "agents": {
+  //   "aria":     { "model": "provider/model#high" },
+  //   "reviewer": { "model": "provider/other-model#high" }
+  // },
+
+  // Data outside the project: reading asks, writing is denied. Open exactly what you need.
+  // Later rules win over earlier ones and over ARIA's role rules.
+  // "permissions": [
+  //   { "action": "external_directory", "resource": "/data/pet/*",     "effect": "allow" },
+  //   { "action": "read",               "resource": "/data/pet/*",     "effect": "allow" },
+  //   { "action": "external_directory", "resource": "/data/outputs/*", "effect": "allow" },
+  //   { "action": "edit",               "resource": "/data/outputs/*", "effect": "allow" }
+  // ],
+  // Warning: a broad rule such as { "action": "*", "resource": "*", "effect": "allow" } here
+  // overrides every ARIA restriction, including the read-only roles.
+
+  "mcp": {
+    "servers": {
+      // zotero-mcp (PyPI "zotero-mcp-server", github.com/54yyyu/zotero-mcp). `aria deps enable zotero-mcp`
+      // finds an existing install (PATH, conda envs, ~/.local/bin) and writes this entry with the
+      // absolute executable path, so no environment needs activating. Zotero desktop must be running
+      // with its local API enabled. If this server is absent, the researcher uses web sources.
+      // "zotero": {
+      //   "type": "local",
+      //   "command": ["/home/you/miniconda3/envs/your-env/bin/zotero-mcp", "serve"],
+      //   "environment": { "ZOTERO_LOCAL": "true" }
+      // },
+      // "context7": { "type": "remote", "url": "https://mcp.context7.com/mcp" }
+    }
+  }
+
+  // Hard limits no role or later rule can loosen (policies only ever deny):
+  // "policies": [ ... see https://opencode.ai/docs/permissions/ ]
+}

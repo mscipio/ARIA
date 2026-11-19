@@ -1,0 +1,5 @@
+{
+  "id": "D",
+  "category": "independent-review",
+  "expect": {"plan":"optional","delegation":"reviewer only","review":"required","asks_user":"never","risk":"deletes user files; symlink and path-escape handling"}
+}

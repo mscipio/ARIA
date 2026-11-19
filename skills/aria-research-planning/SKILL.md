@@ -18,13 +18,13 @@ Use this skill whenever the scientist must turn a broad research interest or que
 4. **Separate evidence needs from assumptions.** Record what must be shown versus what the plan merely assumes; flag assumptions that would invalidate conclusions if wrong.
 5. **Define falsification and discrimination.** State what observation would falsify each hypothesis and what evidence discriminates between competing ones. A plan without a falsification condition is not yet testable.
 6. **Plan measurement, method, controls, confounders, and information value.** Specify what is measured, how, and in what units; the comparison or control structure; likely confounders and how they are addressed; and whether each planned observation would actually change a decision (information value). Prefer the smallest design that discriminates the hypotheses.
-7. **Choose the minimal next decision.** End with one concrete next step — a question to answer, an experiment to run, or a specification to hand to coder — not a full project plan.
+7. **Choose the minimal next decision.** End with one concrete next step — a question to answer, an experiment to run, or a specification to hand to `aria` — not a full project plan.
 
 ## Out of scope
 
 - Literature search, Zotero/PDF/BibTeX retrieval, and external evidence acquisition → task `researcher`.
 - Proposal, timeline, milestone, deliverable, or template-heavy document production.
-- Persistence: no SDD documents, Engram observations, global registries, or other durable state.
+- Persistence: no durable state; hand results back to the caller.
 - Fixed workflow chains, bulk reference-file catalogs, and ML-only framing.
 - Mandatory output files/artifacts/figures, code-execution assumptions, and universal or rigid statistical prescriptions (those belong to computation and analysis, not planning).
 - Paper-writing and publication tooling.

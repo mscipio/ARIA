@@ -52,11 +52,11 @@ upstream is vendored.
 - Window/level, LUT, and histogram adjustments change display only, never data.
 - Visual validation follows the tiered fallback in
   `references/visual-validation.md` with human + deterministic checks
-  primary; route-specific model vision is UNVERIFIED (T001) and never
+  primary; route-specific model vision is UNVERIFIED and never
   substitutes for an inspection.
 - This skill owns desktop UI guidance only; it does not add agents, MCPs,
   dependencies, or config subsystems.
 - QML prototypes are design-only and disposable; production UI is Qt
   Widgets — the transfer gap is explicit in `references/qml-notes.md`,
   with no migration, embedding, or conversion tooling.
-- Before creating captures, builds, logs, or other transient/generated task artifacts, invoke the native `scratch_task` tool with the approved task ID and a concise, descriptive task name; use its returned paths under the UTC-date directory. Fail closed if task identity, project location, or allocation is unavailable; never invent paths or fall back to `process.cwd()`. Preserve existing/historical evidence paths; offline only, no OS-sandbox promise.
+- Keep captures, builds, logs and other transient/generated artifacts in your ARIA scratch directory (the exact path given in your context, in an activity subdirectory `YYYYMMDD-HHMMSS-short-kebab-description` made with plain `mkdir`). Deliverables and intentional source edits go in their proper place. Scratch is a convention, not an OS sandbox.

@@ -1,19 +1,16 @@
 node_modules/
-dist/*
-!dist/*.js
-!dist/*.d.ts
-*.tsbuildinfo
-.opencode/state/
-.env
-.env.local
 *.log
 *.tgz
+*.tgz.sha256
+*.tsbuildinfo
 .DS_Store
 Thumbs.db
 desktop.ini
+.env
+.env.local
 
-# Python
-__pycache__/
-*.py[cod]
+# ARIA scratch is self-ignoring (.aria/scratch/.gitignore) but ignore it here too for the framework repo.
+.aria/scratch/
 
-/scratch/
+# Benchmark run output (eval/run.sh)
+eval/runs/

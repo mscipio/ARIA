@@ -1,523 +1,199 @@
-import { lstat, open, rename, unlink, writeFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { join } from "node:path";
+import { UnsafePath, entries, readRegularFile, realRoot, secureDir } from "./safe-fs.ts";
 
-import { canonicalWorktree, ensureSafeDirectory, safeProjectFile, verifySafeParent, withFileLock } from "./paths.js";
+/**
+ * Plans are plain Markdown in `.aria/plans/`, edited with the native edit/write tools. There is
+ * no plan tool and no database. This module only READS them, through one confined reader used by
+ * the server plugin, the CLI and the TUI.
+ *
+ * Format (see skills/aria-plan):
+ *   ---
+ *   status: active            # active | done | abandoned
+ *   objective: one line
+ *   session: ses_...          # root session that owns the plan (set by the agent that works on it)
+ *   ---
+ *   - [ ] T1 pending     - [~] T2 in progress     - [x] T3 executed     - [!] T4 blocked
+ *       - verified: what was checked and what it showed
+ *       - review: required | not-required | skipped (why) | pass | fail | insufficient  (+ reviewer session, date)
+ *
+ * State kept apart: the checkbox is PLAN state; a `verified:` line is a RECORD of claimed
+ * evidence (not independent proof); what an agent is doing right now is EXECUTION state and lives
+ * in OpenCode sessions, not here. A `[x]` without `verified:` is "executed, not verified".
+ *
+ * Confinement: `.aria` and `.aria/plans` must be real directories inside the real project root,
+ * and each plan must be a regular file (not a symlink) at the top level of `.aria/plans`. Anything
+ * else is skipped with a problem note that names the file but never its content.
+ */
 
-const ARIA_RDC_STATE_DIR = ".aria/rdc";
-const LEGACY_STATE_DIR = ".code-ensemble";
-const ACTIVE_PLAN_PATH = `${ARIA_RDC_STATE_DIR}/TASKS.md`;
-const MAX_PLAN_BYTES = 1024 * 1024;
-const MAX_TASKS = 100;
-const MAX_LINE_LENGTH = 4_000;
-const METADATA_START = "<!-- aria-rdc-plan\n";
-const LEGACY_METADATA_START = "<!-- code-ensemble-plan\n";
-const METADATA_END = "\n-->\n";
-const PLAN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+export type TaskMark = " " | "~" | "x" | "!";
 
-export type PlanTaskStatus = "pending" | "in_progress" | "completed" | "blocked";
+export type ReviewMark = "required" | "not-required" | "skipped" | "pass" | "fail" | "insufficient";
 
-export type PlanApproval = "pending" | "approved";
-
-export type PlanTask = {
-  id: string;
-  text: string;
-  status: PlanTaskStatus;
-  evidence?: string;
-};
-
-export type SharedPlan = {
-  version: 3;
-  id: string;
-  revision: number;
-  status: "active" | "closed" | "cancelled";
-  approval: PlanApproval;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  tasks: PlanTask[];
-};
-
-function line(value: string, label: string): string {
-  const normalized = value.replace(/[\r\n]+/g, " ").trim();
-  if (!normalized) throw new Error(`${label} cannot be empty`);
-  return normalized.slice(0, MAX_LINE_LENGTH);
+export interface PlanTask {
+  readonly id: string;
+  readonly title: string;
+  readonly mark: TaskMark;
+  readonly verified: boolean;
+  /** `- review: <mark> ...` under the task: the recorded review disposition (a claim, like verified:). */
+  readonly review?: ReviewMark;
 }
 
-function taskMarker(status: PlanTaskStatus): string {
-  if (status === "completed") return "x";
-  if (status === "in_progress") return "~";
-  if (status === "blocked") return "!";
-  return " ";
+export interface PlanSummary {
+  readonly file: string;
+  readonly title: string;
+  readonly status: string;
+  readonly objective: string;
+  /** Root session that owns the plan, if recorded. */
+  readonly session: string | undefined;
+  readonly tasks: readonly PlanTask[];
+  readonly counts: { readonly pending: number; readonly active: number; readonly executed: number; readonly verified: number; readonly blocked: number };
+  readonly next: PlanTask | undefined;
 }
 
-export function renderPlan(plan: SharedPlan): string {
-  const metadata = JSON.stringify(plan).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
-  const tasks = plan.tasks.flatMap((task) => [
-    `- [${taskMarker(task.status)}] **${task.id}** ${task.text}`,
-    ...(task.evidence ? [`  - Evidence: ${task.evidence}`] : []),
-  ]);
-  return [
-    `${METADATA_START}${metadata}${METADATA_END}`,
-    `# Plan: ${plan.title}`,
-    "",
-    `Status: **${plan.status}**  `,
-    `Approval: **${plan.approval}**  `,
-    `Revision: **${plan.revision}**`,
-    "",
-    "## Tasks",
-    "",
-    ...tasks,
-    "",
-  ].join("\n");
+/**
+ * How a read went. `absent`: no `.aria/plans` directory. `empty`: read, no plans. `ok`: every
+ * candidate read. `partial`: some files skipped (see problems). `unavailable`: the directory could
+ * not be read at all; `plans` is empty and says nothing about what exists.
+ */
+export type PlanReadState = "absent" | "empty" | "ok" | "partial" | "unavailable";
+
+export interface PlanLoad {
+  readonly state: PlanReadState;
+  readonly plans: readonly PlanSummary[];
+  readonly problems: readonly string[];
 }
 
-function parsePlan(markdown: string): SharedPlan {
-  const metadataStart = markdown.startsWith(METADATA_START)
-    ? METADATA_START
-    : (markdown.startsWith(LEGACY_METADATA_START) ? LEGACY_METADATA_START : undefined);
-  if (!metadataStart) throw new Error("TASKS.md has invalid plan metadata");
-  const end = markdown.indexOf(METADATA_END, metadataStart.length);
-  if (end < 0) throw new Error("TASKS.md has incomplete plan metadata");
-  const value = JSON.parse(markdown.slice(metadataStart.length, end)) as Partial<SharedPlan>;
-  if (
-    value.version !== 3 ||
-    typeof value.id !== "string" ||
-    !PLAN_ID_PATTERN.test(value.id) ||
-    typeof value.revision !== "number" ||
-    !Number.isInteger(value.revision) ||
-    value.revision < 1 ||
-    (value.status !== "active" && value.status !== "closed" && value.status !== "cancelled") ||
-    (value.approval !== "pending" && value.approval !== "approved") ||
-    typeof value.title !== "string" ||
-    typeof value.createdAt !== "string" ||
-    typeof value.updatedAt !== "string" ||
-    !Array.isArray(value.tasks)
-  ) throw new Error("TASKS.md contains invalid plan data");
+const TASK = /^-\s+\[([ ~x!])\]\s+(T\d+)\b[\s.:)-]*(.*)$/;
+const PLAN_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.md$/;
+const MAX_PLAN_BYTES = 256 * 1024;
+const MAX_PLANS = 100;
 
-  if (value.status === "closed" && value.approval !== "approved") {
-    throw new Error("TASKS.md contains invalid plan data");
-  }
+export const PLANS_DIR = ".aria/plans";
 
-  const statuses = new Set<PlanTaskStatus>(["pending", "in_progress", "completed", "blocked"]);
-  const tasks = value.tasks.map((task, index) => {
-    const expectedID = `T${String(index + 1).padStart(3, "0")}`;
-    if (
-      !task ||
-      typeof task !== "object" ||
-      task.id !== expectedID ||
-      typeof task.text !== "string" ||
-      !statuses.has(task.status)
-    ) throw new Error(`TASKS.md contains invalid task ${index + 1}`);
-    return {
-      id: expectedID,
-      text: line(task.text, `Task ${task.id}`),
-      status: task.status,
-      evidence: typeof task.evidence === "string" ? line(task.evidence, `Evidence for ${task.id}`) : undefined,
-    };
-  });
-  if (tasks.length === 0 || tasks.length > MAX_TASKS || new Set(tasks.map((task) => task.id)).size !== tasks.length) {
-    throw new Error("TASKS.md must contain between 1 and 100 uniquely identified tasks");
-  }
-  return { ...value, title: line(value.title, "Plan title"), tasks } as SharedPlan;
-}
-
-async function readBounded(filePath: string): Promise<string> {
-  const before = await lstat(filePath);
-  if (before.isSymbolicLink() || !before.isFile()) throw new Error("TASKS.md is not a safe regular file");
-  const handle = await open(filePath, "r");
-  try {
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) {
-      throw new Error("TASKS.md changed while it was being opened");
+export function parsePlan(file: string, text: string): PlanSummary {
+  const lines = text.split(/\r?\n/);
+  const front: Record<string, string> = {};
+  let i = 0;
+  if (lines[0]?.trim() === "---") {
+    for (i = 1; i < lines.length && lines[i]?.trim() !== "---"; i++) {
+      const m = /^([A-Za-z_]+):\s*(.*?)\s*(?:#.*)?$/.exec(lines[i] ?? "");
+      if (m?.[1]) front[m[1].toLowerCase()] = m[2] ?? "";
     }
-    if (opened.size > MAX_PLAN_BYTES) throw new Error("TASKS.md exceeds its size limit");
-    const buffer = Buffer.alloc(Math.min(opened.size + 1, MAX_PLAN_BYTES + 1));
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
-      if (bytesRead === 0) break;
-      offset += bytesRead;
-    }
-    if (offset > MAX_PLAN_BYTES) throw new Error("TASKS.md exceeds its size limit");
-    return buffer.subarray(0, offset).toString("utf8");
-  } finally {
-    await handle.close();
+    i++;
   }
-}
-
-async function migrateLegacyState(worktree: string): Promise<void> {
-  const root = await canonicalWorktree(worktree);
-  const canonicalDir = resolve(root, ARIA_RDC_STATE_DIR);
-
-  try {
-    const info = await lstat(canonicalDir);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw new Error(`Path is not a safe directory: ${canonicalDir}`);
-    }
-    return;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-
-  const legacyDir = resolve(root, LEGACY_STATE_DIR);
-  try {
-    const info = await lstat(legacyDir);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw new Error(`Path is not a safe directory: ${legacyDir}`);
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw error;
-  }
-
-  await ensureSafeDirectory(root, resolve(root, ".aria"), true);
-  try {
-    await rename(legacyDir, canonicalDir);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
-    const current = await lstat(canonicalDir).catch(() => undefined);
-    if (!current || current.isSymbolicLink() || !current.isDirectory()) throw error;
-  }
-}
-
-async function activePlanFile(worktree: string): Promise<{ root: string; path: string }> {
-  await migrateLegacyState(worktree);
-  return safeProjectFile(worktree, ACTIVE_PLAN_PATH, { createParent: true });
-}
-
-async function writePlan(root: string, filePath: string, plan: SharedPlan, signal?: AbortSignal): Promise<void> {
-  const markdown = renderPlan(plan);
-  if (Buffer.byteLength(markdown, "utf8") > MAX_PLAN_BYTES) throw new Error("TASKS.md exceeds its size limit");
-  await verifySafeParent(root, filePath);
-  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporaryPath, markdown, { encoding: "utf8", flag: "wx" });
-    await verifySafeParent(root, temporaryPath);
-    if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted");
-    await rename(temporaryPath, filePath);
-  } catch (error) {
-    await unlink(temporaryPath).catch(() => undefined);
-    throw error;
-  }
-}
-
-async function readUnlocked(filePath: string): Promise<SharedPlan | null> {
-  try {
-    return parsePlan(await readBounded(filePath));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-function requirePlanCas(plan: SharedPlan, expectedPlanID: string, expectedRevision: number): void {
-  if (typeof expectedPlanID !== "string" || !PLAN_ID_PATTERN.test(expectedPlanID)) {
-    throw new Error("Invalid expected plan id");
-  }
-  if (plan.id !== expectedPlanID) {
-    throw new Error(`TASKS.md plan id conflict: expected ${expectedPlanID}, current ${plan.id}`);
-  }
-  if (!Number.isInteger(expectedRevision) || expectedRevision !== plan.revision) {
-    throw new Error(`TASKS.md revision conflict: expected ${expectedRevision}, current ${plan.revision}`);
-  }
-}
-
-function requireActive(plan: SharedPlan): void {
-  if (plan.status !== "active") throw new Error("TASKS.md is already closed");
-}
-
-function requireApproved(plan: SharedPlan): void {
-  if (plan.approval !== "approved") throw new Error("TASKS.md must be approved before this operation");
-}
-
-function isMatchingClosedArchive(active: SharedPlan, archived: SharedPlan): boolean {
-  return (
-    archived.id === active.id &&
-    archived.status === "closed" &&
-    archived.revision === active.revision + 1 &&
-    archived.title === active.title &&
-    archived.approval === active.approval &&
-    archived.createdAt === active.createdAt &&
-    JSON.stringify(archived.tasks) === JSON.stringify(active.tasks)
-  );
-}
-
-export async function readActivePlan(worktree: string): Promise<{ plan: SharedPlan; markdown: string } | null> {
-  const file = await activePlanFile(worktree);
-  const plan = await readUnlocked(file.path);
-  return plan ? { plan, markdown: renderPlan(plan) } : null;
-}
-
-export async function createPlan(worktree: string, title: string, tasks: string[], signal?: AbortSignal): Promise<SharedPlan> {
-  if (tasks.length === 0 || tasks.length > MAX_TASKS) throw new Error("A plan requires between 1 and 100 tasks");
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    if (await readUnlocked(file.path)) throw new Error("An active TASKS.md already exists; close it before creating another plan");
-    const now = new Date().toISOString();
-    const plan: SharedPlan = {
-      version: 3,
-      id: randomUUID(),
-      revision: 1,
-      status: "active",
-      approval: "pending",
-      title: line(title, "Plan title"),
-      createdAt: now,
-      updatedAt: now,
-      tasks: tasks.map((text, index) => ({
-        id: `T${String(index + 1).padStart(3, "0")}`,
-        text: line(text, `Task ${index + 1}`),
-        status: "pending",
-      })),
-    };
-    await writePlan(file.root, file.path, plan, signal);
-    return plan;
-  }, signal);
-}
-
-export async function approvePlan(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  signal?: AbortSignal,
-): Promise<SharedPlan> {
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    if (plan.approval !== "pending") throw new Error("Plan is already approved");
-    plan.approval = "approved";
-    plan.revision += 1;
-    plan.updatedAt = new Date().toISOString();
-    await writePlan(file.root, file.path, plan, signal);
-    return plan;
-  }, signal);
-}
-
-export async function updatePlanTask(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  taskID: string,
-  status: PlanTaskStatus,
-  evidence?: string,
-  signal?: AbortSignal,
-): Promise<SharedPlan> {
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    requireApproved(plan);
-    const task = plan.tasks.find((candidate) => candidate.id === taskID);
-    if (!task) throw new Error(`Task ${taskID} was not found in TASKS.md`);
-    task.status = status;
-    if (evidence !== undefined) task.evidence = line(evidence, `Evidence for ${taskID}`);
-    plan.revision += 1;
-    plan.updatedAt = new Date().toISOString();
-    await writePlan(file.root, file.path, plan, signal);
-    return plan;
-  }, signal);
-}
-
-export async function addPlanTasks(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  tasks: string[],
-  signal?: AbortSignal,
-): Promise<SharedPlan> {
-  if (tasks.length === 0) throw new Error("At least one task is required");
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    if (plan.tasks.length + tasks.length > MAX_TASKS) throw new Error("TASKS.md cannot contain more than 100 tasks");
-    const start = plan.tasks.length + 1;
-    plan.tasks.push(...tasks.map((text, index) => ({
-      id: `T${String(start + index).padStart(3, "0")}`,
-      text: line(text, `Task ${start + index}`),
-      status: "pending" as const,
-    })));
-    plan.approval = "pending";
-    plan.revision += 1;
-    plan.updatedAt = new Date().toISOString();
-    await writePlan(file.root, file.path, plan, signal);
-    return plan;
-  }, signal);
-}
-
-export async function remediatePlanTasks(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  tasks: string[],
-  signal?: AbortSignal,
-): Promise<SharedPlan> {
-  if (tasks.length === 0) throw new Error("At least one remediation task is required");
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    requireApproved(plan);
-    if (plan.tasks.length + tasks.length > MAX_TASKS) throw new Error("TASKS.md cannot contain more than 100 tasks");
-    const start = plan.tasks.length + 1;
-    plan.tasks.push(...tasks.map((text, index) => ({
-      id: `T${String(start + index).padStart(3, "0")}`,
-      text: line(text, `Task ${start + index}`),
-      status: "pending" as const,
-    })));
-    plan.revision += 1;
-    plan.updatedAt = new Date().toISOString();
-    await writePlan(file.root, file.path, plan, signal);
-    return plan;
-  }, signal);
-}
-
-export async function cancelPlan(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  reason: string,
-  signal?: AbortSignal,
-): Promise<{ plan: SharedPlan; archived: string }> {
-  const normalizedReason = line(reason, "Cancellation reason");
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    const cancelled: SharedPlan = {
-      ...plan,
-      status: "cancelled",
-      revision: plan.revision + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    const markdown = `${renderPlan(cancelled)}\n## Cancellation\n\n- Outcome: cancelled\n- Plan ID: ${cancelled.id}\n- Plan status before cancellation: ${plan.status}\n- Revision before cancellation: ${plan.revision}\n- Approval: ${cancelled.approval}\n- Reason: ${normalizedReason}\n`;
-    const archive = await safeProjectFile(worktree, `${ARIA_RDC_STATE_DIR}/plans/${plan.id}.md`, { createParent: true });
-    await verifySafeParent(archive.root, archive.path);
-    let archiveHandle: Awaited<ReturnType<typeof open>> | undefined;
-    let createdArchive = false;
-    try {
-      archiveHandle = await open(archive.path, "wx");
-      createdArchive = true;
-      await archiveHandle.writeFile(markdown, "utf8");
-      await archiveHandle.sync();
-      await archiveHandle.close();
-    } catch (error) {
-      await archiveHandle?.close().catch(() => undefined);
-      if (createdArchive) await unlink(archive.path).catch(() => undefined);
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new Error(`An archive already exists for plan ${plan.id}`);
+  const title = lines.slice(i).find((l) => l.startsWith("# "))?.slice(2).trim() ?? file;
+  const tasks: PlanTask[] = [];
+  let current: { id: string; title: string; mark: TaskMark; verified: boolean; review?: ReviewMark } | undefined;
+  for (const line of lines.slice(i)) {
+    const m = TASK.exec(line);
+    if (m) {
+      if (current) tasks.push(current);
+      current = { id: m[2] ?? "", title: (m[3] ?? "").trim(), mark: (m[1] ?? " ") as TaskMark, verified: false };
+    } else if (current && /^\s+-\s+verified:\s*\S/i.test(line)) {
+      current.verified = true;
+    } else if (current) {
+      const r = /^\s+-\s+review:\s*(required|not[- ]required|skipped|pass(?:ed)?|fail(?:ed)?|insufficient)/i.exec(line);
+      if (r?.[1]) {
+        const w = r[1].toLowerCase().replace(" ", "-");
+        current.review = (w.startsWith("pass") ? "pass" : w.startsWith("fail") ? "fail" : w) as ReviewMark;
       }
-      throw error;
     }
-
-    try {
-      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted");
-      await unlink(file.path);
-    } catch (error) {
-      await unlink(archive.path).catch(() => undefined);
-      throw error;
-    }
-    return { plan: cancelled, archived: archive.path };
-  }, signal);
+  }
+  if (current) tasks.push(current);
+  const counts = {
+    pending: tasks.filter((t) => t.mark === " ").length,
+    active: tasks.filter((t) => t.mark === "~").length,
+    executed: tasks.filter((t) => t.mark === "x").length,
+    verified: tasks.filter((t) => t.mark === "x" && t.verified).length,
+    blocked: tasks.filter((t) => t.mark === "!").length,
+  };
+  const session = (front.session ?? "").trim();
+  return {
+    file,
+    title,
+    status: (front.status ?? "active").toLowerCase(),
+    objective: front.objective ?? "",
+    session: session || undefined,
+    tasks,
+    counts,
+    next: tasks.find((t) => t.mark === "~") ?? tasks.find((t) => t.mark === " "),
+  };
 }
 
-export async function replacePlan(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  title: string,
-  tasks: string[],
-  signal?: AbortSignal,
-): Promise<SharedPlan> {
-  if (tasks.length === 0 || tasks.length > MAX_TASKS) throw new Error("A plan requires between 1 and 100 tasks");
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    if (plan.tasks.some((task) => task.status !== "pending" || task.evidence !== undefined)) {
-      throw new Error("TASKS.md can only be replaced when every task is pending and has no evidence");
-    }
-    plan.title = line(title, "Plan title");
-    plan.tasks = tasks.map((text, index) => ({
-      id: `T${String(index + 1).padStart(3, "0")}`,
-      text: line(text, `Task ${index + 1}`),
-      status: "pending" as const,
-    }));
-    plan.approval = "pending";
-    plan.revision += 1;
-    plan.updatedAt = new Date().toISOString();
-    await writePlan(file.root, file.path, plan, signal);
-    return plan;
-  }, signal);
+/** Parse one plan file's text; undefined when it has no front matter with a status line. */
+export function planFromText(name: string, text: string): PlanSummary | undefined {
+  if (!/^---\r?\n[\s\S]*?\r?\n---/.test(text) || !/^status:/m.test(text)) return undefined;
+  return parsePlan(`${PLANS_DIR}/${name}`, text);
 }
 
-export async function closePlan(
-  worktree: string,
-  expectedPlanID: string,
-  expectedRevision: number,
-  signal?: AbortSignal,
-): Promise<{ plan: SharedPlan; archived: string }> {
-  const file = await activePlanFile(worktree);
-  return withFileLock(file.path, async () => {
-    const plan = await readUnlocked(file.path);
-    if (!plan) throw new Error("No active TASKS.md exists");
-    requireActive(plan);
-    requirePlanCas(plan, expectedPlanID, expectedRevision);
-    requireApproved(plan);
-    if (plan.tasks.some((task) => task.status !== "completed")) {
-      throw new Error("Every task must be completed before closing TASKS.md");
-    }
-    let closed: SharedPlan = {
-      ...plan,
-      status: "closed",
-      revision: plan.revision + 1,
-      updatedAt: new Date().toISOString(),
-    };
-    const markdown = renderPlan(closed);
-    const archive = await safeProjectFile(worktree, `${ARIA_RDC_STATE_DIR}/plans/${closed.id}.md`, { createParent: true });
-    await verifySafeParent(archive.root, archive.path);
-    let archiveHandle: Awaited<ReturnType<typeof open>> | undefined;
-    let createdArchive = false;
-    try {
-      archiveHandle = await open(archive.path, "wx");
-      createdArchive = true;
-      await archiveHandle.writeFile(markdown, "utf8");
-      await archiveHandle.sync();
-      await archiveHandle.close();
-    } catch (error) {
-      await archiveHandle?.close().catch(() => undefined);
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        if (createdArchive) await unlink(archive.path).catch(() => undefined);
-        throw error;
-      }
-      const existing = await readUnlocked(archive.path).catch(() => null);
-      if (!existing || !isMatchingClosedArchive(plan, existing)) {
-        throw new Error(`A different archive already exists for plan ${closed.id}`);
-      }
-      closed = existing;
-    }
+/** Valid plan file name (top level of .aria/plans, no path separators). */
+export const isPlanFileName = (name: string) => PLAN_FILE.test(name);
+export const PLAN_LIMITS = { maxBytes: MAX_PLAN_BYTES, maxPlans: MAX_PLANS } as const;
 
-    try {
-      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Operation aborted");
-      await unlink(file.path);
-    } catch (error) {
-      if (createdArchive) await unlink(archive.path).catch(() => undefined);
-      throw error;
+/** Raw text of one plan through the same confined reader. Throws if it is unsafe or missing. */
+export function readPlanText(projectDir: string, file: string): string {
+  const name = file.startsWith(`${PLANS_DIR}/`) ? file.slice(PLANS_DIR.length + 1) : file;
+  if (!PLAN_FILE.test(name)) throw new UnsafePath(`not a plan file name: ${name}`);
+  const dir = secureDir(realRoot(projectDir), [".aria", "plans"], false);
+  if (!dir) throw new UnsafePath("no .aria/plans directory");
+  return readRegularFile(join(dir, name), MAX_PLAN_BYTES);
+}
+
+/** All readable plans in a project, newest-named first, plus why anything was skipped. Never throws. */
+export function loadPlans(projectDir: string): PlanLoad {
+  let dir: string | undefined;
+  try {
+    dir = secureDir(realRoot(projectDir), [".aria", "plans"], false);
+  } catch (error) {
+    return { state: "unavailable", plans: [], problems: [`plans unavailable: ${(error as Error).message}`] };
+  }
+  if (!dir) return { state: "absent", plans: [], problems: [] };
+  const plans: PlanSummary[] = [];
+  const problems: string[] = [];
+  let listing: ReturnType<typeof entries>;
+  try {
+    listing = entries(dir);
+  } catch (error) {
+    return { state: "unavailable", plans: [], problems: [`plans unavailable: ${(error as Error).message}`] };
+  }
+  const candidates = listing.filter((e) => e.name.endsWith(".md")).sort((a, b) => (a.name < b.name ? 1 : -1));
+  for (const { name, kind } of candidates.slice(0, MAX_PLANS)) {
+    if (!PLAN_FILE.test(name)) {
+      problems.push(`skipped ${JSON.stringify(name)}: unexpected file name`);
+      continue;
     }
-    return { plan: closed, archived: archive.path };
-  }, signal);
+    if (kind !== "file") {
+      problems.push(`skipped ${name}: ${kind === "symlink" ? "symbolic link (never followed)" : `not a regular file (${kind})`}`);
+      continue;
+    }
+    try {
+      const plan = planFromText(name, readRegularFile(join(dir, name), MAX_PLAN_BYTES));
+      if (!plan) {
+        problems.push(`skipped ${name}: no front matter with a status line`);
+        continue;
+      }
+      plans.push(plan);
+    } catch (error) {
+      problems.push(`skipped ${name}: ${error instanceof UnsafePath ? error.message.replace(dir, PLANS_DIR) : "unreadable"}`);
+    }
+  }
+  if (candidates.length > MAX_PLANS) problems.push(`only the first ${MAX_PLANS} plans were read`);
+  const state: PlanReadState = problems.length ? "partial" : plans.length ? "ok" : "empty";
+  return { state, plans, problems };
+}
+
+export const isActive = (p: PlanSummary) => p.status === "active";
+
+/** Active plans split by ownership relative to a root session. */
+export function partitionPlans(plans: readonly PlanSummary[], rootSession: string | undefined) {
+  const active = plans.filter(isActive);
+  const own = rootSession ? active.filter((p) => p.session === rootSession) : [];
+  return { own, other: active.filter((p) => !own.includes(p)) };
+}
+
+/** Compact one-liner per plan; used for recovery context and status output. */
+export function describePlan(p: PlanSummary): string {
+  const c = p.counts;
+  const next = p.next ? ` Next: ${p.next.id} ${p.next.title}`.trimEnd() : "";
+  return `${p.file} — ${p.title}: ${c.executed}/${p.tasks.length} executed, ${c.verified} with recorded evidence, ${c.active} in progress, ${c.blocked} blocked.${next}`;
 }

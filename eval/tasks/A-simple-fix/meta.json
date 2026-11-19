@@ -1,0 +1,5 @@
+{
+  "id": "A",
+  "category": "simple",
+  "expect": {"plan":"not needed","delegation":"unnecessary","review":"optional","asks_user":"never"}
+}
