@@ -1,4 +1,5 @@
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { removeOwnedDirectory } from "../safe-fs.ts";
@@ -21,7 +22,8 @@ import {
 } from "./config.ts";
 import { ensureIntegration, setupTargets } from "./deps.ts";
 import { ariaHome, isWindows, packageRoot, releasesDir, run, statePath, toolsDir } from "./env.ts";
-import { createJournal, fault, readJournal, readText, removeJournal, revertFile, saveJournal, type Journal, type JournalFile } from "./journal.ts";
+import { createJournal, fault, isOurMarker, readJournal, readText, removeJournal, revertJournal, saveJournal, type Journal, type JournalFile } from "./journal.ts";
+import { planPluginSync } from "./plugin-file.ts";
 import { MANIFEST, dependency } from "./manifest.ts";
 import {
   ReleaseError,
@@ -533,43 +535,6 @@ interface ToolRestore {
   readonly next?: unknown;
 }
 
-const isOurMarker = (j: Pick<Journal, "id">) => (text: string) => {
-  try {
-    return (JSON.parse(text) as State).pending?.journal === j.id;
-  } catch {
-    return false;
-  }
-};
-
-/**
- * Revert the files of a journal in reverse write order (state.json last, so the interrupted
- * marker stays until everything else is back). A file is reverted only if it holds exactly what
- * ARIA wrote; anything else is reported as modified and left alone.
- */
-function revertJournal(j: Journal, label: string): { reverted: string[]; modified: string[]; complete: boolean } {
-  const reverted: string[] = [];
-  const modified: string[] = [];
-  const stateFile = j.files.find((f) => f.role === "state");
-  for (const f of [...j.files].reverse()) {
-    if (f.role === "state") continue;
-    // A file ARIA never started writing is not ARIA's to revert, whatever it holds now.
-    if (!j.progress.written.includes(f.path) && j.progress.inflight !== f.path) continue;
-    fault(`${label}:revert:${f.role}`);
-    const r = revertFile(f);
-    if (r === "reverted") reverted.push(f.path);
-    if (r === "modified") modified.push(f.path);
-  }
-  if (modified.length === 0 && stateFile) {
-    fault(`${label}:revert:state`);
-    const r = revertFile(stateFile, isOurMarker(j));
-    if (r === "reverted") reverted.push(stateFile.path);
-    if (r === "modified") modified.push(stateFile.path);
-  }
-  const complete = modified.length === 0;
-  if (complete) removeJournal(j.id);
-  return { reverted, modified, complete };
-}
-
 export async function rollback(input: RollbackInput): Promise<OperationResult> {
   const interruptedGate = interruptedResult(input.dryRun);
   if (interruptedGate) return interruptedGate;
@@ -592,6 +557,7 @@ export async function rollback(input: RollbackInput): Promise<OperationResult> {
   // 1. Tools: validate every record and every entry to be changed before anything is written.
   const blockers: string[] = [];
   const restores: ToolRestore[] = [];
+  const adapterEdits: ReturnType<typeof planPluginSync>["edits"] = [];
   if (input.keepTools) messages.push("--keep-tools: ARIA-managed tool paths stay as they are; only the ARIA package is rolled back.");
   else if (!release.tools || Object.keys(release.tools).length === 0) messages.push(`no ARIA-managed tools were recorded with ${version}; tool paths stay as they are`);
   else {
@@ -603,6 +569,15 @@ export async function rollback(input: RollbackInput): Promise<OperationResult> {
       if (problem) {
         blockers.push(`${id}: the copy ${version} used is not usable (${problem}); reinstall it with \`aria deps install ${id}\` or roll back with --keep-tools`);
         continue;
+      }
+      if (dep.plugin && state.owned.some((o) => o.kind === "file" && basename(o.file) === dep.plugin?.file)) {
+        try {
+          const sync = planPluginSync(dep, readFileSync(join(record.path, "opencode", dep.plugin.file), "utf8"));
+          adapterEdits.push(...sync.edits);
+          blockers.push(...sync.notes);
+        } catch (error) {
+          blockers.push(`${id}: cannot restore its generated plugin: ${(error as Error).message}`);
+        }
       }
       const entries = state.owned.filter((o) => o.kind === "mcp" && o.path.join("/") === `mcp/servers/${dep.mcp?.server}`);
       if (entries.length === 0) restores.push({ id, record });
@@ -656,6 +631,8 @@ export async function rollback(input: RollbackInput): Promise<OperationResult> {
   recordTools(next, leaving);
   for (const r of restores) next.tools[r.id] = { ...r.record };
   next.owned = next.owned.map((o) => {
+    const adapter = adapterEdits.find((e) => o.kind === "file" && e.file === o.file);
+    if (adapter) return { ...o, fingerprint: adapter.fingerprint };
     if (o.kind === "plugin" && o.file === reg.file) return { ...o, fingerprint: fingerprint(pluginValue) };
     // `next` is a deep copy: match records by file and JSON path, not by object identity.
     const r = restores.find((x) => x.owned && x.next !== undefined && x.owned.file === o.file && x.owned.path.join("/") === o.path.join("/"));
@@ -665,11 +642,13 @@ export async function rollback(input: RollbackInput): Promise<OperationResult> {
   next.active = version;
   delete next.pending;
   const files: JournalFile[] = [
+    ...adapterEdits.map((e): JournalFile => ({ path: e.file, role: "integration-plugin", before: e.before, after: e.after })),
     ...plans.map((p) => ({ path: p.file, role: (p.file === reg.file ? "plugin-config" : "mcp-config") as JournalFile["role"], before: p.existed ? p.before : null, after: p.after })),
     { path: currentFile, role: "launcher", before: readText(currentFile), after: `${dir}\n` },
     { path: statePath(), role: "state", before: stateText, after: JSON.stringify(next, null, 2) + "\n" },
   ];
   const changes: Change[] = [
+    ...adapterEdits.map((e): Change => ({ kind: "config", target: e.file, summary: `restore the generated plugin for the tool copy recorded with ${version}` })),
     ...plans.filter((p) => p.file !== reg.file).map((p) => ({ kind: "config" as const, target: p.file, summary: p.summary.join("; ") })),
     { kind: "activate", target: reg.file, summary: plans.at(-1)?.summary.join("; ") ?? "" },
     { kind: "activate", target: currentFile, summary: `launcher -> ${dir}` },
@@ -784,7 +763,7 @@ export function journals(): JournalView[] {
     });
     return {
       id, op: journal.op, from: journal.from ?? "", target: journal.target, createdAt: journal.createdAt,
-      status: !marked && state.active === journal.target ? "complete" : "interrupted",
+      status: !marked && (journal.op === "dependency" ? readText(statePath()) === journal.files.find((f) => f.role === "state")?.after : state.active === journal.target) ? "complete" : "interrupted",
       files, written: journal.progress.written, inflight: journal.progress.inflight,
     };
   });
@@ -810,6 +789,16 @@ function keepChanged(j: Journal, project: string): { outcome: "success" | "parti
   const owned: Owned[] = [];
   for (const records of known.values()) {
     const first = records[0] as Owned;
+    if (first.kind === "file") {
+      const content = readText(first.file);
+      const hash = content === null ? undefined : createHash("sha256").update(content).digest("hex");
+      if (hash && records.some((o) => o.fingerprint === hash)) owned.push({ ...first, fingerprint: hash });
+      else {
+        mixed = true;
+        messages.push(`${first.file}: no longer the file ARIA wrote; ownership was not re-adopted`);
+      }
+      continue;
+    }
     if (first.kind === "plugin") {
       // Plugin records name the `plugins` list; the fingerprint is of ARIA's entry in it.
       const entry = pluginEntries(readConfig(first.file)).find((e) => records.some((o) => o.fingerprint === fingerprint(e.raw)));
@@ -819,7 +808,10 @@ function keepChanged(j: Journal, project: string): { outcome: "success" | "parti
     }
     const value = getPath(readConfig(first.file).value, first.path as (string | number)[]);
     if (value !== undefined && records.some((o) => o.fingerprint === fingerprint(value))) owned.push({ ...first, fingerprint: fingerprint(value) });
-    else messages.push(`${first.file}: ${first.path.join(".")} is no longer ARIA's (changed by you); ARIA will not modify it`);
+    else {
+      mixed = true;
+      messages.push(`${first.file}: ${first.path.join(".")} is no longer ARIA's (changed by you); ARIA will not modify it`);
+    }
   }
   s.owned = owned;
   // Active release: the one the registration actually loads.
@@ -839,7 +831,7 @@ function keepChanged(j: Journal, project: string): { outcome: "success" | "parti
     messages.push(`active release: ${loaded.version} (the one the registration loads; launcher follows)`);
   }
   // Tools: follow the executables the config uses, and say which release they came from.
-  const records = (s.releases ?? []).map((r) => ({ version: r.version, tools: Object.fromEntries(Object.entries(r.tools ?? {}).map(([id, t]) => [id, toolRecord(t)])) }));
+  const records = [...(base?.releases ?? []), ...(after?.releases ?? [])].map((r) => ({ version: r.version, tools: Object.fromEntries(Object.entries(r.tools ?? {}).map(([id, t]) => [id, toolRecord(t)])) }));
   for (const o of owned.filter((x) => x.kind === "mcp")) {
     const server = String(o.path[2]);
     const dep = MANIFEST.find((d) => d.mcp?.server === server);
@@ -848,7 +840,7 @@ function keepChanged(j: Journal, project: string): { outcome: "success" | "parti
     const exe = value?.command?.[0];
     if (!exe) continue;
     const from = records.filter((r) => r.tools[dep.id]?.executable === exe);
-    const rec = from[0]?.tools[dep.id] ?? (s.tools[dep.id]?.executable === exe ? s.tools[dep.id] : undefined);
+    const rec = from[0]?.tools[dep.id] ?? [base?.tools[dep.id], after?.tools[dep.id], s.tools[dep.id]].find((t) => t?.executable === exe);
     if (rec) s.tools[dep.id] = rec;
     const versions = from.map((r) => r.version);
     if (s.active && versions.length && !versions.includes(s.active)) {
@@ -856,6 +848,24 @@ function keepChanged(j: Journal, project: string): { outcome: "success" | "parti
       messages.push(`${dep.id} runs the copy recorded with ${versions.join("/")}, while the package is ${s.active}: they now come from different releases`);
     }
   }
+  // Kept plugin content and MCP paths can intentionally come from different copies.
+  for (const dep of MANIFEST.filter((d) => d.plugin && s.tools[d.id])) {
+    const expected = readText(join(s.tools[dep.id]!.path, "opencode", dep.plugin!.file));
+    for (const o of owned.filter((o) => o.kind === "file" && basename(o.file) === dep.plugin!.file)) {
+      if (readText(o.file) !== expected) {
+        mixed = true;
+        messages.push(`${o.file}: its generated plugin does not match the retained ${dep.id} executable; they were kept, not reported as a consistent installation`);
+      }
+    }
+  }
+  // With --keep-changed a generated plugin can still name the newer copy even when MCP was
+  // reverted. Retain that copy rather than deleting an executable the kept file may need.
+  const retainedTools = [...Object.values(s.tools), ...Object.values(j.op === "dependency" ? after?.tools ?? {} : {})];
+  s.stagings = s.stagings?.filter((t) => {
+    if (!retainedTools.some((tool) => tool.path === t.path)) return true;
+    messages.push(`retained tool copy ${t.path}; files kept by --keep-changed may still use it`);
+    return false;
+  });
   writeState(s);
   removeJournal(j.id);
   return { outcome: mixed ? "partial" : "success", messages };
@@ -929,6 +939,7 @@ export async function repair(input: { project: string; dryRun: boolean; keepChan
           steps.push({ name: `revert ${journal.op} to ${journal.target}`, status: "done", detail: `${undo.reverted.length} file(s) put back; ${journal.from ?? "the previous release"} is active again` });
           continue;
         }
+        if (undo.reverted.length) steps.push({ name: "restore unchanged files", status: "done", detail: `${undo.reverted.length} file(s) put back; recovery is still incomplete` });
         if (input.keepChanged) {
           const k = keepChanged(journal, input.project);
           steps.push({ name: `keep changed files of ${journal.id}`, status: k.outcome === "success" ? "done" : "failed", detail: k.messages.join("; ") });
@@ -955,6 +966,8 @@ export async function repair(input: { project: string; dryRun: boolean; keepChan
         writeState(s);
       }
       for (const l of left) {
+        // An unresolved adoption may still have config pointing at its staging copy.
+        if (stillOpen || Object.values(readState().state.tools).some((tool) => tool.path === l.path)) continue;
         if (!l.owned) {
           if (!existsSync(l.path)) {
             const x = readState().state;
@@ -963,6 +976,7 @@ export async function repair(input: { project: string; dryRun: boolean; keepChan
           }
           continue;
         }
+        if (!stagingOwned(l.path).owned) continue; // recovery may have adopted or explicitly retained it
         try {
           removeStaging(l.path);
         } catch (e) {

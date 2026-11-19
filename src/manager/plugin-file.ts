@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readSync, closeSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { globalConfigDir, run } from "./env.ts";
 import type { Dependency } from "./manifest.ts";
 import { getPath, readConfig, staticLayers } from "./config.ts";
@@ -224,25 +224,23 @@ export function removePlugin(dep: Dependency, project: string): { removed: strin
   return { removed, skipped };
 }
 
-/** After the executable changed: regenerate content for plugin files ARIA owns and nobody modified. Caller holds the lock. */
-export function syncPlugins(dep: Dependency, content: string): { steps: string[]; notes: string[] } {
-  const steps: string[] = [];
+/** Plan adapter changes without writing: callers include them in the operation's journal. */
+export function planPluginSync(dep: Dependency, content: string): { edits: { file: string; before: string; after: string; fingerprint: string }[]; notes: string[] } {
+  const edits: { file: string; before: string; after: string; fingerprint: string }[] = [];
   const notes: string[] = [];
   const { state } = readState();
-  for (const o of state.owned.filter((x) => x.kind === "file" && dep.plugin && x.file.endsWith(`${"/"}${dep.plugin.file}`))) {
-    if (!existsSync(o.file)) continue;
-    if (sha(readFileSync(o.file, "utf8")) !== o.fingerprint) {
-      notes.push(`${o.file} was changed by you; not regenerated for the new ${dep.name} copy`);
-      continue;
+  for (const o of state.owned.filter((x) => x.kind === "file" && dep.plugin && basename(x.file) === dep.plugin.file)) {
+    try {
+      for (const path of [dirname(dirname(o.file)), dirname(o.file), o.file]) {
+        const info = lstatSync(path);
+        if (info.isSymbolicLink() || (path === o.file && !info.isFile())) throw new Error(`${path} is not a regular, non-symlink plugin path`);
+      }
+      const before = readFileSync(o.file, "utf8");
+      if (sha(before) !== o.fingerprint) throw new Error("changed since ARIA wrote it");
+      if (before !== content) edits.push({ file: o.file, before, after: content, fingerprint: sha(content) });
+    } catch (error) {
+      notes.push(`${o.file}: ${(error as Error).message}; not regenerated for ${dep.name}`);
     }
-    if (readFileSync(o.file, "utf8") === content) continue;
-    const tmp = join(dirname(o.file), `.${dep.plugin?.file}.aria-${randomBytes(4).toString("hex")}`);
-    writeFileSync(tmp, content, { flag: "wx", mode: 0o644 });
-    renameSync(tmp, o.file);
-    const s = readState().state;
-    s.owned = s.owned.map((x) => (x.file === o.file && x.kind === "file" ? { ...x, fingerprint: sha(content) } : x));
-    writeState(s);
-    steps.push(`regenerated ${o.file}`);
   }
-  return { steps, notes };
+  return { edits, notes };
 }

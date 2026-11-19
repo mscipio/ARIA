@@ -53,14 +53,18 @@ const REVIEW_TAG: Record<NonNullable<PlanTask["review"]>, string> = {
   fail: " [review FAIL]",
   insufficient: " [review: insufficient evidence]",
 };
-export const taskLine = (task: PlanTask) => `${taskSymbol(task)} ${task.id} ${task.title}${task.review ? REVIEW_TAG[task.review] : ""}`.trimEnd();
+export const taskLine = (task: PlanTask) => {
+  const critical = task.review === "fail" || task.review === "insufficient";
+  const tag = task.review ? REVIEW_TAG[task.review] : "";
+  return `${taskSymbol(task)} ${task.id}${critical ? tag : ""} ${task.title}${critical ? "" : tag}`.trimEnd();
+};
 
-/** One-line progress for a header, e.g. "3/8 executed · 2 with evidence · 1 blocked". */
+/** Critical status comes first so truncation cannot hide it behind ordinary progress. */
 export function progressLine(plan: PlanSummary): string {
   const c = plan.counts;
-  const parts = [`${c.executed}/${plan.tasks.length} executed`, `${c.verified} with evidence`];
+  const parts = c.blocked ? [`${c.blocked} blocked`] : [];
+  parts.push(`${c.executed}/${plan.tasks.length} executed`, `${c.verified} with evidence`);
   if (c.active) parts.push(`${c.active} in progress`);
-  if (c.blocked) parts.push(`${c.blocked} blocked`);
   return parts.join(" · ");
 }
 
@@ -77,8 +81,11 @@ const MAX_EVENTS = 4;
 
 function limit(events: StatusEvent[]): StatusEvent[] {
   if (events.length <= MAX_EVENTS) return events;
-  const rest = events.length - (MAX_EVENTS - 1);
-  return [...events.slice(0, MAX_EVENTS - 1), { message: `+${rest} more plan updates`, variant: "info", attention: false }];
+  // Prioritise alerts; if alerts themselves overflow, the summary still requests attention.
+  const ordered = [...events.filter((e) => e.attention), ...events.filter((e) => !e.attention)];
+  const hidden = ordered.slice(MAX_EVENTS - 1);
+  const attention = hidden.some((e) => e.attention);
+  return [...ordered.slice(0, MAX_EVENTS - 1), { message: `+${hidden.length} more plan updates${attention ? " (includes alerts)" : ""}`, variant: attention ? "warning" : "info", attention }];
 }
 
 /** What changed between two reads of the plan directory. Plans seen for the first time are reported as new. */
@@ -156,8 +163,8 @@ export const DEFAULT_REVIEW_NUDGE = 5;
 
 /**
  * The single sidebar reminder about review, or nothing. Silent while the unreviewed edits are
- * below `threshold` and when a review passed for the current changes. Counts edits, not files:
- * a big change to one file can be worth reviewing. A FAIL always shows until a re-review passes.
+ * below `threshold` and when a review passed for the current changes. Shell activity is a
+ * possible change, not a confirmed edit. A FAIL always shows until a re-review passes.
  */
 export function reviewNudge(s: Summary, threshold = DEFAULT_REVIEW_NUDGE): Nudge | undefined {
   switch (s.disposition) {
@@ -170,7 +177,8 @@ export function reviewNudge(s: Summary, threshold = DEFAULT_REVIEW_NUDGE): Nudge
     default: {
       if (s.changedSince < threshold) return undefined;
       const since = s.latest ? " since review" : " unreviewed";
-      return { text: `◌ ${s.changedSince} edit${s.changedSince === 1 ? "" : "s"}${since}`, tone: "warning" };
+      if (s.shellSince === s.changedSince) return { text: `◌ shell activity${since} · changes unchecked`, tone: "warning" };
+      return { text: `◌ ${s.changedSince} change${s.changedSince === 1 ? "" : "s"}${since}${s.shellSince ? " · incl. shell" : ""}`, tone: "warning" };
     }
   }
 }

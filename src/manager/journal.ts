@@ -1,7 +1,7 @@
 import { closeSync, constants, existsSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { basename, join } from "node:path";
 import { journalDir } from "./env.ts";
-import { newNonce, writeAtomic } from "./state.ts";
+import { newNonce, writeAtomic, type State } from "./state.ts";
 
 /**
  * Write-ahead journal for operations that change several files (rollback). Nothing in OpenCode's
@@ -15,7 +15,7 @@ import { newNonce, writeAtomic } from "./state.ts";
  * a file the user changed after ARIA wrote it is never overwritten.
  */
 
-export type FileRole = "mcp-config" | "plugin-config" | "launcher" | "state";
+export type FileRole = "mcp-config" | "plugin-config" | "integration-plugin" | "launcher" | "state";
 
 export interface JournalFile {
   readonly path: string;
@@ -28,7 +28,7 @@ export interface JournalFile {
 export interface Journal {
   readonly schema: 1;
   readonly id: string;
-  readonly op: "rollback";
+  readonly op: "rollback" | "dependency";
   readonly from?: string;
   readonly target: string;
   readonly createdAt: string;
@@ -111,4 +111,36 @@ export function revertFile(f: JournalFile, ours: (current: string) => boolean = 
     return "reverted";
   }
   return "modified";
+}
+
+export const isOurMarker = (j: Pick<Journal, "id">) => (text: string) => {
+  try {
+    return (JSON.parse(text) as State).pending?.journal === j.id;
+  } catch {
+    return false;
+  }
+};
+
+/** State is reverted last so its recovery marker survives until all other files are safe. */
+export function revertJournal(j: Journal, label: string): { reverted: string[]; modified: string[]; complete: boolean } {
+  const reverted: string[] = [];
+  const modified: string[] = [];
+  const stateFile = j.files.find((f) => f.role === "state");
+  for (const f of [...j.files].reverse()) {
+    if (f.role === "state") continue;
+    if (!j.progress.written.includes(f.path) && j.progress.inflight !== f.path) continue;
+    fault(`${label}:revert:${f.role}`);
+    const r = revertFile(f);
+    if (r === "reverted") reverted.push(f.path);
+    if (r === "modified") modified.push(f.path);
+  }
+  if (modified.length === 0 && stateFile) {
+    fault(`${label}:revert:state`);
+    const r = revertFile(stateFile, isOurMarker(j));
+    if (r === "reverted") reverted.push(stateFile.path);
+    if (r === "modified") modified.push(stateFile.path);
+  }
+  const complete = modified.length === 0;
+  if (complete) removeJournal(j.id);
+  return { reverted, modified, complete };
 }

@@ -3,15 +3,16 @@ import { gunzipSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { applyEdit, configFile, fingerprint, getPath, planEdits, readConfig, staticLayers, type Scope } from "./config.ts";
-import { isWindows, packageRoot, parseVersion, run, satisfies, toolsDir, which } from "./env.ts";
+import { isWindows, packageRoot, parseVersion, run, satisfies, statePath, toolsDir, which } from "./env.ts";
 import { MANIFEST, dependency, type Dependency } from "./manifest.ts";
-import { generatePlugin, inspectPlugin, pluginWriteProblem, removePlugin, syncPlugins, writePlugin, type PluginScope } from "./plugin-file.ts";
+import { generatePlugin, inspectPlugin, planPluginSync, pluginWriteProblem, removePlugin, writePlugin, type PluginScope } from "./plugin-file.ts";
 import { fetchHttps, fetchVerified, readTar, compatible, inspectSkill, installSkill, isCurrent, removeSkill, type Intent, type SkillCopy, type SkillScope } from "./skill-archive.ts";
-import { createStaging, forgetStaging, removeMarker, removeStaging } from "./release.ts";
+import { createStaging, removeMarker, removeStaging } from "./release.ts";
+import { createJournal, fault, readText, removeJournal, revertJournal, saveJournal, type Journal, type JournalFile } from "./journal.ts";
 import { browserInstalled, checkBrowser } from "./browser.ts";
 import { probeRemote, probeTools, type RemoteClass } from "./mcp-probe.ts";
 import { opencodeBin } from "./opencode.ts";
-import { readState, recordTools, withLock, writeState, type ManagedTool, interruptedResult } from "./state.ts";
+import { markPending, readState, recordTools, withLock, writeAtomic, writeState, type ManagedTool, interruptedResult } from "./state.ts";
 import type { Change, Check, Health, OperationResult, Progress, Step } from "./types.ts";
 
 /** Status of one manifest entry, built only from what can be observed now. */
@@ -345,14 +346,19 @@ export async function installDep(id: string, opts: { dryRun: boolean; progress?:
         steps.push(p);
         if (p.status === "failed") throw new Error(`${dep.provision.what}: ${p.detail ?? "download failed"}; the new copy was not adopted`);
       }
-      removeMarker(target);
-      forgetStaging(target);
       const adopted = adoptToolCopy(id, { path: target, executable, version: parseVersion(v.stdout + " " + v.stderr)?.join(".") ?? dep.install?.pin, installedAt: new Date().toISOString() });
       steps.push(...adopted.steps);
       const notes = adopted.notes;
+      try {
+        removeMarker(target);
+      } catch (error) {
+        notes.push(`installed, but the staging marker could not be removed: ${(error as Error).message}`);
+      }
       return { ok: notes.length === 0, dryRun: false, outcome: notes.length ? "partial" : "success", steps, changes, messages: [`installed ${dep.name} at ${executable}`, ...notes], errors: notes };
     } catch (error) {
-      if (staging) {
+      const recovery = interruptedResult(false);
+      const retained = Boolean(staging && (recovery || readState().state.tools[id]?.path === staging.path));
+      if (staging && !retained) {
         try {
           removeStaging(staging.path);
         } catch {
@@ -360,7 +366,7 @@ export async function installDep(id: string, opts: { dryRun: boolean; progress?:
         }
       }
       steps.push({ name: `install ${spec}`, status: "failed", detail: (error as Error).message });
-      return { ok: false, dryRun: false, outcome: "failed", steps, changes: [], messages: [], errors: [(error as Error).message] };
+      return { ok: false, dryRun: false, outcome: retained ? "partial" : "failed", steps, changes: retained ? changes : [], messages: retained ? ["Dependency adoption was interrupted; its copy and recovery journal are retained. Run `aria repair` before making other changes."] : [], errors: [(error as Error).message] };
     }
   });
 }
@@ -375,12 +381,10 @@ export function adoptToolCopy(id: string, record: ManagedTool): { steps: Step[];
   const dep = dependency(id);
   const steps: Step[] = [];
   const notes: string[] = [];
-  // 1. The copy is recorded first, so it is never left installed but unknown.
+  const before = readText(statePath());
   const fresh = readState().state;
-  fresh.tools[id] = record;
-  recordTools(fresh, fresh.active); // the active release now runs with this copy
-  writeState(fresh);
-  // 2. Plan every repoint before writing any (a file with a syntax error is skipped and reported).
+  // Plan every write before committing anything. Reuse rollback's journal and recovery path.
+  const files: JournalFile[] = [];
   const planned: { owned: (typeof fresh.owned)[number]; plan: ReturnType<typeof planEdits>; next: unknown }[] = [];
   for (const owned of fresh.owned.filter((o) => o.kind === "mcp" && o.path.join("/") === `mcp/servers/${dep?.mcp?.server}`)) {
     const read = readConfig(owned.file);
@@ -401,26 +405,67 @@ export function adoptToolCopy(id: string, record: ManagedTool): { steps: Step[];
       notes.push(`${owned.file}: ${(error as Error).message}`);
     }
   }
-  // 2b. A plugin file ARIA wrote follows the executable (it names the binary it starts).
+  // A plugin file ARIA wrote follows the executable (it names the binary it starts).
   if (dep?.plugin) {
     const src = join(record.path, "opencode", dep.plugin.file);
     if (existsSync(src)) {
       try {
-        const sync = syncPlugins(dep, readFileSync(src, "utf8"));
-        steps.push(...sync.steps.map((name) => ({ name, status: "done" as const })));
+        const sync = planPluginSync(dep, readFileSync(src, "utf8"));
+        for (const edit of sync.edits) {
+          files.push({ path: edit.file, role: "integration-plugin", before: edit.before, after: edit.after });
+          fresh.owned = fresh.owned.map((o) => o.kind === "file" && o.file === edit.file ? { ...o, fingerprint: edit.fingerprint } : o);
+        }
         notes.push(...sync.notes);
       } catch (error) {
         notes.push(`plugin file: ${(error as Error).message}`);
       }
-    }
+    } else if (fresh.owned.some((o) => o.kind === "file" && o.file.endsWith(dep.plugin!.file))) notes.push(`generated ${dep.plugin.file} is missing from the new copy; owned plugin files were not updated`);
   }
-  // 3. Apply each, recording the new fingerprint right after its write.
   for (const p of planned) {
-    applyEdit(p.plan);
-    const s = readState().state;
-    s.owned = s.owned.map((o) => (o.file === p.owned.file && o.path.join("/") === p.owned.path.join("/") ? { ...o, fingerprint: fingerprint(p.next) } : o));
-    writeState(s);
-    steps.push({ name: "repoint MCP entry", status: "done", detail: `${p.owned.file}: mcp.servers.${dep?.mcp?.server} -> ${record.executable}` });
+    files.push({ path: p.plan.file, role: "mcp-config", before: p.plan.existed ? p.plan.before : null, after: p.plan.after });
+    fresh.owned = fresh.owned.map((o) => (o.file === p.owned.file && o.path.join("/") === p.owned.path.join("/") ? { ...o, fingerprint: fingerprint(p.next) } : o));
+  }
+  fresh.tools[id] = record;
+  recordTools(fresh, fresh.active);
+  fresh.stagings = fresh.stagings?.filter((s) => s.path !== record.path);
+  files.push({ path: statePath(), role: "state", before, after: JSON.stringify(fresh, null, 2) + "\n" });
+  let journal: Journal | undefined;
+  let committed = false;
+  try {
+    if (readText(statePath()) !== before) throw new Error("state.json changed while dependency adoption was planned; nothing written");
+    journal = createJournal({ op: "dependency", target: record.executable, files });
+    fault("dependency:after-journal");
+    markPending({ op: "dependency", step: `adopt ${id}`, journal: journal.id });
+    const markerState = readText(statePath());
+    fault("dependency:after-marker");
+    for (const f of files) {
+      if (readText(f.path) !== (f.role === "state" ? markerState : f.before)) throw new Error(`${f.path} changed while dependency adoption was running`);
+      journal.progress.inflight = f.path;
+      saveJournal(journal);
+      fault(`dependency:before:${f.role}`);
+      writeAtomic(f.path, f.after as string);
+      if (f.role === "state") committed = true;
+      journal.progress.written.push(f.path);
+      journal.progress.inflight = null;
+      if (!committed) saveJournal(journal);
+      fault(`dependency:after:${f.role}`);
+      steps.push({ name: `write ${f.role}`, status: "done", detail: f.path });
+    }
+    removeJournal(journal.id);
+  } catch (error) {
+    if (committed) {
+      notes.push(`installed, but journal cleanup was interrupted: ${(error as Error).message}; run \`aria repair\``);
+    } else {
+      if (journal) {
+        try {
+          const undo = revertJournal(journal, "dependency");
+          if (!undo.complete) throw new Error(`files changed during recovery: ${undo.modified.join(", ")}`);
+        } catch (undoError) {
+          throw new Error(`${(error as Error).message}; recovery incomplete (${(undoError as Error).message}); run \`aria repair\``);
+        }
+      }
+      throw error;
+    }
   }
   return { steps, notes };
 }

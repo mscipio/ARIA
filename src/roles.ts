@@ -74,8 +74,9 @@ const plannerEditRules = (): Rule[] => [allow("edit", ".aria/plans/*.md"), deny(
  * The visualizer edits and runs what frontend work needs (project edits with the same authority-file
  * asks and secret denies as `aria`, the same shell policy to start the app) and nothing more: it
  * cannot delegate, ask the user, run Code Mode, generate images, use OpenCode's session/worktree/schedule tools, read the Zotero library, or record review verdicts.
- * Anything unknown asks. Browser tools (`playwright_*`) therefore ask on each call until the user
- * allows them in their own config; the visualizer never receives a standing browser grant.
+ * Anything unknown asks. The Playwright MCP namespace is explicitly allowed for this role, so
+ * visual QA does not trigger a permission prompt on each browser action. User config and deny-only
+ * policies still apply after ARIA's rules.
  */
 function visualizerRules(zoteroServer: string): Rule[] {
   return [
@@ -95,8 +96,10 @@ function visualizerRules(zoteroServer: string): Rule[] {
     allow("aria_git"),
     allow("aria_status"),
     deny("aria_review_verdict"),
+    allow("playwright_*"),
+    // A custom Zotero namespace can overlap Playwright's prefix. Keep this deny last so a collision
+    // fails closed instead of granting Zotero access to the visualizer.
     deny(`${mcpNamespace(zoteroServer)}_*`),
-    ask("playwright_*"),
     ...skillRules(...VISUAL_SKILLS),
     ...subagentRules(),
   ];
@@ -188,9 +191,9 @@ export function buildRoles(options: RoleOptions): RoleSpec[] {
     },
     {
       id: "visualizer",
-      mode: "subagent",
+      mode: "all",
       description:
-        "UI/UX and frontend specialist: layout, typography, accessibility, responsive design, visual QA; web (any framework) and Qt Widgets. Makes the delegated frontend edits and reports findings. Browser tools ask.",
+        "UI/UX and frontend specialist: layout, typography, accessibility, responsive design, visual QA; web (any framework) and Qt Widgets. Can run as the primary agent or a subagent. Playwright browser tools are allowed when configured.",
       rules: visualizerRules(options.zoteroServer),
     },
   ];

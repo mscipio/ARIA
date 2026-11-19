@@ -1,6 +1,6 @@
 {
   "name": "aria",
-  "version": "2.0.0-alpha.7",
+  "version": "2.0.0-alpha.9",
   "private": false,
   "description": "ARIA: an OpenCode v2 plugin adding a default coding agent, scoped specialists, enforced permission rules, safe per-session scratch, session-owned plans, a read-only git tool, a status report and a TUI plan view. Everything else is native OpenCode.",
   "license": "MIT",

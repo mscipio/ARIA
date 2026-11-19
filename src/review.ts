@@ -25,6 +25,8 @@ export interface Review {
   readonly requestedAt: string;
   /** Change counter when the review started: later changes make it stale. */
   readonly atChange: number;
+  /** Shell activity is counted conservatively, not asserted to be a filesystem edit. */
+  readonly atShell?: number;
   readonly outcome?: Outcome;
   readonly scope?: string;
   readonly blocking?: readonly Finding[];
@@ -41,6 +43,8 @@ export interface ReviewState {
   /** Changed paths (latest 40), for the reviewer brief and status display. */
   readonly paths: readonly string[];
   readonly reviews: readonly Review[];
+  /** Retained independently of the bounded attempt history until a subsequent review passes. */
+  readonly failure?: Review;
 }
 
 export const META_KEY = "aria_review";
@@ -72,9 +76,20 @@ export function onShell(s: ReviewState): ReviewState {
 
 /** A reviewer launch, or a follow-up to an existing reviewer session (a re-review gets its own entry). */
 export function onRequest(s: ReviewState, session: string, requestedBy: string, at = new Date().toISOString()): ReviewState {
-  const prior = s.reviews.filter((r) => r.id === session || r.id.startsWith(`${session}#`)).length;
+  const attempts = s.reviews.filter((r) => r.id === session || r.id.startsWith(`${session}#`));
+  const prior = Math.max(0, ...attempts.map((r) => r.id === session ? 1 : Number(r.id.slice(session.length + 1)) || 1));
   const id = prior === 0 ? session : `${session}#${prior + 1}`;
-  return { ...s, reviews: [...s.reviews, { id, requestedBy, requestedAt: at, atChange: s.changes }].slice(-MAX_REVIEWS) };
+  return { ...s, failure: unresolvedFailure(s), reviews: [...s.reviews, { id, requestedBy, requestedAt: at, atChange: s.changes, atShell: s.shell }].slice(-MAX_REVIEWS) };
+}
+
+/** Also recovers failures from metadata written before the separate failure field existed. */
+function unresolvedFailure(s: ReviewState): Review | undefined {
+  if (s.failure) return s.failure;
+  for (const r of [...s.reviews].reverse()) {
+    if (r.outcome === "PASS") return undefined;
+    if (r.outcome === "FAIL") return r;
+  }
+  return undefined;
 }
 
 export interface Verdict {
@@ -99,9 +114,14 @@ export function onVerdict(s: ReviewState, session: string, v: Verdict, at = new 
     target = base.reviews.at(-1) as Review;
   }
   const id = target.id;
+  const completed = { ...target, outcome: v.outcome, scope: v.scope, blocking: v.blocking, missingEvidence: v.missingEvidence, nonBlocking: v.nonBlocking, completedAt: at };
+  let failure = unresolvedFailure(base);
+  if (v.outcome === "FAIL") failure = completed;
+  else if (v.outcome === "PASS" && failure && target.requestedAt >= (failure.completedAt ?? failure.requestedAt)) failure = undefined;
   return {
     ...base,
-    reviews: base.reviews.map((r) => (r.id === id ? { ...r, outcome: v.outcome, scope: v.scope, blocking: v.blocking, missingEvidence: v.missingEvidence, nonBlocking: v.nonBlocking, completedAt: at } : r)),
+    failure,
+    reviews: base.reviews.map((r) => (r.id === id ? completed : r)),
   };
 }
 
@@ -111,6 +131,7 @@ export interface Summary {
   readonly disposition: Disposition;
   /** Changes made after the latest review started. */
   readonly changedSince: number;
+  readonly shellSince?: number;
   readonly unresolvedBlocking: number;
   readonly latest?: Review;
   readonly line: string;
@@ -121,11 +142,14 @@ export interface Summary {
  * review started; a FAIL stays failed until a later review passes (fixing code does not resolve it).
  */
 export function summarize(s: ReviewState): Summary {
-  const latest = s.reviews.at(-1);
+  const attempt = s.reviews.at(-1);
+  const failure = unresolvedFailure(s);
+  const latest = failure ?? attempt;
   if (!latest) {
-    return { disposition: "none", changedSince: s.changes, unresolvedBlocking: 0, line: s.changes ? `no independent review recorded; ${s.changes} change(s) in this session${s.shell ? ` (${s.shell} shell command(s))` : ""}` : "no changes, no review" };
+    return { disposition: "none", changedSince: s.changes, shellSince: s.shell, unresolvedBlocking: 0, line: s.changes ? `no independent review recorded; ${s.changes} observed change(s) in this session${s.shell ? ` (includes ${s.shell} shell command(s); filesystem changes not checked)` : ""}` : "no changes, no review" };
   }
   const changedSince = s.changes - latest.atChange;
+  const shellSince = latest.atShell === undefined ? undefined : Math.max(0, s.shell - latest.atShell);
   const blocking = latest.outcome === "FAIL" ? (latest.blocking?.length ?? 0) : 0;
   let disposition: Disposition;
   if (!latest.outcome) disposition = "requested";
@@ -140,7 +164,8 @@ export function summarize(s: ReviewState): Summary {
     insufficient: `independent review INSUFFICIENT EVIDENCE: ${latest.missingEvidence?.join("; ") || "evidence missing"}`,
     none: "",
   }[disposition];
-  return { disposition, changedSince, unresolvedBlocking: blocking, latest, line: `${what}${disposition !== "stale" && changedSince > 0 && disposition !== "passed" ? `; ${changedSince} change(s) since` : ""}` };
+  const pending = failure && attempt !== failure && !attempt?.outcome ? "; re-review requested" : "";
+  return { disposition, changedSince, shellSince, unresolvedBlocking: blocking, latest, line: `${what}${disposition !== "stale" && changedSince > 0 && disposition !== "passed" ? `; ${changedSince} observed change(s) since` : ""}${shellSince ? ` (includes ${shellSince} shell command(s); filesystem changes not checked)` : ""}${pending}` };
 }
 
 /** Validate the verdict tool input. */

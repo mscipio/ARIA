@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, constants, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, constants, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ariaHome, journalDir, statePath } from "./env.ts";
 import type { OperationResult } from "./types.ts";
@@ -49,14 +49,14 @@ export interface ModelChange {
 }
 
 export interface Pending {
-  readonly op: "setup" | "update" | "rollback";
+  readonly op: "setup" | "update" | "rollback" | "dependency";
   readonly version?: string;
   readonly staging?: string;
   readonly step: string;
   readonly startedAt: string;
   /** Written by one invocation; only that invocation (or `aria repair`) clears it. */
   readonly nonce?: string;
-  /** Journal id of a journaled operation (rollback). */
+  /** Journal id of a journaled operation. */
   readonly journal?: string;
   /** The plugin entry an activation is about to write, so repair can re-adopt it after an interruption. */
   readonly adopt?: { readonly file: string; readonly fingerprint: string };
@@ -127,17 +127,31 @@ export function readState(): { state: State; error?: string } {
   }
 }
 
-/** Write a file atomically: temp file in the same directory, then rename over the target. */
+/** Atomic replacement, preserving existing permissions; new files are private by default. */
 export function writeAtomic(path: string, content: string | Uint8Array): void {
   mkdirSync(dirname(path), { recursive: true });
-  const temp = `${path}.aria-${process.pid}-${Date.now()}.tmp`;
-  const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o644);
+  let mode = 0o600;
   try {
-    writeSync(fd, typeof content === "string" ? Buffer.from(content, "utf8") : content);
-  } finally {
-    closeSync(fd);
+    const info = lstatSync(path);
+    if (!info.isFile() || info.isSymbolicLink()) throw new Error(`${path} is not a regular file`);
+    mode = info.mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  renameSync(temp, path);
+  const temp = `${path}.aria-${process.pid}-${newNonce()}.tmp`;
+  const fd = openSync(temp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+  try {
+    try {
+      writeFileSync(fd, content);
+      fchmodSync(fd, mode);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(temp, path);
+  } catch (error) {
+    unlinkSync(temp);
+    throw error;
+  }
 }
 
 export function writeState(state: State): void {

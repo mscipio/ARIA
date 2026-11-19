@@ -275,7 +275,7 @@ export const MANIFEST: readonly Dependency[] = [
     id: "playwright-mcp",
     name: "Playwright MCP",
     roles: ["visualizer"],
-    purpose: "Browser automation for the visualizer's visual checks; every tool asks (no role allows it by default).",
+    purpose: "Browser automation for the visualizer's visual checks; ARIA allows its Playwright tools without per-call prompts. User permissions or policies can still deny access.",
     kind: "mcp",
     requirement: "optional",
     defaultEnabled: false,

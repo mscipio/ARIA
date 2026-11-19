@@ -11,7 +11,7 @@ ARIA is an OpenCode plugin for OpenCode v2.3.0 or later. It adds:
 
 Everything else is native OpenCode.
 
-**Status: experimental alpha (2.0.0-alpha.3).** Everything has been typechecked against `@opencode/plugin` 2.3.0, and the logic has been checked against disposable fixtures using OpenCode's own rule semantics. **It has not yet been loaded in a running OpenCode.** See `.aria/plans/aria2-implementation-map.md` for exactly what has been verified.
+**Status: experimental alpha (2.0.0-alpha.9).** Everything has been typechecked against `@opencode/plugin` 2.3.0, and the logic has been checked against disposable fixtures using OpenCode's own rule semantics. The plugin loaded and resolved its roles under OpenCode 2.3.2; the alpha.9 sidebar change has not been visually exercised in a running TUI. See `.aria/plans/aria2-implementation-map.md` for exactly what has been verified.
 
 ## Install and manage
 
@@ -20,8 +20,8 @@ ARIA ships a manager: `aria` opens a keyboard-driven terminal UI. The same opera
 **First install from a release** (needs Node ≥ 22.18 and npm; nothing else from ARIA has to exist yet):
 
 ```
-tmp=$(mktemp -d) && tar -xzf aria-2.0.0-alpha.6.tgz -C "$tmp"   # disposable; remove it afterwards
-node "$tmp"/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.6.tgz --scope global --with zotero-mcp --link-bin --yes
+tmp=$(mktemp -d) && tar -xzf aria-2.0.0-alpha.9.tgz -C "$tmp"   # disposable; remove it afterwards
+node "$tmp"/package/bin/bootstrap.mjs --from aria-2.0.0-alpha.9.tgz --scope global --with zotero-mcp --link-bin --yes
 ```
 
 The bootstrap uses only Node built-ins. It:
@@ -81,7 +81,7 @@ A partial result exits `1` and is never reported as success.
 ### Guarantees and limits
 
 - **Ownership.** ARIA records each config entry it writes and changes only those. If an entry of yours occupies the same key, the operation stops and reports a conflict.
-- **Edits are minimal.** Changes are targeted JSONC edits that keep comments and formatting, are written atomically, and are refused if the file changed since the preview.
+- **Edits are minimal.** Changes are targeted JSONC edits that keep comments and formatting, are written atomically, and are refused if the file changed since the preview. Existing file permissions are preserved; new config/state files are private by default.
 - **Releases:**
   - Stored in `ARIA_HOME/releases/<version>/`, where `ARIA_HOME` defaults to `~/.local/share/aria` and `%LOCALAPPDATA%\aria` on Windows. Versions are validated (semver, no path characters), and every release path must be a real directory inside the real releases directory.
   - **One definition of release content** (`src/manager/inventory.ts`) is used by pack, inspect, staging, the same-version check and the rollback integrity check: `package.json`, `package-lock.json` and the `files` entries, minus `node_modules`, `.git` and OS clutter. The release identity is a sha256 over each file's relative path, execute bit and content, so a checkout, its tarball, its staging directory and the installed release have the same identity wherever they are. Symlinks (including a symlinked parent of a `files` entry), special files, and a lockfile that disagrees with `package.json` are rejected.
@@ -94,7 +94,7 @@ A partial result exits `1` and is never reported as success.
     2. A journal records each file's exact content before and after, then an interrupted-operation marker is set.
     3. Files are written in order: MCP config files, the plugin config file, the launcher (`ARIA_HOME/current`), then `state.json`. Each write is atomic and the journal records `{written, inflight}`.
     4. A handled error reverts at once (only this invocation's journal). A crash leaves the journal; `aria repair` puts back every file that still holds what ARIA wrote and never overwrites a file you changed afterwards. `aria repair --keep-changed` keeps your changes, takes the active release from the registration OpenCode actually loads, re-adopts only values that are still ARIA's, and reports `partial` if the package and a tool path now come from different releases.
-  - **Tool records.** Each release keeps the full records of the ARIA-managed tools it ran with: written when the release is left and on every tool change. Installing or updating a managed tool repoints ARIA-owned MCP entries to the new copy (an entry you changed is left alone and reported).
+  - **Tool records.** Each release keeps the full records of the ARIA-managed tools it ran with: written when the release is left and on every tool change. Tool adoption journals the generated integration plugins, MCP entries and state together, using the same recovery path as rollback. A handled failure reverts those writes; an incomplete recovery retains the copy and journal for `aria repair` and reports `partial`. An entry you changed is left alone and reported. Rollback also restores the matching ARIA-owned generated integration plugin; a modified plugin blocks it unless you use `--keep-tools`.
   - **Reuse and rollback also check dependencies**: an installed release whose `node_modules` no longer matches its lockfile is not reused or rolled back to. This includes releases installed by alpha.4 or earlier from an archive that vendored `node_modules` (alpha.4 skipped `npm ci` then): if their modules differ from the lockfile, roll back to them is refused; remove that release directory and install it again.
   - Up to three releases are retained beyond the active and previous ones; unknown directories are never deleted.
   - One operation at a time: a lock file in `ARIA_HOME` makes a second operation stop with exit code 4.
@@ -151,7 +151,9 @@ One `plugins` entry loads both parts: the server plugin (`exports["."]`) and the
 | `researcher` | primary/subagent | Literature and evidence (Zotero, web) |
 | `scout` | subagent | Read-only exploration |
 | `reviewer` | subagent | Independent read-only review |
-| `visualizer` | subagent | UI/UX and frontend specialist (web, Qt Widgets): design analysis, delegated frontend edits, visual QA |
+| `visualizer` | all | UI/UX and frontend specialist (web, Qt Widgets): direct or delegated design analysis, frontend edits, visual QA |
+
+`all` means the agent can run as either the primary agent or a subagent. The visualizer can use the configured Playwright MCP tools without ARIA prompting on each call; user-level permissions or policies may still deny them. If the configured Zotero server name collides with the `playwright_*` namespace, the Zotero deny takes precedence for safety.
 
 **Models.** ARIA pins no models. Each role uses the model you selected; subagents use their caller's model. Pin one with `aria models set <role> provider/model#variant` (or section 3 of the manager). That writes `agents.<role>.model` to the project or global config, and the change applies to sessions started afterwards.
 
@@ -175,7 +177,7 @@ Your own `permissions` and `agents.<id>.permissions` are applied after ARIA's ru
 
 ### Role matrix
 
-The 184-case evaluation covered the seven original roles and was not re-run for `visualizer`. The `visualizer` column was derived by evaluating its resolved rules (from `opencode debug agents` on OpenCode 2.3.0) for 42 sample actions, and spot-checked in a scripted-model delegation run (project edit allowed, own scratch allowed, another session's scratch denied, authority-file edit asks). Neither has been checked against a live provider.
+The 184-case evaluation covered the seven original roles and was not re-run for `visualizer`. The visualizer's project-edit, scratch, and authority-file rules were checked separately against its resolved rules (from `opencode debug agents` on OpenCode 2.3.0); the Playwright grant is scoped to its `playwright_*` tools. These checks have not been repeated in a live OpenCode session after the current role change.
 
 | | aria / scientist | planner | writer | scout / reviewer | researcher | visualizer |
 |---|---|---|---|---|---|---|
@@ -186,7 +188,7 @@ The 184-case evaluation covered the seven original roles and was not re-run for 
 | edit/write/patch | project, except: config/authority files ask, secrets deny | `.aria/plans/*.md` only (top level) | prose files only (`md tex bib txt rst typ qmd org adoc`); never inside `.aria/ .opencode/ .claude/ .agents/ .git/ .github/ .vscode/ node_modules/` at any depth, nor `AGENTS.md`, `CLAUDE.md` or other authority files | hidden | hidden | project, except: config/authority files ask, secrets deny (same as aria) |
 | shell | yes; installs, history changes, recursive deletes, containers ask; publish, deploy and sudo denied | hidden | hidden | hidden | hidden | same policy as aria (to run the app and existing checks) |
 | Code Mode (`execute`) | yes | hidden | hidden | hidden | hidden | hidden |
-| unknown MCP / plugin tools | ask | hidden | hidden | hidden | hidden | ask (`playwright_*` browser tools ask on every call) |
+| unknown MCP / plugin tools | ask | hidden | hidden | hidden | hidden | ask; `playwright_*` allowed |
 | Zotero (zotero-mcp) | ask | hidden | hidden | hidden | reads allowed; library/index/authorization changes ask; unclassified tools hidden | hidden |
 | web fetch/search | yes | no | no | scout yes, reviewer no | yes | yes |
 | subagents | aria: all seven; scientist: scout, reviewer, researcher, writer | scout | researcher | none | none | none |
@@ -239,7 +241,7 @@ ARIA decides when a change needs an independent review, runs it, fixes blocking 
 **Not enforced:**
 - Whether a change *needed* review is the agent's judgement under the policy above; nothing blocks completion without one.
 - The final report wording is the model's. ARIA cannot stop a model from misreporting, but the recorded state it is told to report and the state you see are the real ones.
-- Edits made by shell commands are counted but not attributed to files.
+- Shell commands count conservatively as possible changes, not confirmed edits, because the hook cannot establish what they changed. They can make a review stale; status and sidebar wording identify shell activity explicitly.
 
 With a plan, tasks carry `- review: required | not-required | skipped: … | pass | fail | insufficient`, which the TUI shows next to the task.
 
@@ -277,10 +279,10 @@ Plans are plain Markdown files at the top level of `.aria/plans/`, with front ma
 
 ## TUI
 
-- **Sidebar ("ARIA Plan", collapsible):** the plan you selected for this session (`[select]` or `/aria-plan`), or else the plan owned by this session, as a task list coloured by state (pending, in progress, executed, evidence recorded, blocked), then the session family with agent, state and model. The choice is remembered per project and session.
-- **Review reminder:** one line under the progress line, shown only when it matters: `◌ N edits unreviewed` / `since review` once N edits (default 5, set `ARIA_REVIEW_NUDGE_EDITS`) have no review, `◌ review running`, `✗ review failed · n blocking`, or `◌ review: evidence missing`. Nothing is shown below the threshold or after a PASS for the current changes.
+- **Sidebar ("ARIA Plan", collapsible):** the plan you selected for this session (`[select]` or `/aria-plan`), or else the plan owned by this session, as a compact task list coloured by state (pending, in progress, executed, evidence recorded, blocked). The choice is remembered per project and session; selection mode and unavailable-selection fallback are labelled. Blocker counts stay visible even when their tasks are outside the window or the widget is collapsed. `/aria-plan-toggle` collapses or expands without a mouse. OpenCode's native sidebar shows the session/agent family; ARIA does not repeat that list or overlay it with agent-lifecycle toasts.
+- **Review reminder:** one line below the header, visible even when collapsed and shown only when it matters: `◌ N changes unreviewed` / `since review` once N observed changes (default 5, set `ARIA_REVIEW_NUDGE_EDITS`) have no review, `◌ review running`, `✗ review failed · n blocking`, or `◌ review: evidence missing`. Shell activity is labelled as possible changes, not confirmed edits. A failed review stays visible during pending or inconclusive re-reviews until a subsequent review passes. Nothing is shown below the threshold or after a PASS for the current changes.
 - **Plan panel:** click the plan title or use `/aria-plan-open`. It shows the selected plan as rendered Markdown (scroll, `y` copy over OSC 52, `m` raw/rendered, `f` fullscreen). Plan files are read through the OpenCode server, so this works over SSH; if that fails the local reader is used, and if nothing can be read the panel says so instead of showing stale data.
-- **Updates:** toasts for task and subagent changes. An OS notification fires only for a blocked task, a failure, a finished plan, or the root session finishing, and only while the terminal is unfocused.
+- **Updates:** plan changes appear as toasts. Blocked-task and plan-completion alerts take priority over routine updates; larger alert bursts are summarised with attention preserved. Agent lifecycle is shown in OpenCode's native sidebar; blocked tasks, finished plans, agent failures and root-session completion may produce OS notifications while the terminal is unfocused.
 - **Refresh:** debounced to at most one per 500 ms, plus a 5-second timer.
 - **Read states:** plan reads are reported as absent, empty, complete, partial or unavailable. A partial or failed read never triggers "started"/"done" notifications, and old plans are not shown as current.
 

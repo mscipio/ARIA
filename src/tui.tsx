@@ -17,13 +17,15 @@ import { fromMetadata, summarize } from "./review.ts";
  * 1. Sidebar "ARIA Plan" (collapsible): the plan you selected for this session, else the plan
  *    owned by this session tree (`session:` = root session id), as a task list coloured by state
  *    (○ pending, ● in progress, ◐ executed without evidence, ✔ evidence recorded, ✗ blocked).
- *    `[select]` or `/aria-plan` picks a plan. Under the progress line, one review reminder that
- *    appears only when it matters (see reviewNudge). Then the session family with agent, state, model.
+ *    `[select]` or `/aria-plan` picks a plan; `/aria-plan-toggle` collapses the task list.
+ *    Review reminders and blocker counts remain visible when collapsed. OpenCode's native sidebar owns the session
+ *    family list; ARIA does not repeat it here.
  * 2. Plan panel (click the plan title, or `/aria-plan-open`): the selected plan as rendered
  *    Markdown, scrollable, with copy (OSC 52, works over SSH), raw/rendered toggle and fullscreen.
- * 3. Toasts for plan task changes and subagent start/finish/failure; OS notifications only for
- *    blocked tasks, failures, finished plans and the root session finishing, and only while the
- *    terminal is unfocused. The first read is a baseline, so nothing old is replayed.
+ * 3. Toasts for plan changes. Agent lifecycle is shown by OpenCode's native sidebar, not repeated
+ *    as ARIA toasts. Attention-worthy plan changes, agent failures and root-session completion may
+ *    produce an OS notification while the terminal is unfocused. The first read is a baseline, so
+ *    nothing old is replayed.
  *
  * Plan files are read through the OpenCode server's file API, so this works when the TUI runs
  * somewhere else than the project (SSH); if that API fails, the confined local reader is used.
@@ -38,7 +40,6 @@ const REVIEW_NUDGE_EDITS = (() => {
   return Number.isInteger(n) && n > 0 ? n : DEFAULT_REVIEW_NUDGE;
 })();
 const SIDEBAR_TASKS = 7;
-const SIDEBAR_SESSIONS = 6;
 const POLL_MS = 5000;
 const DEBOUNCE_MS = 500;
 
@@ -51,16 +52,12 @@ interface PlanState {
   readonly unavailable: string | undefined;
 }
 
-// OpenTUI text attribute bits (TextAttributes.BOLD / DIM); literals avoid a runtime import from the host.
-const BOLD = 1;
-const DIM = 2;
-
 const time = (d: Date | undefined) => (d ? d.toTimeString().slice(0, 8) : "never");
 
 export default Plugin.define({
   id: "aria.tui",
   setup(context) {
-    const [state, setState] = createSignal<PlanState>({ read: "not-read", plans: [], problems: [], readAt: undefined, unavailable: "not read yet" });
+    const [state, setState] = createSignal<PlanState>({ read: "not-read", plans: [], problems: [], readAt: undefined, unavailable: undefined });
     const [snapshot, setSnapshot] = createSignal(0);
     let previousPlans: readonly PlanSummary[] | undefined;
     let previousSessions: ReadonlyMap<string, SessionSnapshot> | undefined;
@@ -88,10 +85,13 @@ export default Plugin.define({
       return out;
     };
 
+    const notifyIfNeeded = (event: StatusEvent) => {
+      if (event.attention) void context.attention.notify({ title: "ARIA", message: event.message, notification: { when: "blurred" }, sound: false }).catch(() => undefined);
+    };
     const announce = (events: readonly StatusEvent[]) => {
       for (const event of events) {
         context.ui.toast.show({ title: "ARIA", message: event.message, variant: event.variant, duration: event.variant === "error" ? 8000 : 4000 });
-        if (event.attention) void context.attention.notify({ title: "ARIA", message: event.message, notification: { when: "blurred" }, sound: false }).catch(() => undefined);
+        notifyIfNeeded(event);
       }
     };
 
@@ -162,7 +162,9 @@ export default Plugin.define({
         // "started"/"done" events for plans that were merely skipped this time.
         const complete = next.read === "ok" || next.read === "empty" || next.read === "absent";
         if (previousPlans && complete) announce(diffPlans(previousPlans, next.plans));
-        if (previousSessions && nextSessions) announce(diffSessions(previousSessions, nextSessions));
+        // The native OpenCode sidebar already shows agent lifecycle. Keep only attention-worthy
+        // OS alerts; an in-app toast here duplicates that UI and can cover the plan panel.
+        if (previousSessions && nextSessions) for (const event of diffSessions(previousSessions, nextSessions)) notifyIfNeeded(event);
         if (complete) previousPlans = next.plans;
         if (nextSessions) previousSessions = nextSessions;
         setState(next);
@@ -202,14 +204,6 @@ export default Plugin.define({
         return undefined;
       }
     };
-    /** Running stands out, failed is flagged, idle recedes. The glyph and word stay for no-color terminals. */
-    const statusStyle = (status: string): { fg: string | undefined; attributes: number } =>
-      status === "running"
-        ? { fg: themeColor("text", "feedback", "success"), attributes: BOLD }
-        : status === "failed"
-          ? { fg: themeColor("text", "feedback", "error"), attributes: BOLD }
-          : { fg: themeColor("text", "muted"), attributes: DIM };
-
     const colorOf = (state: TaskState): string | undefined => {
       switch (state) {
         case "verified":
@@ -237,6 +231,14 @@ export default Plugin.define({
     // Which plan a session shows: the one picked for its root session; otherwise the one it owns.
     const [picked, updatePicked] = context.storage.store("current-plan", { initial: { sessions: {} } as { sessions: Record<string, string> } });
     const pickKey = (root: string) => `${directory() ?? ""}\u0000${root}`;
+    const selectedFile = (sessionID: string) => picked.sessions[pickKey(rootOf(sessionID))];
+    const emptyMessage = () => {
+      if (state().read === "not-read") return "Loading plans…";
+      if (state().unavailable) return "Plans unavailable · aria_status";
+      if (state().read === "absent" || state().read === "empty") return `No plan files in ${PLANS_DIR}`;
+      if (!state().plans.length) return "No readable plans · aria_status";
+      return "No owned active plan · /aria-plan";
+    };
     const planFor = (sessionID: string): PlanSummary | undefined => {
       snapshot();
       const root = rootOf(sessionID);
@@ -246,22 +248,27 @@ export default Plugin.define({
 
     let activePicker: ((sessionID: string) => Promise<void>) | undefined;
     let activeSession: string | undefined;
+    let activeToggle: (() => void) | undefined;
 
     const pickPlan = async (sessionID: string) => {
       await refresh();
       const root = rootOf(sessionID);
       const current = picked.sessions[pickKey(root)] ?? "";
       const plans = state().plans;
-      if (plans.length === 0) {
-        context.ui.toast.show({ title: "ARIA", message: state().unavailable ?? `No plans in ${PLANS_DIR}`, variant: "warning" });
+      if (state().read === "not-read" || state().unavailable || (plans.length === 0 && !current)) {
+        context.ui.toast.show({ title: "ARIA", message: emptyMessage(), variant: "warning" });
         return;
       }
       const choice = await context.ui.dialog.select({
         title: "Select plan for this session",
         current,
         options: [
-          { title: "Automatic", value: "", description: "The plan owned by this session" },
-          ...plans.map((p) => ({ title: p.title, value: p.file, description: `${p.status} · ${progressLine(p)} · ${p.file}` })),
+          { title: "Automatic", value: "", description: "Active plan owned by this session tree" },
+          ...plans.map((p) => ({
+            title: p.title,
+            value: p.file,
+            description: `${p.file === current ? "Selected · " : ""}${p.session === root ? "This session tree" : p.session ? "Other session" : "Unowned"} · ${p.status} · ${progressLine(p)} · ${p.file}`,
+          })),
         ],
       });
       if (choice === undefined) return;
@@ -285,72 +292,65 @@ export default Plugin.define({
         const [open, setOpen] = createSignal(true);
         activePicker = pickPlan;
         activeSession = sessionID;
+        const toggle = () => setOpen(!open());
+        activeToggle = toggle;
+        onCleanup(() => {
+          if (activeToggle === toggle) {
+            activeToggle = undefined;
+            activePicker = undefined;
+            activeSession = undefined;
+          }
+        });
         const plan = () => planFor(sessionID);
+        const selected = () => selectedFile(sessionID);
+        const missingSelection = () => selected() && state().read !== "not-read" && !state().unavailable && !state().plans.some((p) => p.file === selected());
         const nudge = () => reviewOf(sessionID);
         const window = () => {
           const p = plan();
           return p ? visibleTasks(p, SIDEBAR_TASKS) : undefined;
         };
-        const rows = () => {
-          snapshot();
-          return context.data.session
-            .family(sessionID)
-            .slice(0, SIDEBAR_SESSIONS)
-            .map((id) => {
-              const info = context.data.session.get(id);
-              const model = info?.model ? `${info.model.providerID}/${info.model.id}${info.model.variant ? `#${info.model.variant}` : ""}` : "model: session default";
-              const running = context.data.session.status(id) === "running";
-              const status = running ? "running" : info?.outcome === "failed" ? "failed" : "idle";
-              return { id, agent: info?.agent ?? "?", title: id === sessionID ? "this session" : (info?.title ?? ""), model, status };
-            });
-        };
         return (
           <box flexDirection="column">
             <box flexDirection="row" justifyContent="space-between" width="100%">
-              <text onMouseDown={() => setOpen(!open())}>
+              <text wrapMode="none" truncate onMouseDown={toggle}>
                 {open() ? "▼" : "▶"} ARIA Plan{plan() ? ` ${plan()?.counts.executed}/${plan()?.tasks.length}` : ""}
               </text>
               <text fg={themeColor("text", "muted")} onMouseDown={() => void pickPlan(sessionID)}>
                 [select]
               </text>
             </box>
-            <Show when={nudge()}>{(n: () => Nudge) => <text fg={toneColor(n().tone)}>  {n().text}</text>}</Show>
+            <Show when={nudge()}>{(n: () => Nudge) => <text fg={toneColor(n().tone)} wrapMode="none" truncate>  {n().text}</text>}</Show>
+            <Show when={(plan()?.counts.blocked ?? 0) > 0}>
+              <text fg={colorOf("blocked")} wrapMode="none" truncate>  ✗ {plan()?.counts.blocked} blocked · /aria-plan-open</text>
+            </Show>
+            <Show when={missingSelection()}>
+              <text fg={toneColor("warning")} wrapMode="word">  Selected plan unavailable · {plan() ? "using Automatic" : "no automatic plan"} · /aria-plan</text>
+            </Show>
             <Show when={open()}>
-              <Show when={state().unavailable}>
-                <text fg={themeColor("text", "muted")}>  plans: unavailable ({state().unavailable})</text>
-              </Show>
-              <Show when={!state().unavailable && !plan()}>
-                <text fg={themeColor("text", "muted")}>  No plan selected · /aria-plan</text>
+              <Show when={!plan()}>
+                <text fg={themeColor("text", "muted")} wrapMode="word">  {emptyMessage()}</text>
               </Show>
               <Show when={state().read === "partial"}>
-                <text fg={themeColor("text", "muted")}>  {state().problems.length} plan file(s) skipped</text>
+                <text fg={toneColor("warning")} wrapMode="word">  {state().problems.length} read issue(s) · aria_status</text>
               </Show>
               <Show when={plan()}>
                 {(p: () => PlanSummary) => (
                   <box flexDirection="column">
-                    <text fg={themeColor("text", "action", "secondary", "base")} onMouseDown={() => context.ui.panel.open(PANEL)}>
-                      {p().title} ↗
+                    <text fg={themeColor("text", "action", "secondary", "base")} wrapMode="none" truncate onMouseDown={() => context.ui.panel.open(PANEL)}>
+                      {selected() && !missingSelection() ? "Selected" : "Automatic"} · {p().title} ↗
                     </text>
-                    <text fg={themeColor("text", "muted")}>{progressLine(p())}</text>
+                    <text fg={themeColor("text", "muted")} wrapMode="none" truncate>{progressLine(p())}</text>
                     <Show when={(window()?.before ?? 0) > 0}>
-                      <text fg={themeColor("text", "muted")}>  … {window()?.before} earlier</text>
+                      <text fg={themeColor("text", "muted")} wrapMode="none" truncate>  … {window()?.before} earlier</text>
                     </Show>
-                    <For each={window()?.tasks ?? []}>{(task) => <text fg={colorOf(taskState(task))}>  {taskLine(task)}</text>}</For>
+                    <For each={window()?.tasks ?? []}>{(task) => <text fg={colorOf(taskState(task))} wrapMode="none" truncate>  {taskLine(task)}</text>}</For>
                     <Show when={(window()?.after ?? 0) > 0}>
-                      <text fg={themeColor("text", "muted")}>  … {window()?.after} more</text>
+                      <text fg={themeColor("text", "muted")} wrapMode="none" truncate>  … {window()?.after} more</text>
                     </Show>
                   </box>
                 )}
               </Show>
             </Show>
-            <For each={rows()}>
-              {(row) => (
-                <text fg={statusStyle(row.status).fg} attributes={statusStyle(row.status).attributes}>
-                  {row.status === "running" ? "●" : row.status === "failed" ? "✗" : "○"} {row.agent} {row.status} — {row.title}
-                  {"\n"}  {row.model}
-                </text>
-              )}
-            </For>
           </box>
         );
       },
@@ -489,6 +489,18 @@ export default Plugin.define({
     context.keymap.layer(() => ({
       mode: "global",
       commands: [
+        {
+          id: "aria.plan.toggle",
+          title: "ARIA: expand/collapse sidebar plan",
+          description: "Toggle the compact sidebar task list",
+          group: "ARIA",
+          palette: true,
+          slash: { name: "aria-plan-toggle" },
+          run: () => {
+            if (activeToggle) activeToggle();
+            else context.ui.toast.show({ message: "Open a session sidebar to toggle its plan", variant: "warning" });
+          },
+        },
         {
           id: "aria.plan.select",
           title: "ARIA: select plan",
